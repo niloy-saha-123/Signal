@@ -4,8 +4,6 @@
 
 Signal monitors competitors across six signal sources, reasons across everything with AI, identifies strategic vulnerability windows, and recommends what to do — with a full chain of evidence and a confidence score.
 
-[Live Demo](https://signal-demo.vercel.app)
-
 ---
 
 ## The Problem
