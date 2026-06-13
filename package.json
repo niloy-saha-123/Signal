@@ -1,0 +1,22 @@
+{
+  "name": "signal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous competitive strategy intelligence engine",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run build -w @signal/shared",
+    "dev": "npm run dev -w @signal/api",
+    "dev:web": "npm run dev -w @signal/web",
+    "worker": "npm run worker -w @signal/api",
+    "build": "npm run build -w @signal/shared && npm run build -w @signal/api && npm run build -w @signal/web",
+    "typecheck": "npm run build -w @signal/shared && npm run typecheck -w @signal/api && npm run typecheck -w @signal/web",
+    "backfill": "npm run backfill -w @signal/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

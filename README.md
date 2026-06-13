@@ -282,23 +282,38 @@ Crayon starts at $1,500/month. Signal runs at ~$1.20/month per competitor.
 
 ```
 signal/
-├── src/
-│   ├── api/                    # Express route handlers + Socket.io setup
-│   ├── agents/
-│   │   ├── collection/         # BullMQ workers — Reddit, HN, jobs, changelog, pricing
-│   │   ├── analysis/           # LangGraph nodes — intent, sentiment, patterns, synthesis
-│   │   └── chat/               # RAG chat agent
-│   ├── graph/                  # LangGraph DAG definition + shared state interface
-│   ├── queues/                 # BullMQ queue registry + cron scheduler
-│   ├── pipelines/              # Embedding pipeline (chunk → embed → Pinecone upsert)
-│   ├── db/                     # Drizzle ORM schema + query functions
-│   ├── vector/                 # Pinecone utilities (namespace-enforced)
-│   ├── llm/                    # Model router + cost tracker
-│   └── lib/                    # Winston logger + retry utilities
-├── worker.ts                   # BullMQ worker entry point (separate from API server)
-├── frontend/                   # Next.js dashboard, signal feed, chat, alerts
-├── docker-compose.yml          # API, worker, postgres, redis
-└── .github/workflows/ci.yml    # Type check, tests, deploy
+├── package.json                 # workspace root (npm workspaces)
+├── docker-compose.yml
+├── packages/
+│   └── shared/                  # Zod schemas + types shared by api and web
+│       └── src/
+│           ├── competitor.ts
+│           ├── signal.ts
+│           ├── alert.ts
+│           ├── chat.ts
+│           └── socket-events.ts
+├── apps/
+│   ├── api/                     # backend: Express API + BullMQ worker + agents
+│   │   ├── src/
+│   │   │   ├── api/             # REST + Socket.io routes
+│   │   │   ├── collectors/      # scheduled data ingestion (no LLM)
+│   │   │   ├── agents/
+│   │   │   │   ├── analysis/    # LangGraph LLM nodes
+│   │   │   │   └── chat/        # RAG chat agent
+│   │   │   ├── graph/           # LangGraph DAG + state
+│   │   │   ├── queues/          # BullMQ registry, scheduler, processors
+│   │   │   ├── pipelines/       # embedding pipeline
+│   │   │   ├── db/              # Drizzle schema + queries
+│   │   │   ├── vector/          # Pinecone utilities
+│   │   │   ├── llm/             # model router + cost tracker
+│   │   │   └── lib/             # logger, retry
+│   │   ├── worker.ts            # BullMQ worker entry point
+│   │   └── scripts/backfill.ts
+│   └── web/                     # frontend: Next.js dashboard
+│       ├── app/                 # pages (competitors, chat, alerts)
+│       ├── components/          # charts, feeds, chat UI
+│       └── lib/                 # Socket.io client
+└── .github/workflows/ci.yml
 ```
 
 ---
@@ -326,7 +341,17 @@ git clone https://github.com/yourusername/signal
 cd signal
 cp .env.example .env
 # Fill in your API keys
-docker-compose up
+npm install
+docker-compose up postgres redis
+
+# Terminal 1 — API (port 3000)
+npm run dev
+
+# Terminal 2 — worker
+npm run worker
+
+# Terminal 3 — dashboard (port 3001)
+npm run dev:web
 ```
 
 **Add a competitor:**
@@ -391,20 +416,70 @@ ENABLE_PLAYWRIGHT=true               # false to skip pricing watcher in dev
 
 ## Roadmap
 
-### Near Term
+Signal is built in deliberate phases: prove the core loop first (collect → analyze → alert → dashboard), then expand delivery and collaboration, then selectively add paid data sources only where the economics justify it.
 
-- G2 and Capterra review ingestion
-- Slack and email delivery for alerts and weekly digest
-- Multi-user workspaces with role-based access
+### Phase 1 — Now (foundation)
 
-### Medium Term
+**Goal:** End-to-end competitive intelligence on free, public data sources.
 
-- Meta Ad Library integration for competitor ad creative tracking
-- Crunchbase API for funding signal correlation
+| Area | Deliverables |
+|---|---|
+| **Monorepo** | `apps/api`, `apps/web`, `packages/shared` — shared types, separate deploys |
+| **Collectors (5)** | Reddit, HN, job boards, changelogs, pricing watcher |
+| **Analysis graph (6 LLM agents)** | Intent, sentiment, change detection, patterns, vulnerability, synthesis |
+| **Chat (1 LLM agent)** | RAG over stored signals |
+| **Dashboard MVP** | Competitor setup, signal feed, alerts, charts, chat |
+| **Ops** | Docker, BullMQ worker, PostgreSQL, Redis, Pinecone, CI |
 
-### Long Term
+**Success criteria:** Add a competitor → signals collect automatically → analysis runs → user sees a strategic alert with evidence chain in the dashboard.
 
-- Temporal behavioral fingerprinting: per-competitor pattern memory with probability estimates for future moves
+---
+
+### Phase 2 — Next (ASAP after Phase 1)
+
+**Goal:** Make Signal usable day-to-day for a small team — not just technically working.
+
+| Priority | Item | Why |
+|---|---|---|
+| P0 | Implement collector + analysis agent logic (currently stubs) | Nothing ships without this |
+| P0 | Real-time alerts in dashboard (Socket.io wired end-to-end) | Core product promise |
+| P1 | G2 and Capterra review ingestion | Free-ish public review data; high signal for pricing/SMB sentiment |
+| P1 | Slack and email alert delivery | Users shouldn't need the dashboard open 24/7 |
+| P1 | Weekly digest generation + export | Non-technical stakeholders want a report, not a feed |
+| P2 | Multi-user workspaces with role-based access | First step toward team product |
+| P2 | Meta Ad Library integration | Public API; competitor ad creative tracking without paid tools |
+
+---
+
+### Phase 3 — Future (paid data & deeper market intelligence)
+
+**Goal:** Enrich signals with premium market data — only after Phase 1–2 prove value and unit economics.
+
+Most incumbent competitive-intelligence APIs are priced for enterprise budgets, not an early-stage product. Signal's default strategy is **public sources + LLM judgment first**; paid APIs are evaluated case-by-case.
+
+| Tool | Cost | Reality | Signal plan |
+|---|---|---|---|
+| **Semrush API** | $130+/month (API access alone) | Too expensive for early stage | Defer — replicate partial SEO/traffic signal via public HN, Reddit, and changelog patterns first |
+| **Similarweb API** | Enterprise pricing ($1,000s/month) | Not accessible at startup scale | Defer — no near-term integration |
+| **Ahrefs API** | ~$500/month | Not accessible at startup scale | Defer — backlink/SEO depth is low priority vs. product/pricing/hiring signals |
+| **BuiltWith API** | ~$295/month | Moderate cost, niche use case | Evaluate after traction — tech-stack detection is useful but not core loop |
+| **Crunchbase API** | Free tier extremely limited | Useful for funding/hiring correlation | **Maybe later** — start with public job boards + manual funding news scraping |
+| **NewsAPI** | Free tier: 100 req/day, dev only | No production free tier | **Limited** — use RSS, HN, and Reddit for news signal instead |
+
+**Future capabilities (post-traction):**
+
+- Temporal behavioral fingerprinting — per-competitor pattern memory with probability estimates for future moves
+- Selective paid API integrations based on customer willingness to pay (BuiltWith, Crunchbase Pro, curated news feeds)
+- Customer-configurable data source packs (e.g. "SEO pack", "funding pack") so premium API cost is passed through, not absorbed
+- Enterprise SSO, audit logs, and compliance for larger teams
+
+---
+
+### What we are *not* doing early
+
+- Microservices split — monorepo + API/worker process separation is sufficient
+- Enterprise API contracts (Semrush, Similarweb, Ahrefs) before product-market fit
+- Building a generic "CI dashboard" clone — Signal's edge is **judgment**, not more charts on raw data
 
 ---
 
