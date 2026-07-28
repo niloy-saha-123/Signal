@@ -15,7 +15,7 @@
   "dependencies": {
     "@signal/shared": "*",
     "bullmq": "^5.34.5",
-    "drizzle-orm": "^0.38.3",
+    "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
     "pg": "^8.13.1",
     "socket.io": "^4.8.1",
@@ -23,10 +23,13 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@langchain/core": "^1.2.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "@types/pg": "^8.11.10",
-    "drizzle-kit": "^0.30.1",
+    "agentevals": "^0.0.7",
+    "drizzle-kit": "^0.31.10",
+    "openai": "^6.46.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
