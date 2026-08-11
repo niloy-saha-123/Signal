@@ -46,6 +46,21 @@ the graph/agents.
   boolean logic.
 - PatternDetector separates SQL from LLM — volume counts run in Postgres,
   only synthesized interpretation goes to the model.
+- `retrieval/` — unified retrieval pipeline. Always import from
+  `retrieval/index.ts` not from individual files. Pipeline order is fixed:
+  `hybridRetrieve` → `rerankChunks` → `enforceCitations`. Do not skip stages.
+
+## Conventions
+
+Refusals are typed. ChatAgent returns `CitationResult` or `RefusalResult` —
+both are valid outputs. Never treat `RefusalResult` as an error.
+
+## Evaluation
+
+`rag-eval.ts` is a CI gate. Do not modify the faithfulness threshold without
+updating the corresponding GitHub Actions env var.
+`seed-rag-eval.ts` is run once. The golden dataset is manually curated — do
+not auto-generate or overwrite existing entries.
 
 ## Relevant skills
 `langgraph-js-patterns` and `ai-service-infra-patterns` are the primary ones

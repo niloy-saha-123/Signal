@@ -10,13 +10,18 @@
     "typecheck": "tsc --noEmit",
     "backfill": "tsx scripts/backfill.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "rag-eval": "tsx scripts/rag-eval.ts",
+    "latency-report": "tsx scripts/latency-report.ts",
+    "seed-rag-eval": "tsx scripts/seed-rag-eval.ts"
   },
   "dependencies": {
     "@signal/shared": "*",
     "bullmq": "^5.34.5",
+    "cohere-ai": "^7.14.0",
     "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
+    "flexsearch": "^0.7.43",
     "langsmith": "^0.3.14",
     "pg": "^8.13.1",
     "socket.io": "^4.8.1",
