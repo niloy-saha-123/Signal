@@ -4,8 +4,22 @@ Layers on top of the global CLAUDE.md — both apply, this one wins on conflict.
 
 ## Stack
 Node.js 20+/TypeScript 5, Express, LangGraph.js, BullMQ + Redis (Upstash),
-PostgreSQL (Neon.tech), Pinecone, Zod, Next.js frontend. Multi-LLM: GPT-4o /
-GPT-4o-mini (OpenAI) + Claude Sonnet / Haiku (Anthropic).
+PostgreSQL (Supabase), Pinecone, Zod, Next.js frontend. Multi-LLM: GPT-4o /
+GPT-4o-mini (OpenAI) + Claude Sonnet / Haiku (Anthropic). Observability via
+LangSmith. Deploys to Railway (API/worker) + Vercel (web).
+
+## Product
+Signal replaces a competitive analyst for product/growth teams at Series B+
+B2B SaaS companies currently paying $40K+/year for Crayon/Klue plus analyst
+time. Core primitives: Signal Score (0-100 composite threat score per
+competitor, recomputed daily by SynthesisAgent) and temporal behavioral
+fingerprinting (PatternDetector's historical pattern-matching phase, active
+after 90 days of accumulated history per competitor) — this compounding
+accuracy is the product moat, not a roadmap item. Dashboard is a command
+center: Briefing (default view) → Radar (per-competitor trend) → Intel
+(full filterable feed) → Chat (persistent, RAG-only). CommandBar (⌘K) is a
+first-class UI component for cross-cutting actions (generate battlecard,
+draft outreach, export brief).
 
 ## Current state (verified, not aspirational)
 Reset on 2026-07-28 (see docs/decisions.md) — everything under
@@ -39,7 +53,7 @@ for this codebase — not `python-patterns` (this project uses LangGraph.js,
 not Python LangGraph).
 
 ## Deploy
-Merge to main triggers GitHub Actions → Render. Guarded by
+Merge to main triggers GitHub Actions → Railway. Guarded by
 `guard-production-ops.sh` — requires `.claude/approved-for-prod` marker.
 
 ## Tooling reference
