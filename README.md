@@ -24,7 +24,7 @@ Signal is the judgment layer. You add a competitor once and it runs permanently.
 
 **Analysis.** A LangGraph.js directed graph runs six LLM agents daily. Agents run in parallel where independent, conditionally where appropriate, and sequentially where order matters. Each agent uses the model best suited to its task. Every output is Zod-validated with a self-correcting retry loop.
 
-**Evaluation.** Predictions are validated against historical ground truth through a backtesting harness. Every prompt change is gated by a regression test suite with a two-proportion z-test before promotion. Braintrust logs every LLM call with model, tokens, cost, latency, and quality score.
+**Evaluation.** Predictions are validated against historical ground truth through a backtesting harness. Every prompt change is gated by a regression test suite with a two-proportion z-test before promotion. LangSmith traces every LangGraph node execution and state transition, and logs every LLM call with model, tokens, cost, and latency.
 
 **Output.** Real-time alerts via Socket.io. A RAG-powered chat interface over all accumulated intelligence. A minimal Next.js dashboard for visualization and the demo.
 
@@ -116,7 +116,7 @@ Recommended actions:
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  RELIABILITY  ·  Circuit breakers (Redis) · Adaptive cost router│
-│  OBSERVABILITY  ·  Braintrust · Winston (job + run correlation) │
+│  OBSERVABILITY  ·  LangSmith · Winston (job + run correlation)  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -170,6 +170,7 @@ Recommended actions:
 | **GitHub Actions** | Type check and test on every push. Deploy to Render on merge to main. |
 | **Render** | API and worker deployed as separate services. |
 | **Vercel** | Next.js frontend. |
+| **LangSmith** | Native LangGraph tracing: every node execution, state transition, and LLM call logged automatically. Prompt versioning, evaluation datasets, and a debugging UI for agent runs. |
 
 ---
 
@@ -499,7 +500,9 @@ REDIS_URL=
 REDDIT_CLIENT_ID=
 REDDIT_CLIENT_SECRET=
 REDDIT_USER_AGENT=signal/1.0
-BRAINTRUST_API_KEY=
+LANGSMITH_API_KEY=
+LANGSMITH_TRACING=true
+LANGSMITH_PROJECT=signal
 MAX_TOKENS_PER_CALL=2000
 COLLECT_INTERVAL_HOURS=24
 DAILY_BUDGET_USD=2.00
