@@ -50,6 +50,8 @@ Recommended actions:
 
 ## How It Works
 
+**Add a competitor by name and domain.** Signal discovers everything else automatically — subreddits, job boards, pricing pages, changelog feeds. See [Discovery Agents](#discovery-agents--run-once-on-competitor-creation).
+
 **Briefing.** The default view your team opens every morning. The top 3 most significant competitive movements from the last 24 hours — what happened, why it matters, the recommended action, and a one-click button to act on it.
 
 **Radar.** Per-competitor trend view — Signal Score over time, mention volume, sentiment trajectory, department hiring velocity. The view for "what's this competitor's trajectory."
@@ -59,6 +61,8 @@ Recommended actions:
 **Chat.** A persistent panel that answers questions from accumulated intelligence, not generic LLM knowledge — RAG over every signal Signal has ever collected on your competitors.
 
 **Signal Score.** A 0-100 composite threat score per competitor, recomputed daily by SynthesisAgent: mention velocity (30-day trend, quality-weighted), sentiment trajectory, hiring momentum (department deltas, especially ML/AI/Sales), pricing change recency, and vulnerability window status. It's the 10-second daily check-in before anyone drills into detail.
+
+**Company Profile.** Signal learns your product, pricing, ICP, and differentiators through a one-time setup. Every analysis agent uses this context to produce recommendations specific to your company — not generic advice about what a competitor is doing.
 
 ---
 
@@ -77,8 +81,10 @@ graph TB
     end
 
     subgraph Storage["STORAGE · PostgreSQL + Pinecone"]
-        ST["signals · clusters · pricing_diffs · signal_scores · costs"]
+        ST["signals · clusters · pricing_diffs · signal_scores · costs<br/>company_profile · competitor_discovery_log"]
     end
+
+    COMPANY["Company Profile<br/>getCompanyContext() — 1h Redis cache"]
 
     subgraph Analysis["ANALYSIS LAYER · LangGraph.js directed graph, immutable state"]
         IA["IntentAnalyzer<br/>GPT-4o"]
@@ -109,6 +115,7 @@ graph TB
     Analysis --> OUT
     Analysis -.-> REL
     Analysis -.-> OBS
+    COMPANY -.->|injected into every system prompt| Analysis
 
     style PD fill:#1f8f7e,stroke:#0f5c50,stroke-width:2px,color:#fff
 ```
@@ -136,8 +143,8 @@ graph TB
 
 | | |
 |---|---|
-| **PostgreSQL (Supabase)** | Primary store — competitors, signals, signal_clusters, pricing_diffs, agent_runs, prompt_versions, agent_test_cases, circuit_events, llm_costs, alerts, competitor_signal_scores. |
-| **Redis (Upstash)** | BullMQ backend, circuit breaker state (shared across worker instances), ChatAgent response cache at 4h TTL. |
+| **PostgreSQL (Supabase)** | Primary store — competitors, signals, signal_clusters, pricing_diffs, agent_runs, prompt_versions, agent_test_cases, circuit_events, llm_costs, alerts, competitor_signal_scores, company_profile, competitor_discovery_log. |
+| **Redis (Upstash)** | BullMQ backend, circuit breaker state (shared across worker instances), ChatAgent response cache at 4h TTL, company profile cache (`company:profile`, 1h TTL). |
 | **Pinecone** | Signals embedded and namespaced per competitor. `quality_score` in vector metadata for weighted retrieval. Multi-namespace queries for cross-competitor chat. |
 
 ### AI
@@ -172,6 +179,11 @@ graph TB
 ---
 
 ## Agents
+
+### Discovery Agents — run once on competitor creation
+
+**CompetitorDiscoveryAgent** — no LLM
+Triggered once when a competitor is added via `POST /api/competitors`. Discovers subreddits (Reddit search API, ranked by mention frequency, top 5 plus r/SaaS and r/startups as defaults), job board tokens (Greenhouse + Lever pattern matching against domain/name slug variations), pricing URL (common path probing — `/pricing`, `/plans`, `/price`, `/pricing-plans` — with a web-search fallback), and RSS/changelog feed (path probing plus `<link rel="alternate">` HTML parsing). Logs every attempt to `competitor_discovery_log`. Updates the `competitors` row with discovered values and sets `discovery_status` to `complete` or `failed`. Runs on the `competitor-discovery` BullMQ queue — see the Getting Started example below.
 
 ### Collection — no LLM
 
@@ -403,7 +415,7 @@ signal/
 │   └── shared/                          # Zod schemas + TypeScript types
 │       └── src/
 │           ├── agents.ts                # Agent input/output schemas
-│           ├── signals.ts               # Signal, SignalCluster, and SignalScore schemas
+│           ├── signals.ts               # Signal, SignalCluster, SignalScore, CompanyProfile, discovery schemas
 │           ├── pricing.ts               # PricingSnapshot + structured diff
 │           ├── prompts.ts               # PromptVersion schema
 │           └── socket-events.ts         # Socket.io event payload types
@@ -412,7 +424,8 @@ signal/
     ├── api/                             # Backend: Express + BullMQ + LangGraph
     │   ├── src/
     │   │   ├── api/                     # Express routes + Socket.io server
-    │   │   │   ├── competitors.ts       # CRUD + manual analysis trigger + GET /:id/score
+    │   │   │   ├── competitors.ts       # CRUD + discovery trigger + manual analysis + GET /:id/score
+    │   │   │   ├── company-profile.ts   # GET/POST company_profile (single-row upsert)
     │   │   │   ├── signals.ts           # Signal feed with pagination + filters
     │   │   │   ├── alerts.ts            # Alert history
     │   │   │   └── chat.ts              # ChatAgent SSE endpoint
@@ -430,6 +443,8 @@ signal/
     │   │   │   └── entity-extractor.ts  # Structured JSONB extraction (GPT-4o-mini)
     │   │   │
     │   │   ├── agents/
+    │   │   │   ├── discovery/           # Run once on competitor creation (no LLM)
+    │   │   │   │   └── competitor-discovery.ts
     │   │   │   ├── analysis/            # LangGraph nodes
     │   │   │   │   ├── intent-analyzer.ts
     │   │   │   │   ├── sentiment-clusterer.ts
@@ -455,7 +470,8 @@ signal/
     │   │   │   │                        # pricing_diffs, agent_runs,
     │   │   │   │                        # prompt_versions, agent_test_cases,
     │   │   │   │                        # circuit_events, llm_costs, alerts,
-    │   │   │   │                        # competitor_signal_scores
+    │   │   │   │                        # competitor_signal_scores, company_profile,
+    │   │   │   │                        # competitor_discovery_log
     │   │   │   └── queries.ts
     │   │   │
     │   │   ├── vector/
@@ -479,7 +495,8 @@ signal/
     │   │   └── lib/
     │   │       ├── logger.ts            # Winston + job_id/run_id correlation
     │   │       ├── retry.ts             # Exponential backoff wrapper
-    │   │       └── latency-tracker.ts   # Per-agent timing + percentiles
+    │   │       ├── latency-tracker.ts   # Per-agent timing + percentiles
+    │   │       └── company-context.ts   # getCompanyContext() — system prompt injection, Redis-cached
     │   │
     │   ├── worker.ts                    # BullMQ worker entry point
     │   └── scripts/
@@ -503,8 +520,10 @@ signal/
         │   │   └── page.tsx             # Full filterable signal feed
         │   ├── chat/
         │   │   └── page.tsx             # Persistent chat panel, SSE streaming
-        │   └── alerts/
-        │       └── page.tsx             # Full alert history
+        │   ├── alerts/
+        │   │   └── page.tsx             # Full alert history
+        │   └── settings/
+        │       └── page.tsx             # Company profile setup (product, ICP, pricing, differentiators)
         ├── components/
         │   ├── CommandBar.tsx           # ⌘K palette — battlecards, outreach copy, brief export
         │   ├── SignalScoreCard.tsx      # Signal Score (0-100) + sparkline + delta
@@ -514,7 +533,8 @@ signal/
         │   ├── AlertBanner.tsx          # Alert push without page refresh
         │   ├── TrendChart.tsx           # Signal Score + mention + sentiment trends (Recharts)
         │   ├── HiringChart.tsx          # Department hiring delta (Recharts)
-        │   └── ChatInterface.tsx        # SSE streaming + citation chips
+        │   ├── ChatInterface.tsx        # SSE streaming + citation chips
+        │   └── DiscoveryStatus.tsx      # Polls discovery progress for a newly added competitor
         └── lib/
             └── socket.ts               # Socket.io client + room join
 ```
@@ -540,13 +560,11 @@ curl -X POST http://localhost:3000/api/competitors \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Notion",
-    "domain": "notion.so",
-    "subreddits": ["Notion", "productivity", "SaaS"],
-    "greenhouse_token": "notion",
-    "pricing_url": "https://notion.so/pricing",
-    "changelog_rss": "https://notion.so/blog/rss"
+    "domain": "notion.so"
   }'
 ```
+
+Signal automatically discovers subreddits, job board tokens, pricing pages, and RSS feeds. Discovery runs in the background after creation — check status at `GET /api/competitors/{id}/discovery`.
 
 Trigger manual analysis:
 

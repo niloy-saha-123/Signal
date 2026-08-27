@@ -20,7 +20,13 @@ import {
 import { sql } from "drizzle-orm";
 
 // ── competitors ──────────────────────────────────────────────────────────
-// Entities being monitored. One row per `POST /api/competitors` call.
+// Entities being monitored. One row per `POST /api/competitors` call — the
+// user supplies only `name` and `domain`; every other field below
+// (subreddits, greenhouse_token, lever_token, pricing_url, changelog_rss) is
+// discovered after the fact by CompetitorDiscoveryAgent
+// (agents/discovery/competitor-discovery.ts) and populated asynchronously.
+// discovery_status tracks that background fill-in; the frontend polls
+// GET /api/competitors/:id/discovery while it's pending/in_progress.
 export const competitorsTable = pgTable(
   "competitors",
   {
@@ -35,10 +41,16 @@ export const competitorsTable = pgTable(
     // Pause monitoring without losing history — hard delete would orphan
     // every signal/alert/score row a RESTRICT/CASCADE choice below depends on.
     is_active: boolean("is_active").notNull().default(true),
+    discovery_status: text("discovery_status").notNull().default("pending"),
+    discovered_at: timestamp("discovered_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    check(
+      "competitors_discovery_status_check",
+      sql`${table.discovery_status} IN ('pending', 'in_progress', 'complete', 'failed')`
+    ),
     uniqueIndex("competitors_domain_idx").on(table.domain),
     index("competitors_is_active_idx").on(table.is_active),
   ]
@@ -385,6 +397,68 @@ export const competitorSignalScoresTable = pgTable(
       table.competitor_id,
       table.computed_at
     ),
+  ]
+);
+
+// ── company_profile ──────────────────────────────────────────────────────
+// Single-row table for now (single-tenant). When multi-tenancy is added,
+// add org_id and a unique constraint on org_id — this table's shape
+// otherwise stays the same, so that migration is additive, not a rewrite.
+// getCompanyContext() (lib/company-context.ts) reads this row and formats
+// it into a system-prompt injection every analysis agent includes, so
+// output is specific to the user's product instead of generic commentary.
+export const companyProfileTable = pgTable("company_profile", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  // What the product does — the first line of every agent's injected context.
+  product_description: text("product_description").notNull(),
+  // Ideal-customer-profile fields — let agents judge whether a competitor's
+  // affected users overlap with this company's actual target market.
+  icp_company_size: text("icp_company_size"),
+  icp_industries: text("icp_industries").array().notNull().default(sql`'{}'::text[]`),
+  icp_buyer_role: text("icp_buyer_role"),
+  // Array of { name, price, billing } — lets agents compute a direct price
+  // delta against a competitor's pricing_diffs instead of speaking in generalities.
+  pricing_tiers: jsonb("pricing_tiers").$type<Record<string, unknown>[]>().default(sql`'[]'::jsonb`),
+  // 2-3 core strengths — the "why us" agents lean on when drafting positioning copy.
+  key_differentiators: text("key_differentiators").array().notNull().default(sql`'{}'::text[]`),
+  // Soft reference to competitors.id — no hard FK on array columns in
+  // Postgres, so uniqueness/existence is enforced by the API layer, not the DB.
+  primary_competitor_ids: uuid("primary_competitor_ids")
+    .array()
+    .notNull()
+    .default(sql`'{}'::uuid[]`),
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── competitor_discovery_log ─────────────────────────────────────────────
+// One row per field CompetitorDiscoveryAgent attempted to discover — what
+// URLs it tried and what it found, so a 'failed' discovery is diagnosable
+// (and manually fixable) instead of a silent gap in the competitors row.
+export const competitorDiscoveryLogTable = pgTable(
+  "competitor_discovery_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    competitor_id: uuid("competitor_id")
+      .notNull()
+      .references(() => competitorsTable.id, { onDelete: "cascade" }),
+    field_name: text("field_name").notNull(),
+    attempted_urls: text("attempted_urls").array().notNull().default(sql`'{}'::text[]`),
+    discovered_value: text("discovered_value"),
+    status: text("status").notNull(),
+    error_message: text("error_message"),
+    discovered_at: timestamp("discovered_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "competitor_discovery_log_field_name_check",
+      sql`${table.field_name} IN ('subreddits', 'greenhouse', 'lever', 'pricing_url', 'rss_url')`
+    ),
+    check(
+      "competitor_discovery_log_status_check",
+      sql`${table.status} IN ('found', 'not_found', 'error')`
+    ),
+    index("competitor_discovery_log_competitor_id_idx").on(table.competitor_id),
   ]
 );
 
