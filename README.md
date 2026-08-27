@@ -64,62 +64,56 @@ Recommended actions:
 
 ## Architecture
 
-Full interactive system diagram: [Signal Architecture](https://claude.ai/code/artifact/f80c5f2c-6849-404f-bd49-9cf168d4b90f)
-(private Claude artifact — share it from the page's share menu if others need access).
+```mermaid
+graph TB
+    FE["FRONTEND · Next.js<br/>Briefing · Radar · Intel · Chat · Signal Score everywhere<br/>Socket.io client for real-time alerts"]
 
+    subgraph Collection["COLLECTION LAYER · BullMQ scheduled workers"]
+        COL["Reddit 6h · HN 6h · Jobs 24h · RSS 12h · Pricing 48h"]
+    end
+
+    subgraph Pipeline["SIGNAL PROCESSING PIPELINE · BullMQ · 3 stages"]
+        QS[QualityScorer] --> SD[SemanticDeduplicator] --> EE[EntityExtractor]
+    end
+
+    subgraph Storage["STORAGE · PostgreSQL + Pinecone"]
+        ST["signals · clusters · pricing_diffs · signal_scores · costs"]
+    end
+
+    subgraph Analysis["ANALYSIS LAYER · LangGraph.js directed graph, immutable state"]
+        IA["IntentAnalyzer<br/>GPT-4o"]
+        SC["SentimentClusterer<br/>Claude Haiku"]
+        CD["ChangeDetector<br/>GPT-4o-mini (conditional)"]
+        PD["PatternDetector<br/>GPT-4o + RAG + 90d history"]
+        VW["VulnerabilityWindowDetector<br/>GPT-4o · Claude Sonnet"]
+        SY["SynthesisAgent<br/>Claude Sonnet<br/>alert · confidence · Signal Score"]
+
+        IA --- SC
+        IA --> CD
+        SC --> PD
+        CD --> VW
+        PD --> VW
+        VW --> SY
+    end
+
+    OUT["OUTPUT<br/>Socket.io alerts · SSE chat stream"]
+    REL["RELIABILITY<br/>Circuit breakers (Redis) · Adaptive cost router"]
+    OBS["OBSERVABILITY<br/>LangSmith · Winston (job + run correlation)"]
+
+    FE -->|REST API| Collection
+    OUT -->|SSE stream| FE
+    Collection -->|raw signals| Pipeline
+    Pipeline -->|cleaned signals| Storage
+    Storage -->|reads signals + history| Analysis
+    Analysis -->|writes Signal Score daily| Storage
+    Analysis --> OUT
+    Analysis -.-> REL
+    Analysis -.-> OBS
+
+    style PD fill:#1f8f7e,stroke:#0f5c50,stroke-width:2px,color:#fff
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       FRONTEND  (Next.js)                       │
-│  Briefing · Radar · Intel · Chat · Signal Score everywhere      │
-│  Socket.io client for real-time alerts                          │
-└────────────────────┬──────────────────────────┬─────────────────┘
-                     │  REST API                 │  SSE stream
-┌────────────────────▼──────────────────────────▼─────────────────┐
-│                    BACKEND  (Node.js / TypeScript)               │
-│                                                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  COLLECTION LAYER  ·  BullMQ scheduled workers           │  │
-│  │  Reddit 6h  ·  HN 6h  ·  Jobs 24h  ·  RSS 12h  ·  Pricing 48h│  │
-│  └──────────────────────────────┬────────────────────────────┘  │
-│                                 │                                │
-│  ┌──────────────────────────────▼────────────────────────────┐  │
-│  │  SIGNAL PROCESSING PIPELINE  ·  BullMQ  ·  3 stages      │  │
-│  │  QualityScorer → SemanticDeduplicator → EntityExtractor   │  │
-│  └──────────────────────────────┬────────────────────────────┘  │
-│                                 │                                │
-│  ┌──────────────────────────────▼────────────────────────────┐  │
-│  │  STORAGE  ·  PostgreSQL + Pinecone                        │  │
-│  │  signals · clusters · pricing_diffs · signal_scores · costs│  │
-│  └──────────────────────────────┬────────────────────────────┘  │
-│                                 │                                │
-│  ┌──────────────────────────────▼────────────────────────────┐  │
-│  │  ANALYSIS LAYER  ·  LangGraph.js directed graph           │  │
-│  │                                                           │  │
-│  │  IntentAnalyzer ──── parallel ──── SentimentClusterer    │  │
-│  │  GPT-4o                             Claude Haiku          │  │
-│  │        │                                  │              │  │
-│  │  ChangeDetector ─────────────── PatternDetector          │  │
-│  │  GPT-4o-mini (conditional)     GPT-4o + RAG + history     │  │
-│  │        │                                  │              │  │
-│  │  ┌─────▼──────────────────────────────────▼───────────┐  │  │
-│  │  │        VulnerabilityWindowDetector                 │  │  │
-│  │  │          GPT-4o  ·  Claude Sonnet                  │  │  │
-│  │  └──────────────────────────┬─────────────────────────┘  │  │
-│  │                             │                             │  │
-│  │  ┌──────────────────────────▼─────────────────────────┐  │  │
-│  │  │  SynthesisAgent  ·  Claude Sonnet                  │  │  │
-│  │  │  alert decision  ·  confidence  ·  Signal Score    │  │  │
-│  │  └──────────────────────────┬─────────────────────────┘  │  │
-│  └─────────────────────────────┼───────────────────────────┘  │
-│                                │                                │
-│  ┌─────────────────────────────▼───────────────────────────┐   │
-│  │  OUTPUT  ·  Socket.io alerts  ·  SSE chat stream        │   │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  RELIABILITY  ·  Circuit breakers (Redis) · Adaptive cost router│
-│  OBSERVABILITY  ·  LangSmith · Winston (job + run correlation)  │
-└──────────────────────────────────────────────────────────────────┘
-```
+
+`PatternDetector` is highlighted above — its 90-day historical fingerprinting is the compounding moat, not a roadmap item. See [Signal Score compounds over time](#key-architecture-decisions).
 
 ---
 
@@ -227,6 +221,38 @@ Real-time, not background. Three-stage retrieval pipeline:
 (2) rerankChunks — Cohere reranker rescore of top-20 candidates jointly with the query
 (3) enforceCitations — claim-level validation against retrieved chunks; returns a structured refusal if evidence is insufficient rather than generating a low-quality answer
 Streams the response via SSE. Citations link to original signal records in PostgreSQL.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant ChatAgent
+    participant Retrieval as retrieval/index.ts
+    participant Pinecone
+    participant Cohere as Cohere Reranker
+
+    User->>ChatAgent: question
+    ChatAgent->>Retrieval: hybridRetrieve(query, competitor_id)
+    Retrieval->>Pinecone: semantic search (namespaced)
+    Retrieval->>Retrieval: BM25 (flexsearch) + RRF merge
+    Retrieval-->>ChatAgent: candidate chunks
+
+    ChatAgent->>Retrieval: rerankChunks(chunks)
+    Retrieval->>Cohere: rerank-english-v3.0
+    Cohere-->>Retrieval: ranked chunks
+    Retrieval-->>ChatAgent: top chunks
+
+    ChatAgent->>Retrieval: enforceCitations(draft answer, chunks)
+
+    alt Claims grounded (≤40% unsupported)
+        Retrieval-->>ChatAgent: CitationResult { answer, citations }
+        ChatAgent-->>User: answer + citations, streamed via SSE
+    else Evidence insufficient
+        Retrieval-->>ChatAgent: RefusalResult { reason, suggested_query }
+        ChatAgent-->>User: structured refusal — not an error
+    end
+```
+
+`RefusalResult` is a first-class output, not an error path — see [Citation enforcement as a first-class output](#key-architecture-decisions).
 
 ---
 
