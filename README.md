@@ -64,6 +64,9 @@ Recommended actions:
 
 ## Architecture
 
+Full interactive system diagram: [Signal Architecture](https://claude.ai/code/artifact/f80c5f2c-6849-404f-bd49-9cf168d4b90f)
+(private Claude artifact — share it from the page's share menu if others need access).
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                       FRONTEND  (Next.js)                       │
