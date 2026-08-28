@@ -7,7 +7,11 @@ services:
       POSTGRES_PASSWORD: signal
       POSTGRES_DB: signal
     ports:
-      - "5432:5432"
+      # Host port 5433, not 5432 — avoids colliding with a locally-installed
+      # Postgres (Postgres.app, Homebrew, etc). Inside the Docker network,
+      # other services still reach this at postgres:5432 — only the host-side
+      # mapping changed.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
