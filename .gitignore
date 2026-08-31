@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 
 # Personal Claude Code settings (references machine-specific paths)
 .claude/settings.local.json
+
+# macOS
+.DS_Store
