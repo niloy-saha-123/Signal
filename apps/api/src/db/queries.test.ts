@@ -13,6 +13,8 @@ const {
   updateMock,
   updateSetMock,
   updateWhereMock,
+  updateReturningMock,
+  transactionMock,
 } = vi.hoisted(() => ({
   selectMock: vi.fn(),
   fromMock: vi.fn(),
@@ -26,6 +28,8 @@ const {
   updateMock: vi.fn(),
   updateSetMock: vi.fn(),
   updateWhereMock: vi.fn(),
+  updateReturningMock: vi.fn(),
+  transactionMock: vi.fn(),
 }));
 
 vi.mock("./client", () => ({
@@ -33,6 +37,7 @@ vi.mock("./client", () => ({
     select: selectMock,
     insert: insertMock,
     update: updateMock,
+    transaction: transactionMock,
   },
 }));
 
@@ -56,6 +61,7 @@ import {
   signalsTable,
   competitorSignalScoresTable,
   agentLatenciesTable,
+  companyProfileTable,
 } from "./schema";
 import {
   createCompetitor,
@@ -67,6 +73,8 @@ import {
   getSignalVolumeByDay,
   getLatestSignalScores,
   getLatencyPercentiles,
+  getCompanyProfile,
+  upsertCompanyProfile,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -391,6 +399,89 @@ describe("db/queries — latency percentiles", () => {
       const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
       const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
       expect(intervalCall!.at(-1)).toBe(14);
+    });
+  });
+});
+
+describe("db/queries — company profile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ limit: limitMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+    // db.transaction runs the callback against a tx that exposes the same
+    // select/insert/update surface as `db` — matches registry.ts's pattern.
+    transactionMock.mockImplementation(async (cb: (tx: unknown) => unknown) =>
+      cb({ select: selectMock, insert: insertMock, update: updateMock })
+    );
+  });
+
+  const profileInput = {
+    product_description: "A widget factory",
+    icp_company_size: "50-200",
+    icp_industries: ["saas"],
+    icp_buyer_role: "VP Eng",
+    pricing_tiers: [{ name: "Pro", price: 99, billing: "monthly" }],
+    key_differentiators: ["fast", "cheap"],
+    primary_competitor_ids: ["c1"],
+  };
+
+  describe("getCompanyProfile", () => {
+    it("returns the single row when the table has one", async () => {
+      const row = { id: "p1", product_description: "A widget factory" };
+      limitMock.mockResolvedValue([row]);
+
+      const result = await getCompanyProfile();
+
+      expect(fromMock).toHaveBeenCalledWith(companyProfileTable);
+      expect(limitMock).toHaveBeenCalledWith(1);
+      expect(result).toEqual(row);
+    });
+
+    it("returns null on an empty table, not throw", async () => {
+      limitMock.mockResolvedValue([]);
+
+      const result = await getCompanyProfile();
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe("upsertCompanyProfile", () => {
+    it("updates the existing row when one is present", async () => {
+      const existing = { id: "p1", product_description: "Old description" };
+      const updated = { id: "p1", ...profileInput };
+      limitMock.mockResolvedValue([existing]);
+      updateReturningMock.mockResolvedValue([updated]);
+
+      const result = await upsertCompanyProfile(profileInput);
+
+      expect(transactionMock).toHaveBeenCalled();
+      expect(updateMock).toHaveBeenCalledWith(companyProfileTable);
+      expect(updateSetMock).toHaveBeenCalledWith(
+        expect.objectContaining({ ...profileInput, updated_at: expect.any(Date) })
+      );
+      expect(eq).toHaveBeenCalledWith(companyProfileTable.id, "p1");
+      expect(insertMock).not.toHaveBeenCalled();
+      expect(result).toEqual(updated);
+    });
+
+    it("inserts a new row when the table is empty", async () => {
+      const inserted = { id: "p2", ...profileInput };
+      limitMock.mockResolvedValue([]);
+      insertReturningMock.mockResolvedValue([inserted]);
+
+      const result = await upsertCompanyProfile(profileInput);
+
+      expect(transactionMock).toHaveBeenCalled();
+      expect(insertMock).toHaveBeenCalledWith(companyProfileTable);
+      expect(insertValuesMock).toHaveBeenCalledWith(profileInput);
+      expect(updateMock).not.toHaveBeenCalled();
+      expect(result).toEqual(inserted);
     });
   });
 });

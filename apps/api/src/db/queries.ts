@@ -7,12 +7,18 @@ import {
   signalsTable,
   competitorSignalScoresTable,
   agentLatenciesTable,
+  companyProfileTable,
 } from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
 export type Signal = typeof signalsTable.$inferSelect;
 export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
+export type CompanyProfile = typeof companyProfileTable.$inferSelect;
+export type CompanyProfileInput = Omit<
+  typeof companyProfileTable.$inferInsert,
+  "id" | "created_at" | "updated_at"
+>;
 
 export type SignalVolumeByDay = {
   day: string;
@@ -153,4 +159,35 @@ export async function getLatencyPercentiles(days = 7): Promise<LatencyPercentile
     .from(agentLatenciesTable)
     .where(sql`${agentLatenciesTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
     .groupBy(agentLatenciesTable.agent_name);
+}
+
+// company_profile is single-row (no natural unique key beyond its own id —
+// see schema.ts). `.limit(1)` matches lib/company-context.ts's existing
+// direct read of this table.
+export async function getCompanyProfile(): Promise<CompanyProfile | null> {
+  const [row] = await db.select().from(companyProfileTable).limit(1);
+  return row ?? null;
+}
+
+// Select-then-write inside a transaction (same pattern as
+// queues/registry.ts's writeDiscoveryFailure): update the existing row if
+// one exists, insert otherwise. Not high-concurrency (single-tenant,
+// admin-configured), so this is simpler than an ON CONFLICT upsert against
+// a fixed known id.
+export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<CompanyProfile> {
+  return db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(companyProfileTable).limit(1);
+
+    if (existing) {
+      const [row] = await tx
+        .update(companyProfileTable)
+        .set({ ...input, updated_at: new Date() })
+        .where(eq(companyProfileTable.id, existing.id))
+        .returning();
+      return row;
+    }
+
+    const [row] = await tx.insert(companyProfileTable).values(input).returning();
+    return row;
+  });
 }
