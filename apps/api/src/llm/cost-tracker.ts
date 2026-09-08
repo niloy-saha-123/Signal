@@ -48,13 +48,21 @@ export async function trackCost(
 }
 
 export async function getDailySpend(): Promise<number> {
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
+  const now = new Date();
+  const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-  const rows = await db
-    .select({ cost_usd: llmCostsTable.cost_usd })
-    .from(llmCostsTable)
-    .where(gte(llmCostsTable.created_at, startOfToday));
+  try {
+    const rows = await db
+      .select({ cost_usd: llmCostsTable.cost_usd })
+      .from(llmCostsTable)
+      .where(gte(llmCostsTable.created_at, startOfToday));
 
-  return rows.reduce((sum, row) => sum + Number(row.cost_usd), 0);
+    return rows.reduce((sum, row) => sum + Number(row.cost_usd), 0);
+  } catch (error) {
+    // Budget safety must fail safe: an unknown spend total must never look
+    // like $0 (which would fail open and let selectModel proceed at full
+    // price). Infinity guarantees a downgrade whenever eligible.
+    logger.error("Failed to compute daily LLM spend", { error });
+    return Infinity;
+  }
 }

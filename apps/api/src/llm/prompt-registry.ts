@@ -5,15 +5,26 @@ import { and, eq } from "drizzle-orm";
 import type { AgentName } from "@signal/shared";
 import { db } from "../db/client";
 import { promptVersionsTable } from "../db/schema";
+import { logger } from "../lib/logger";
 
 export async function getActivePrompt(agentName: AgentName): Promise<string | null> {
-  const rows = await db
-    .select({ prompt_text: promptVersionsTable.prompt_text })
-    .from(promptVersionsTable)
-    .where(
-      and(eq(promptVersionsTable.agent_name, agentName), eq(promptVersionsTable.is_active, true))
-    )
-    .limit(1);
+  try {
+    const rows = await db
+      .select({ prompt_text: promptVersionsTable.prompt_text })
+      .from(promptVersionsTable)
+      .where(
+        and(
+          eq(promptVersionsTable.agent_name, agentName),
+          eq(promptVersionsTable.is_active, true)
+        )
+      )
+      .limit(1);
 
-  return rows.length > 0 ? rows[0].prompt_text : null;
+    return rows.length > 0 ? rows[0].prompt_text : null;
+  } catch (error) {
+    // No active prompt = null, never throw — same contract as the
+    // empty-result case, matching getCompanyContext()'s fail-quiet pattern.
+    logger.error("Failed to fetch active prompt", { error, agentName });
+    return null;
+  }
 }

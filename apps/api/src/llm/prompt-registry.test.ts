@@ -34,4 +34,16 @@ describe("getActivePrompt", () => {
 
     expect(await getActivePrompt("synthesis")).toBeNull();
   });
+
+  it("returns null instead of rejecting when the db read throws", async () => {
+    (db.select as ReturnType<typeof vi.fn>).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockRejectedValue(new Error("connection reset")),
+        }),
+      }),
+    });
+
+    await expect(getActivePrompt("synthesis")).resolves.toBeNull();
+  });
 });

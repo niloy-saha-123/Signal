@@ -48,4 +48,13 @@ describe("getDailySpend", () => {
     });
     expect(await getDailySpend()).toBe(0);
   });
+
+  it("fails safe to Infinity (never rejects, never 0) when the db read throws", async () => {
+    (db.select as ReturnType<typeof vi.fn>).mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockRejectedValue(new Error("connection reset")),
+      }),
+    });
+    await expect(getDailySpend()).resolves.toBe(Infinity);
+  });
 });

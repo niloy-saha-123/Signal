@@ -1,0 +1,1 @@
+CREATE INDEX "llm_costs_created_at_idx" ON "llm_costs" USING btree ("created_at");

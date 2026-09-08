@@ -33,4 +33,12 @@ describe("selectModel", () => {
     (getDailySpend as ReturnType<typeof vi.fn>).mockResolvedValue(2.5);
     expect(await selectModel("gpt-4o-mini", true)).toBe("gpt-4o-mini");
   });
+
+  it("falls back to the default budget instead of NaN when DAILY_BUDGET_USD is malformed", async () => {
+    process.env.DAILY_BUDGET_USD = "not-a-number";
+    (getDailySpend as ReturnType<typeof vi.fn>).mockResolvedValue(2.5);
+    // Default budget is 2.0 — spend of 2.5 must still trigger a downgrade,
+    // proving the comparison isn't silently `spend >= NaN` (always false).
+    expect(await selectModel("gpt-4o", true)).toBe("gpt-4o-mini");
+  });
 });

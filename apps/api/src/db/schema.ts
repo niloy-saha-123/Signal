@@ -337,6 +337,7 @@ export const llmCostsTable = pgTable(
   (table) => [
     index("llm_costs_competitor_created_idx").on(table.competitor_id, table.created_at),
     index("llm_costs_agent_name_idx").on(table.agent_name),
+    index("llm_costs_created_at_idx").on(table.created_at),
   ]
 );
 
