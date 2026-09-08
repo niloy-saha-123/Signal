@@ -8,12 +8,16 @@ import {
   competitorSignalScoresTable,
   agentLatenciesTable,
   companyProfileTable,
+  pricingBaselinesTable,
+  pricingDiffsTable,
 } from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
 export type Signal = typeof signalsTable.$inferSelect;
 export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
+export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
+export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
 export type CompanyProfile = typeof companyProfileTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
@@ -179,6 +183,48 @@ export type CreateSignalInput = {
 
 export async function createSignal(input: CreateSignalInput): Promise<Signal> {
   const [row] = await db.insert(signalsTable).values(input).returning();
+  return row;
+}
+
+// Matches pricing_diffs_significance_check in schema.ts.
+export type PricingSignificance = "minor" | "moderate" | "critical";
+
+export type CreatePricingBaselineInput = {
+  competitor_id: string;
+  snapshot: Record<string, unknown>;
+};
+
+export async function createPricingBaseline(
+  input: CreatePricingBaselineInput
+): Promise<PricingBaseline> {
+  const [row] = await db.insert(pricingBaselinesTable).values(input).returning();
+  return row;
+}
+
+// pricing.ts's diff watermark — the most recent baseline captured for a
+// competitor before this run's scrape, so the new scrape can diff against
+// it. Undefined on a competitor's first-ever pricing scrape.
+export async function getLatestPricingBaseline(
+  competitorId: string
+): Promise<PricingBaseline | undefined> {
+  const [row] = await db
+    .select()
+    .from(pricingBaselinesTable)
+    .where(eq(pricingBaselinesTable.competitor_id, competitorId))
+    .orderBy(desc(pricingBaselinesTable.captured_at))
+    .limit(1);
+  return row;
+}
+
+export type CreatePricingDiffInput = {
+  competitor_id: string;
+  baseline_id: string;
+  diff: Record<string, unknown>;
+  significance: PricingSignificance;
+};
+
+export async function createPricingDiff(input: CreatePricingDiffInput): Promise<PricingDiff> {
+  const [row] = await db.insert(pricingDiffsTable).values(input).returning();
   return row;
 }
 

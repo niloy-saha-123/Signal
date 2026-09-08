@@ -62,6 +62,8 @@ import {
   competitorSignalScoresTable,
   agentLatenciesTable,
   companyProfileTable,
+  pricingBaselinesTable,
+  pricingDiffsTable,
 } from "./schema";
 import {
   createCompetitor,
@@ -78,6 +80,9 @@ import {
   getLatestSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
+  createPricingBaseline,
+  getLatestPricingBaseline,
+  createPricingDiff,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -401,6 +406,77 @@ describe("db/queries — hn collector support", () => {
       const result = await createSignal(input);
 
       expect(insertMock).toHaveBeenCalledWith(signalsTable);
+      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(result).toEqual(row);
+    });
+  });
+});
+
+describe("db/queries — pricing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+  });
+
+  describe("createPricingBaseline", () => {
+    it("inserts the given fields and returns the created row", async () => {
+      const input = { competitor_id: "c1", snapshot: { raw_text: "Pro plan $99/mo" } };
+      const row = { id: "b1", ...input, captured_at: new Date(), created_at: new Date() };
+      insertReturningMock.mockResolvedValue([row]);
+
+      const result = await createPricingBaseline(input);
+
+      expect(insertMock).toHaveBeenCalledWith(pricingBaselinesTable);
+      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(result).toEqual(row);
+    });
+  });
+
+  describe("getLatestPricingBaseline", () => {
+    it("selects the most recent baseline for a competitor, most-recent first", async () => {
+      const row = { id: "b1", competitor_id: "c1", snapshot: { raw_text: "old" }, captured_at: new Date() };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([row]);
+
+      const result = await getLatestPricingBaseline("c1");
+
+      expect(fromMock).toHaveBeenCalledWith(pricingBaselinesTable);
+      expect(eq).toHaveBeenCalledWith(pricingBaselinesTable.competitor_id, "c1");
+      expect(orderByMock).toHaveBeenCalledWith(desc(pricingBaselinesTable.captured_at));
+      expect(limitMock).toHaveBeenCalledWith(1);
+      expect(result).toEqual(row);
+    });
+
+    it("returns undefined when this competitor has no prior baseline", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      const result = await getLatestPricingBaseline("c1");
+
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("createPricingDiff", () => {
+    it("inserts the given fields and returns the created row", async () => {
+      const input = {
+        competitor_id: "c1",
+        baseline_id: "b2",
+        diff: { added: ["Enterprise $499/mo"], removed: [] },
+        significance: "critical" as const,
+      };
+      const row = { id: "d1", ...input, detected_at: new Date(), created_at: new Date() };
+      insertReturningMock.mockResolvedValue([row]);
+
+      const result = await createPricingDiff(input);
+
+      expect(insertMock).toHaveBeenCalledWith(pricingDiffsTable);
       expect(insertValuesMock).toHaveBeenCalledWith(input);
       expect(result).toEqual(row);
     });
