@@ -7,8 +7,8 @@ import { db } from "../db/client";
 import { circuitEventsTable } from "../db/schema";
 import { logger } from "../lib/logger";
 
-const FAILURE_THRESHOLD = 5;
-const OPEN_TTL_SECONDS = 60;
+const FAILURE_THRESHOLD = Number(process.env.CIRCUIT_FAILURE_THRESHOLD ?? 5);
+const OPEN_TTL_SECONDS = Number(process.env.CIRCUIT_TIMEOUT_MS ?? 60000) / 1000;
 const HALF_OPEN_TRIAL_TTL_SECONDS = 10;
 
 type CircuitState = "closed" | "open" | "half_open";
