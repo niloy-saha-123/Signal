@@ -26,4 +26,44 @@
 // Exports: getCompanyContext(): Promise<string>
 //   If no company_profile row exists, returns "" — agents must work
 //   without it and just produce generic output, not throw.
-export {};
+
+import { db } from "../db/client";
+import { redis } from "./redis-client";
+import { companyProfileTable } from "../db/schema";
+
+const CACHE_KEY = "company:profile";
+const CACHE_TTL_SECONDS = 3600;
+
+export async function getCompanyContext(): Promise<string> {
+  const cached = await redis.get(CACHE_KEY);
+  if (cached) return cached;
+
+  const rows = await db.select().from(companyProfileTable).limit(1);
+  if (rows.length === 0) return "";
+
+  const profile = rows[0];
+  const pricingLines = (profile.pricing_tiers ?? [])
+    .map((tier) => {
+      const t = tier as { name?: string; price?: number; billing?: string };
+      return `  - ${t.name}: $${t.price}/${t.billing}`;
+    })
+    .join("\n");
+
+  const context = [
+    "ABOUT THE USER'S COMPANY:",
+    `Product: ${profile.product_description}`,
+    `Target customers: ${profile.icp_buyer_role ?? "unspecified"} at ${
+      profile.icp_company_size ?? "unspecified"
+    } companies in ${(profile.icp_industries ?? []).join(", ") || "unspecified industries"}`,
+    "Pricing:",
+    pricingLines || "  (not specified)",
+    `Key strengths vs competitors: ${(profile.key_differentiators ?? []).join(", ")}`,
+    "",
+    "When analyzing competitor signals, always interpret them in the context of this",
+    "company's positioning, pricing, and target customers. Make recommendations specific",
+    "to this company, not generic advice.",
+  ].join("\n");
+
+  await redis.setex(CACHE_KEY, CACHE_TTL_SECONDS, context);
+  return context;
+}
