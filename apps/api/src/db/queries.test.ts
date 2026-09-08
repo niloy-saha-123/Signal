@@ -54,7 +54,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   };
 });
 
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, asc, desc } from "drizzle-orm";
 import {
   competitorsTable,
   competitorDiscoveryLogTable,
@@ -162,6 +162,14 @@ describe("db/queries — competitors", () => {
         updated_at: expect.any(Date),
       });
       expect(updateWhereMock).toHaveBeenCalled();
+    });
+
+    it("rejects status 'failed' without touching db.update — failures must route through writeDiscoveryFailure so they're logged", async () => {
+      await expect(updateDiscoveryStatus("c1", "failed")).rejects.toThrow(
+        "updateDiscoveryStatus does not accept 'failed' — route failures through writeDiscoveryFailure so they're logged"
+      );
+
+      expect(updateMock).not.toHaveBeenCalled();
     });
   });
 
@@ -407,7 +415,12 @@ describe("db/queries — company profile", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     selectMock.mockReturnValue({ from: fromMock });
-    fromMock.mockReturnValue({ limit: limitMock });
+    // getCompanyProfile chains .orderBy().limit(1); upsertCompanyProfile's
+    // tx.select() chains .limit(1) directly (unchanged, out of scope for
+    // this fix) — expose both off the same fromMock return so each test's
+    // limitMock.mockResolvedValue(...) reaches whichever chain it uses.
+    fromMock.mockReturnValue({ orderBy: orderByMock, limit: limitMock });
+    orderByMock.mockReturnValue({ limit: limitMock });
     insertMock.mockReturnValue({ values: insertValuesMock });
     insertValuesMock.mockReturnValue({ returning: insertReturningMock });
     updateMock.mockReturnValue({ set: updateSetMock });
@@ -438,6 +451,7 @@ describe("db/queries — company profile", () => {
       const result = await getCompanyProfile();
 
       expect(fromMock).toHaveBeenCalledWith(companyProfileTable);
+      expect(orderByMock).toHaveBeenCalledWith(asc(companyProfileTable.created_at));
       expect(limitMock).toHaveBeenCalledWith(1);
       expect(result).toEqual(row);
     });
@@ -448,6 +462,27 @@ describe("db/queries — company profile", () => {
       const result = await getCompanyProfile();
 
       expect(result).toBeNull();
+    });
+
+    it("orders by created_at asc, so a stray duplicate row deterministically resolves to the oldest one", async () => {
+      const older = {
+        id: "p1",
+        product_description: "Older row",
+        created_at: new Date("2026-01-01T00:00:00.000Z"),
+      };
+      const newer = {
+        id: "p2",
+        product_description: "Newer row (duplicate from a race)",
+        created_at: new Date("2026-02-01T00:00:00.000Z"),
+      };
+      // orderBy(asc(created_at)) + limit(1) means Postgres itself would only
+      // ever return the oldest row here; seeding both simulates that.
+      limitMock.mockResolvedValue([older, newer]);
+
+      const result = await getCompanyProfile();
+
+      expect(orderByMock).toHaveBeenCalledWith(asc(companyProfileTable.created_at));
+      expect(result).toEqual(older);
     });
   });
 

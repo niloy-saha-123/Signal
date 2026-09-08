@@ -1,5 +1,5 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, asc, desc, sql } from "drizzle-orm";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -62,6 +62,12 @@ export async function listCompetitors(): Promise<Competitor[]> {
 }
 
 export async function updateDiscoveryStatus(id: string, status: DiscoveryStatus): Promise<void> {
+  if (status === "failed") {
+    throw new Error(
+      "updateDiscoveryStatus does not accept 'failed' — route failures through writeDiscoveryFailure so they're logged"
+    );
+  }
+
   await db
     .update(competitorsTable)
     .set({ discovery_status: status, updated_at: new Date() })
@@ -163,9 +169,15 @@ export async function getLatencyPercentiles(days = 7): Promise<LatencyPercentile
 
 // company_profile is single-row (no natural unique key beyond its own id —
 // see schema.ts). `.limit(1)` matches lib/company-context.ts's existing
-// direct read of this table.
+// direct read of this table. `.orderBy(asc(created_at))` makes a stray
+// duplicate row (race in upsertCompanyProfile's select-then-write) resolve
+// deterministically to the oldest row instead of flip-flopping between calls.
 export async function getCompanyProfile(): Promise<CompanyProfile | null> {
-  const [row] = await db.select().from(companyProfileTable).limit(1);
+  const [row] = await db
+    .select()
+    .from(companyProfileTable)
+    .orderBy(asc(companyProfileTable.created_at))
+    .limit(1);
   return row ?? null;
 }
 
