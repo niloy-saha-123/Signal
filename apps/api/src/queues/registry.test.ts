@@ -247,3 +247,24 @@ describe("competitor-discovery worker", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 });
+
+describe("company-profile-update worker", () => {
+  function getRegisteredWorker() {
+    const call = workerCtorCalls.find((c) => c.name === "company-profile-update");
+    if (!call) throw new Error("company-profile-update worker was never registered");
+    return call;
+  }
+
+  it("registers a real Worker for company-profile-update via registerWorker at module load", () => {
+    const call = getRegisteredWorker();
+    expect(typeof call.processor).toBe("function");
+    expect((call.opts as { concurrency: number }).concurrency).toBe(1);
+  });
+
+  it("throws NotImplementedError when the processor is called", async () => {
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+    const job = { data: {} };
+
+    await expect(processor(job)).rejects.toThrow(NotImplementedError);
+  });
+});

@@ -189,3 +189,20 @@ competitorDiscoveryWorker.on("failed", (job, err) => {
     });
   });
 });
+
+interface CompanyProfileUpdateJobData {
+  // Job data type — no fields needed until Part 10 implements the actual logic
+}
+
+async function companyProfileUpdateProcessor(
+  _job: Job<CompanyProfileUpdateJobData>
+): Promise<void> {
+  throw new NotImplementedError(
+    "Company profile update re-analysis logic is not implemented yet (Part 10)"
+  );
+}
+
+export const companyProfileUpdateWorker = registerWorker(
+  "company-profile-update",
+  companyProfileUpdateProcessor
+);
