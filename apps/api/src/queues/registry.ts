@@ -31,6 +31,7 @@ import { db } from "../db/client";
 import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
+import { withRetry } from "../lib/retry";
 
 // bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
 // npm hoists two separate copies — same runtime API (bullmq duck-types via
@@ -78,6 +79,14 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   analysis: DEFAULT_CONFIG,
 };
 
+// Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
+// completed/failed job retention so Redis doesn't grow unboundedly once real
+// job volume starts; BullMQ's own default is to keep everything forever.
+const JOB_RETENTION = {
+  removeOnComplete: { count: 1000 },
+  removeOnFail: { age: 7 * 24 * 60 * 60 },
+};
+
 export const queues = Object.fromEntries(
   (Object.keys(QUEUE_CONFIG) as QueueName[]).map((name) => [
     name,
@@ -86,6 +95,7 @@ export const queues = Object.fromEntries(
       defaultJobOptions: {
         attempts: QUEUE_CONFIG[name].attempts,
         backoff: QUEUE_CONFIG[name].backoff,
+        ...JOB_RETENTION,
       },
     }),
   ])
@@ -96,7 +106,7 @@ const registeredWorkers = new Set<string>();
 // Extension point — later parts (6, 7, 10, 11) call this once their processor
 // logic exists, to attach a real Worker for competitor-discovery /
 // company-profile-update / the collectors / pipeline stages. Not called here.
-export function registerWorker(queueName: string, processor: Processor): Worker {
+export function registerWorker(queueName: QueueName, processor: Processor): Worker {
   if (registeredWorkers.has(queueName)) {
     throw new Error(`Worker already registered for queue "${queueName}"`);
   }
@@ -142,7 +152,15 @@ async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>
     await runDiscovery(job);
     await recordSuccess("competitor-discovery");
   } catch (err) {
-    await recordFailure("competitor-discovery", err instanceof Error ? err.message : String(err));
+    try {
+      await recordFailure("competitor-discovery", err instanceof Error ? err.message : String(err));
+    } catch (recordErr) {
+      // recordFailure makes unguarded Redis calls that can themselves throw — never let
+      // that mask the real job error below.
+      logger.error("Failed to record circuit-breaker failure for competitor-discovery", {
+        error: recordErr,
+      });
+    }
     throw err;
   }
 }
@@ -169,27 +187,6 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
   });
 }
 
-export const competitorDiscoveryWorker = registerWorker(
-  "competitor-discovery",
-  competitorDiscoveryProcessor
-);
-
-// BullMQ fires 'failed' on every attempt, including ones still eligible for
-// retry — only write the terminal failure once attemptsMade reaches the
-// queue's configured attempts ceiling.
-competitorDiscoveryWorker.on("failed", (job, err) => {
-  if (!job) return;
-  const attemptsAllowed = job.opts.attempts ?? 1;
-  if (job.attemptsMade < attemptsAllowed) return;
-
-  void writeDiscoveryFailure(job.data.competitor_id, err).catch((writeErr) => {
-    logger.error("Failed to record competitor-discovery terminal failure", {
-      competitor_id: job.data.competitor_id,
-      error: writeErr,
-    });
-  });
-});
-
 interface CompanyProfileUpdateJobData {
   // Job data type — no fields needed until Part 10 implements the actual logic
 }
@@ -202,7 +199,46 @@ async function companyProfileUpdateProcessor(
   );
 }
 
-export const companyProfileUpdateWorker = registerWorker(
-  "company-profile-update",
-  companyProfileUpdateProcessor
-);
+// Constructs the live BullMQ Workers for competitor-discovery and
+// company-profile-update. Must only be called from the standalone worker
+// process — never from Express, which imports this module (for `queues`,
+// to enqueue jobs) without wanting to also start Redis-polling Workers as a
+// side effect of that import. Callers own calling this exactly once.
+export function initWorkers(): {
+  competitorDiscoveryWorker: Worker;
+  companyProfileUpdateWorker: Worker;
+} {
+  const competitorDiscoveryWorker = registerWorker(
+    "competitor-discovery",
+    competitorDiscoveryProcessor
+  );
+
+  // BullMQ fires 'failed' on every attempt, including ones still eligible for
+  // retry — only write the terminal failure once attemptsMade reaches the
+  // queue's configured attempts ceiling.
+  competitorDiscoveryWorker.on("failed", (job, err) => {
+    if (!job) return;
+    const attemptsAllowed = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attemptsAllowed) return;
+
+    // withRetry: writeDiscoveryFailure's db.transaction can itself fail on a
+    // transient Postgres blip — retry a few times before falling back to a
+    // logged, silent drop, since this runs inside an event handler with
+    // nothing else watching for the loss.
+    void withRetry(() => writeDiscoveryFailure(job.data.competitor_id, err), {
+      maxAttempts: 3,
+    }).catch((writeErr) => {
+      logger.error("Failed to record competitor-discovery terminal failure", {
+        competitor_id: job.data.competitor_id,
+        error: writeErr,
+      });
+    });
+  });
+
+  const companyProfileUpdateWorker = registerWorker(
+    "company-profile-update",
+    companyProfileUpdateProcessor
+  );
+
+  return { competitorDiscoveryWorker, companyProfileUpdateWorker };
+}

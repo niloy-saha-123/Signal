@@ -81,9 +81,22 @@ import {
   QUEUE_CONFIG,
   queues,
   registerWorker,
+  initWorkers,
   NotImplementedError,
   type QueueName,
 } from "./registry";
+
+// Importing the module (above) must not have constructed any Workers — only
+// Queues are import-time side effects. Snapshot before calling initWorkers()
+// below so a test can assert on it.
+const workerCountBeforeInit = workerCtorCalls.length;
+
+// Worker construction is gated behind initWorkers() (never runs as an import
+// side effect, so Express can import `queues` without also starting live
+// Workers) — call it once here, the way the real worker-process entrypoint
+// would, so the describe blocks below that inspect the competitor-discovery /
+// company-profile-update workers have something to find.
+initWorkers();
 
 const OTHER_QUEUES: QueueName[] = [
   "collect-reddit",
@@ -100,6 +113,10 @@ const OTHER_QUEUES: QueueName[] = [
 describe("queues/registry", () => {
   it("reuses the shared redis connection from lib/redis-client rather than creating a new one", () => {
     expect(connection).toBe(redis);
+  });
+
+  it("does not construct any Worker as a side effect of importing the module", () => {
+    expect(workerCountBeforeInit).toBe(0);
   });
 
   it("configures competitor-discovery per the stub: concurrency 3, 2 attempts, 5s fixed delay", () => {
@@ -136,6 +153,18 @@ describe("queues/registry", () => {
     expect(queueCtorCalls).toHaveLength(allNames.length);
     for (const call of queueCtorCalls) {
       expect((call.opts as { connection: unknown }).connection).toBe(redis);
+    }
+  });
+
+  it("bounds completed/failed job retention on every queue's defaultJobOptions", () => {
+    for (const call of queueCtorCalls) {
+      const jobOptions = (
+        call.opts as {
+          defaultJobOptions: { removeOnComplete: unknown; removeOnFail: unknown };
+        }
+      ).defaultJobOptions;
+      expect(jobOptions.removeOnComplete).toEqual({ count: 1000 });
+      expect(jobOptions.removeOnFail).toEqual({ age: 7 * 24 * 60 * 60 });
     }
   });
 
@@ -186,7 +215,7 @@ describe("competitor-discovery worker", () => {
     return call;
   }
 
-  it("registers a real Worker for competitor-discovery via registerWorker at module load", () => {
+  it("registers a real Worker for competitor-discovery via initWorkers()", () => {
     const call = getRegisteredWorker();
     expect(typeof call.processor).toBe("function");
     expect((call.opts as { concurrency: number }).concurrency).toBe(3);
@@ -207,6 +236,14 @@ describe("competitor-discovery worker", () => {
     await expect(processor(fakeJob())).rejects.toThrow(NotImplementedError);
     expect(recordFailure).toHaveBeenCalledWith("competitor-discovery", expect.any(String));
     expect(recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("still throws the original job error, not recordFailure's, when recordFailure itself rejects", async () => {
+    (recordFailure as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("redis blip"));
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    const err = await processor(fakeJob()).catch((e) => e);
+    expect(err).toBeInstanceOf(NotImplementedError);
   });
 
   it("writes exactly one competitor_discovery_log row and flips discovery_status to failed, atomically, once retries are exhausted", async () => {
@@ -235,6 +272,19 @@ describe("competitor-discovery worker", () => {
     expect(updateWhereMock).toHaveBeenCalledTimes(1);
   });
 
+  it("retries the terminal-failure DB write on a transient failure instead of dropping it", async () => {
+    transactionMock.mockRejectedValueOnce(new Error("connection reset"));
+    const worker = getRegisteredWorker().instance as import("node:events").EventEmitter;
+    const job = fakeJob({ competitor_id: "comp-7", attemptsMade: 2, attempts: 2 });
+
+    worker.emit("failed", job, new NotImplementedError("nope"), "active");
+    // withRetry backs off ~500ms-1s between attempts by default — give it room.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    expect(updateSetMock).toHaveBeenCalledWith({ discovery_status: "failed" });
+  }, 10000);
+
   it("does not write anything when the job has retries remaining", async () => {
     const worker = getRegisteredWorker().instance as import("node:events").EventEmitter;
     const job = fakeJob({ attemptsMade: 1, attempts: 2 });
@@ -255,7 +305,7 @@ describe("company-profile-update worker", () => {
     return call;
   }
 
-  it("registers a real Worker for company-profile-update via registerWorker at module load", () => {
+  it("registers a real Worker for company-profile-update via initWorkers()", () => {
     const call = getRegisteredWorker();
     expect(typeof call.processor).toBe("function");
     expect((call.opts as { concurrency: number }).concurrency).toBe(1);

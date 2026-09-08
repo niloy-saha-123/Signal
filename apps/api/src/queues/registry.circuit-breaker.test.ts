@@ -76,10 +76,13 @@ vi.mock("bullmq", () => {
 });
 
 import { isCircuitOpen } from "../reliability/circuit-breaker";
-import { competitorDiscoveryWorker, NotImplementedError } from "./registry";
+import { initWorkers, NotImplementedError } from "./registry";
 
 describe("competitor-discovery worker — real circuit breaker", () => {
   it("opens after 5 consecutive processor throws and short-circuits the next job", async () => {
+    // Worker construction is gated behind initWorkers() (not a module-import side
+    // effect anymore), so drive the real worker through it here.
+    const { competitorDiscoveryWorker } = initWorkers();
     const processor = (competitorDiscoveryWorker as unknown as { processor: (job: unknown) => Promise<void> })
       .processor;
     const job = { data: { competitor_id: "comp-1", name: "Acme", domain: "acme.com" } };
