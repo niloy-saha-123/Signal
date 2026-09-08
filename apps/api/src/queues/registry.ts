@@ -24,8 +24,13 @@
 // All other queues (5 collectors, 3 pipeline stages, analysis): concurrency 2,
 // 3 attempts with exponential backoff from 5s. Inferred, not stub-sourced —
 // no per-queue spec exists for these yet.
-import { Queue, Worker, type ConnectionOptions, type Processor } from "bullmq";
+import { Queue, Worker, type ConnectionOptions, type Job, type Processor } from "bullmq";
+import { eq } from "drizzle-orm";
 import { redis } from "../lib/redis-client";
+import { db } from "../db/client";
+import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
+import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
+import { logger } from "../lib/logger";
 
 // bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
 // npm hoists two separate copies — same runtime API (bullmq duck-types via
@@ -106,3 +111,78 @@ export function registerWorker(queueName: string, processor: Processor): Worker 
     concurrency: config.concurrency,
   });
 }
+
+// Reusable across queues whose real processing logic hasn't landed yet
+// (Task 3 also throws this) — distinct from a transient failure so the
+// circuit breaker / logs read "not built" rather than "broken".
+export class NotImplementedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotImplementedError";
+  }
+}
+
+interface CompetitorDiscoveryJobData {
+  competitor_id: string;
+  name: string;
+  domain: string;
+}
+
+// One row per field CompetitorDiscoveryAgent (Part 11) will eventually probe —
+// matches competitor_discovery_log's field_name check constraint.
+const DISCOVERY_FIELDS = ["subreddits", "greenhouse", "lever", "pricing_url", "rss_url"] as const;
+
+// CompetitorDiscoveryAgent doesn't exist yet — swap this body out once Part 11 lands,
+// the circuit-breaker/failure-logging wrapper below doesn't need to change.
+async function runDiscovery(_job: Job<CompetitorDiscoveryJobData>): Promise<void> {
+  throw new NotImplementedError("CompetitorDiscoveryAgent is not implemented yet (Part 11)");
+}
+
+async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
+  if (await isCircuitOpen("competitor-discovery")) {
+    throw new Error("competitor-discovery circuit is open — skipping job");
+  }
+  try {
+    await runDiscovery(job);
+    await recordSuccess("competitor-discovery");
+  } catch (err) {
+    await recordFailure("competitor-discovery", err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+}
+
+async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<void> {
+  await db.insert(competitorDiscoveryLogTable).values(
+    DISCOVERY_FIELDS.map((field_name) => ({
+      competitor_id: competitorId,
+      field_name,
+      status: "error" as const,
+      error_message: err.message,
+    }))
+  );
+  await db
+    .update(competitorsTable)
+    .set({ discovery_status: "failed" })
+    .where(eq(competitorsTable.id, competitorId));
+}
+
+export const competitorDiscoveryWorker = registerWorker(
+  "competitor-discovery",
+  competitorDiscoveryProcessor
+);
+
+// BullMQ fires 'failed' on every attempt, including ones still eligible for
+// retry — only write the terminal failure once attemptsMade reaches the
+// queue's configured attempts ceiling.
+competitorDiscoveryWorker.on("failed", (job, err) => {
+  if (!job) return;
+  const attemptsAllowed = job.opts.attempts ?? 1;
+  if (job.attemptsMade < attemptsAllowed) return;
+
+  void writeDiscoveryFailure(job.data.competitor_id, err).catch((writeErr) => {
+    logger.error("Failed to record competitor-discovery terminal failure", {
+      competitor_id: job.data.competitor_id,
+      error: writeErr,
+    });
+  });
+});
