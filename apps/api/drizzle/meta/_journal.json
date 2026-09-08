@@ -22,6 +22,13 @@
       "when": 1788845758238,
       "tag": "0002_harsh_metal_master",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788871390683,
+      "tag": "0003_eminent_white_tiger",
+      "breakpoints": true
     }
   ]
 }

@@ -255,6 +255,10 @@ export const agentLatenciesTable = pgTable(
     index("agent_latencies_run_id_idx").on(table.run_id),
     // scripts/latency-report.ts: percentile duration per agent over 7 days.
     index("agent_latencies_agent_created_idx").on(table.agent_name, table.created_at),
+    // getLatencyPercentiles (db/queries.ts) filters on created_at alone (no
+    // agent_name predicate — it groups by agent_name after filtering), so it
+    // can't use the composite index above, which leads with agent_name.
+    index("agent_latencies_created_at_idx").on(table.created_at),
   ]
 );
 
@@ -408,29 +412,42 @@ export const competitorSignalScoresTable = pgTable(
 // getCompanyContext() (lib/company-context.ts) reads this row and formats
 // it into a system-prompt injection every analysis agent includes, so
 // output is specific to the user's product instead of generic commentary.
-export const companyProfileTable = pgTable("company_profile", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  // What the product does — the first line of every agent's injected context.
-  product_description: text("product_description").notNull(),
-  // Ideal-customer-profile fields — let agents judge whether a competitor's
-  // affected users overlap with this company's actual target market.
-  icp_company_size: text("icp_company_size"),
-  icp_industries: text("icp_industries").array().notNull().default(sql`'{}'::text[]`),
-  icp_buyer_role: text("icp_buyer_role"),
-  // Array of { name, price, billing } — lets agents compute a direct price
-  // delta against a competitor's pricing_diffs instead of speaking in generalities.
-  pricing_tiers: jsonb("pricing_tiers").$type<Record<string, unknown>[]>().default(sql`'[]'::jsonb`),
-  // 2-3 core strengths — the "why us" agents lean on when drafting positioning copy.
-  key_differentiators: text("key_differentiators").array().notNull().default(sql`'{}'::text[]`),
-  // Soft reference to competitors.id — no hard FK on array columns in
-  // Postgres, so uniqueness/existence is enforced by the API layer, not the DB.
-  primary_competitor_ids: uuid("primary_competitor_ids")
-    .array()
-    .notNull()
-    .default(sql`'{}'::uuid[]`),
-  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+// `singleton` + its check/unique index enforce single-row-ness at the DB
+// level (queries.ts's upsert previously relied on a select-then-write race
+// with nothing stopping two concurrent inserts from producing duplicates) —
+// forced to `true`, and unique on that value, so a second concurrent insert
+// fails loudly with a constraint violation instead of silently duplicating.
+export const companyProfileTable = pgTable(
+  "company_profile",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    singleton: boolean("singleton").notNull().default(true),
+    // What the product does — the first line of every agent's injected context.
+    product_description: text("product_description").notNull(),
+    // Ideal-customer-profile fields — let agents judge whether a competitor's
+    // affected users overlap with this company's actual target market.
+    icp_company_size: text("icp_company_size"),
+    icp_industries: text("icp_industries").array().notNull().default(sql`'{}'::text[]`),
+    icp_buyer_role: text("icp_buyer_role"),
+    // Array of { name, price, billing } — lets agents compute a direct price
+    // delta against a competitor's pricing_diffs instead of speaking in generalities.
+    pricing_tiers: jsonb("pricing_tiers").$type<Record<string, unknown>[]>().default(sql`'[]'::jsonb`),
+    // 2-3 core strengths — the "why us" agents lean on when drafting positioning copy.
+    key_differentiators: text("key_differentiators").array().notNull().default(sql`'{}'::text[]`),
+    // Soft reference to competitors.id — no hard FK on array columns in
+    // Postgres, so uniqueness/existence is enforced by the API layer, not the DB.
+    primary_competitor_ids: uuid("primary_competitor_ids")
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("company_profile_singleton_check", sql`${table.singleton} = true`),
+    uniqueIndex("company_profile_singleton_idx").on(table.singleton),
+  ]
+);
 
 // ── competitor_discovery_log ─────────────────────────────────────────────
 // One row per field CompetitorDiscoveryAgent attempted to discover — what
