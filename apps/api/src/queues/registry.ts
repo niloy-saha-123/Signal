@@ -1,4 +1,5 @@
-// Defines all BullMQ Queue and Worker instances for the 5 collectors, 3 pipeline stages, and analysis queue.
+// Defines all BullMQ Queue instances, their retry/concurrency config, and the
+// registerWorker extension point that later parts use to attach real processors.
 //
 // Queue: competitor-discovery
 //   Purpose: runs CompetitorDiscoveryAgent for a newly added competitor.
@@ -19,4 +20,89 @@
 //     to parallelize.
 //   No retry — a missed re-run just means agents use slightly stale
 //     context until the next scheduled analysis, not a correctness bug.
-export {};
+//
+// All other queues (5 collectors, 3 pipeline stages, analysis): concurrency 2,
+// 3 attempts with exponential backoff from 5s. Inferred, not stub-sourced —
+// no per-queue spec exists for these yet.
+import { Queue, Worker, type ConnectionOptions, type Processor } from "bullmq";
+import { redis } from "../lib/redis-client";
+
+// bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
+// npm hoists two separate copies — same runtime API (bullmq duck-types via
+// connect/disconnect/duplicate, no `instanceof` check), but TS sees two
+// nominally distinct `Redis` classes. Cast at this one boundary rather than
+// pulling apps/api's ioredis version down to match bullmq's.
+export const connection = redis as unknown as ConnectionOptions;
+
+export type QueueName =
+  | "competitor-discovery"
+  | "company-profile-update"
+  | "collect-reddit"
+  | "collect-hn"
+  | "collect-jobs"
+  | "collect-changelog"
+  | "collect-pricing"
+  | "pipeline-entity-extraction"
+  | "pipeline-quality-scoring"
+  | "pipeline-deduplication"
+  | "analysis";
+
+export interface QueueConfig {
+  concurrency: number;
+  attempts: number;
+  backoff?: { type: "fixed" | "exponential"; delay: number };
+}
+
+const DEFAULT_CONFIG: QueueConfig = {
+  concurrency: 2,
+  attempts: 3,
+  backoff: { type: "exponential", delay: 5000 },
+};
+
+export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
+  "competitor-discovery": { concurrency: 3, attempts: 2, backoff: { type: "fixed", delay: 5000 } },
+  "company-profile-update": { concurrency: 1, attempts: 1 },
+  "collect-reddit": DEFAULT_CONFIG,
+  "collect-hn": DEFAULT_CONFIG,
+  "collect-jobs": DEFAULT_CONFIG,
+  "collect-changelog": DEFAULT_CONFIG,
+  "collect-pricing": DEFAULT_CONFIG,
+  "pipeline-entity-extraction": DEFAULT_CONFIG,
+  "pipeline-quality-scoring": DEFAULT_CONFIG,
+  "pipeline-deduplication": DEFAULT_CONFIG,
+  analysis: DEFAULT_CONFIG,
+};
+
+export const queues = Object.fromEntries(
+  (Object.keys(QUEUE_CONFIG) as QueueName[]).map((name) => [
+    name,
+    new Queue(name, {
+      connection,
+      defaultJobOptions: {
+        attempts: QUEUE_CONFIG[name].attempts,
+        backoff: QUEUE_CONFIG[name].backoff,
+      },
+    }),
+  ])
+) as Record<QueueName, Queue>;
+
+const registeredWorkers = new Set<string>();
+
+// Extension point — later parts (6, 7, 10, 11) call this once their processor
+// logic exists, to attach a real Worker for competitor-discovery /
+// company-profile-update / the collectors / pipeline stages. Not called here.
+export function registerWorker(queueName: string, processor: Processor): Worker {
+  if (registeredWorkers.has(queueName)) {
+    throw new Error(`Worker already registered for queue "${queueName}"`);
+  }
+  const config = (QUEUE_CONFIG as Record<string, QueueConfig>)[queueName];
+  if (!config) {
+    throw new Error(`No queue config for "${queueName}"`);
+  }
+  registeredWorkers.add(queueName);
+
+  return new Worker(queueName, processor, {
+    connection,
+    concurrency: config.concurrency,
+  });
+}
