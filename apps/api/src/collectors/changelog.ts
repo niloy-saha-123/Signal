@@ -16,15 +16,10 @@ import {
 const SERVICE_NAME = "changelog";
 const SOURCE = "changelog" as const;
 
-// ponytail: rss-parser stashes RSS2's <content:encoded> under a literal
+// rss-parser stashes RSS2's <content:encoded> under a literal
 // 'content:encoded' key rather than aliasing it onto `.content` (that field
 // is populated from <description> instead, which is usually just a
-// summary) — see node_modules/rss-parser/lib/parser.js. A naive char-length
-// check on whatever's embedded stands in for "is this actually full text or
-// just an excerpt"; tune the threshold or swap in a real readability check
-// if feeds start round-tripping through the fetch fallback unnecessarily.
-const MIN_FULLTEXT_CHARS = 500;
-
+// summary) — see node_modules/rss-parser/lib/parser.js.
 interface ChangelogFeedItem {
   "content:encoded"?: string;
 }
@@ -50,13 +45,21 @@ async function fetchArticleText(url: string): Promise<string> {
 }
 
 async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: string): Promise<string> {
-  const embeddedHtml = item["content:encoded"] ?? item.content ?? item.summary ?? "";
-  const embeddedText = embeddedHtml ? parseArticleContent(embeddedHtml) : "";
-
-  if (embeddedText.length >= MIN_FULLTEXT_CHARS) {
-    return embeddedText;
+  // content:encoded is RSS2's dedicated full-body field — spec-guaranteed
+  // complete, so trust it outright, no length check. A short one (e.g.
+  // "v2.1: bug fixes") is still complete text, not a truncated summary.
+  if (item["content:encoded"]) {
+    return parseArticleContent(item["content:encoded"]);
   }
 
+  // No content:encoded: .content/.summary carry real truncation risk — for
+  // RSS2 without content:encoded, .content comes from <description>, a
+  // synopsis by spec, and CMSes routinely emit long-but-truncated teasers
+  // there that clear any length threshold while still being incomplete
+  // (and we can't tell that apart from Atom's genuinely-full <content> by
+  // length alone). So length never proves completeness here — always fetch
+  // the real page instead of trusting this field.
+  //
   // Never Playwright here — changelog pages are static HTML, and Playwright
   // is 10x slower for a case Cheerio already handles (skill doc).
   return withRetry(() => fetchArticleText(sourceUrl));

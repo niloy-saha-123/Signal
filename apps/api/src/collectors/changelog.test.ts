@@ -104,7 +104,7 @@ describe("collectors/changelog", () => {
     expect(parseURLMock).toHaveBeenCalledWith(activeCompetitor.changelog_rss);
   });
 
-  it("uses embedded content:encoded as raw_text when it's long enough to be full-text, without fetching the entry", async () => {
+  it("uses embedded content:encoded as raw_text without fetching the entry", async () => {
     parseURLMock.mockResolvedValue(
       feed([
         {
@@ -129,6 +129,67 @@ describe("collectors/changelog", () => {
       })
     );
     expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s1" });
+  });
+
+  it("trusts a short content:encoded outright — length never forces a fetch when it's present", async () => {
+    parseURLMock.mockResolvedValue(
+      feed([
+        {
+          link: "https://acme.example.com/posts/short",
+          title: "Tiny patch",
+          "content:encoded": "<p>v2.1: bug fixes.</p>",
+        },
+      ])
+    );
+
+    await changelogCollectorProcessor({} as never);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(createSignalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source_url: "https://acme.example.com/posts/short",
+        raw_text: "v2.1: bug fixes.",
+      })
+    );
+  });
+
+  it("fetches the entry page even when a content:encoded-less <description> is long but still just an excerpt", async () => {
+    // A long-but-truncated CMS teaser easily clears any naive length
+    // threshold while still being incomplete — content:encoded is absent
+    // here (only .content, RSS2's <description>-sourced field), so this
+    // must never be trusted as full text no matter how long it reads.
+    const truncatedExcerpt =
+      "Here's what's new in this release: a bunch of exciting changes across the product, " +
+      "performance improvements, bug fixes, and various small tweaks based on your feedback. " +
+      "We've also improved reliability and squashed several long-standing issues... ".repeat(4) +
+      "Read the full post on our blog";
+    expect(truncatedExcerpt.length).toBeGreaterThan(500);
+
+    parseURLMock.mockResolvedValue(
+      feed([
+        {
+          link: "https://acme.example.com/posts/teaser",
+          title: "Big release",
+          content: truncatedExcerpt,
+          isoDate: "2026-08-01T00:00:00.000Z",
+        },
+      ])
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "<html><body><article>" + LONG_TEXT + "</article></body></html>",
+    });
+
+    await changelogCollectorProcessor({} as never);
+
+    expect(fetchMock).toHaveBeenCalledWith("https://acme.example.com/posts/teaser");
+    expect(createSignalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source_url: "https://acme.example.com/posts/teaser",
+        raw_text: expect.stringContaining("Full release notes body text."),
+      })
+    );
   });
 
   it("fetches and parses the entry page via Cheerio when only a short summary is embedded", async () => {
