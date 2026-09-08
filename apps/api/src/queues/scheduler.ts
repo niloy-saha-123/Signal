@@ -47,13 +47,21 @@ function getExplicitCollectIntervalHoursOverride(): number | undefined {
 }
 
 // Standard cron hour fields only go 0-23, so `*/N` breaks once N reaches
-// 24 — collapse anything a full day or longer to "once daily at midnight"
-// instead of emitting an invalid pattern.
+// 24 — anything a full day or longer switches to the day-of-month field
+// instead. Multi-day intervals that are a whole number of days (48h, 72h,
+// ...) use `*/N` there (cron supports step values on day-of-month) so a
+// 48h collector doesn't collapse to the same daily pattern as a 24h one.
+// A >24h interval that ISN'T a whole number of days (e.g. 30h) can't be
+// expressed as a day-of-month step — standard cron has no "every 30 hours"
+// field — so that case falls back to daily. None of the 5 stub-sourced
+// collector defaults hit this branch today.
 export function collectorCronExpression(hours: number = getCollectIntervalHours()): string {
   const wholeHours = Math.max(1, Math.floor(hours));
-  if (wholeHours >= 24) return "0 0 * * *";
   if (wholeHours === 1) return "0 * * * *";
-  return `0 */${wholeHours} * * *`;
+  if (wholeHours < 24) return `0 */${wholeHours} * * *`;
+  if (wholeHours === 24) return "0 0 * * *";
+  if (wholeHours % 24 === 0) return `0 0 */${wholeHours / 24} * *`;
+  return "0 0 * * *";
 }
 
 export interface CollectorScheduleConfig {

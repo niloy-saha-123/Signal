@@ -78,6 +78,16 @@ interface HnCollectJobData {
   // No fields needed — every run sweeps all active competitors.
 }
 
+async function recordCircuitFailure(err: unknown): Promise<void> {
+  try {
+    await recordFailure(SERVICE_NAME, err instanceof Error ? err.message : String(err));
+  } catch (recordErr) {
+    // recordFailure makes unguarded Redis calls that can themselves throw —
+    // never let that mask the real error below.
+    logger.error("Failed to record circuit-breaker failure for hn", { error: recordErr });
+  }
+}
+
 export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise<void> {
   if (await isCircuitOpen(SERVICE_NAME)) {
     throw new Error(`${SERVICE_NAME} circuit is open — skipping job`);
@@ -85,18 +95,36 @@ export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise
 
   try {
     const competitors = (await listCompetitors()).filter((c) => c.is_active);
+
+    // One competitor's Algolia fetch failing (after withRetry exhausts its
+    // attempts) must not abort collection for every other competitor in
+    // this run — isolate each competitor's work so a single bad name/query
+    // doesn't zero out the whole job. recordSuccess only fires when every
+    // competitor came back clean, so a partial run still shows up as
+    // degraded circuit-breaker health rather than silently looking fine.
+    let hadFailure = false;
     for (const competitor of competitors) {
-      await collectForCompetitor(competitor);
+      try {
+        await collectForCompetitor(competitor);
+      } catch (err) {
+        hadFailure = true;
+        logger.error("hn collector failed for one competitor — continuing with the rest", {
+          competitor_id: competitor.id,
+          competitor_name: competitor.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        await recordCircuitFailure(err);
+      }
     }
-    await recordSuccess(SERVICE_NAME);
+
+    if (!hadFailure) {
+      await recordSuccess(SERVICE_NAME);
+    }
   } catch (err) {
-    try {
-      await recordFailure(SERVICE_NAME, err instanceof Error ? err.message : String(err));
-    } catch (recordErr) {
-      // recordFailure makes unguarded Redis calls that can themselves throw —
-      // never let that mask the real job error below.
-      logger.error("Failed to record circuit-breaker failure for hn", { error: recordErr });
-    }
+    // Failure outside the per-competitor loop (e.g. listCompetitors()
+    // itself) — a real job-level failure, not one competitor's problem, so
+    // this one still rethrows.
+    await recordCircuitFailure(err);
     throw err;
   }
 }

@@ -72,8 +72,17 @@ describe("queues/scheduler", () => {
     expect(collectorCronExpression(6)).toBe("0 */6 * * *");
   });
 
-  it("treats any interval of 24 hours or more as once daily", () => {
-    expect(collectorCronExpression(48)).toBe("0 0 * * *");
+  it("produces a daily-at-midnight pattern for exactly 24 hours", () => {
+    expect(collectorCronExpression(24)).toBe("0 0 * * *");
+  });
+
+  it("produces an every-N-days pattern for a multi-day interval that's a whole number of days", () => {
+    expect(collectorCronExpression(48)).toBe("0 0 */2 * *");
+    expect(collectorCronExpression(72)).toBe("0 0 */3 * *");
+  });
+
+  it("falls back to daily for a >24h interval that isn't a whole number of days (documented limitation)", () => {
+    expect(collectorCronExpression(30)).toBe("0 0 * * *");
   });
 
   it("recomputes the cron expression from the current COLLECT_INTERVAL_HOURS env var when called with no argument", () => {
@@ -95,7 +104,9 @@ describe("queues/scheduler", () => {
     expect(config["collect-hn"]?.repeat.pattern).toBe("0 */6 * * *");
     expect(config["collect-jobs"]?.repeat.pattern).toBe("0 0 * * *");
     expect(config["collect-changelog"]?.repeat.pattern).toBe("0 */12 * * *");
-    expect(config["collect-pricing"]?.repeat.pattern).toBe("0 0 * * *");
+    // 48h pricing must not collapse to the same daily pattern as jobs' 24h.
+    expect(config["collect-pricing"]?.repeat.pattern).toBe("0 0 */2 * *");
+    expect(config["collect-pricing"]?.repeat.pattern).not.toBe(config["collect-jobs"]?.repeat.pattern);
   });
 
   it("attaches a 10/minute rate limiter to every collect-* queue regardless of cadence", () => {

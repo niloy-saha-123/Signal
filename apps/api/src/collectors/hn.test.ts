@@ -153,7 +153,7 @@ describe("collectors/hn", () => {
     expect(queueAddMock).not.toHaveBeenCalled();
   });
 
-  it("records success after a clean run and records failure (without masking the original error) when the fetch keeps failing", async () => {
+  it("records success after a clean run, and records failure without throwing the whole job when a competitor's fetch keeps failing", async () => {
     await hnCollectorProcessor({} as never);
     expect(recordSuccess).toHaveBeenCalledWith("hn");
     expect(recordFailure).not.toHaveBeenCalled();
@@ -163,7 +163,37 @@ describe("collectors/hn", () => {
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
     fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
 
-    await expect(hnCollectorProcessor({} as never)).rejects.toThrow();
+    // A single failing competitor is isolated — it must not crash the whole
+    // job (there's only one competitor here, so this also proves the job
+    // resolves instead of rejecting).
+    await expect(hnCollectorProcessor({} as never)).resolves.toBeUndefined();
+    expect(recordFailure).toHaveBeenCalledWith("hn", expect.any(String));
+    expect(recordSuccess).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("keeps processing subsequent competitors when an earlier one's fetch keeps failing", async () => {
+    const failingCompetitor = { id: "c-fail", name: "FailCo", is_active: true };
+    listCompetitorsMock.mockResolvedValue([failingCompetitor, activeCompetitor]);
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes(encodeURIComponent("FailCo"))) {
+        throw new Error("network down");
+      }
+      return algoliaResponse([
+        { objectID: "222", created_at_i: 1700000000, comment_text: "Acme mention" },
+      ]);
+    });
+
+    await hnCollectorProcessor({} as never);
+
+    // The healthy competitor after the failing one still got processed.
+    expect(createSignalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        competitor_id: "c1",
+        source_url: "https://news.ycombinator.com/item?id=222",
+      })
+    );
+    // The failing competitor's error was recorded against the circuit
+    // breaker but did not stop the loop or reject the job.
     expect(recordFailure).toHaveBeenCalledWith("hn", expect.any(String));
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
