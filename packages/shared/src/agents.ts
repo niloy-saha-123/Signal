@@ -1,11 +1,28 @@
 import { z } from "zod";
+import { SignalSourceSchema } from "./signals";
+
+// Mirrors agent_latencies's agent_name CHECK constraint in
+// apps/api/drizzle/0000_nostalgic_the_enforcers.sql.
+export const AgentNameSchema = z.enum([
+  "intent_analyzer",
+  "sentiment_clusterer",
+  "change_detector",
+  "pattern_detector",
+  "vulnerability_detector",
+  "synthesis",
+  "chat_agent",
+  "quality_scorer",
+  "deduplicator",
+  "entity_extractor",
+]);
+export type AgentName = z.infer<typeof AgentNameSchema>;
 
 // Returned by retrieval/citation-enforcer.ts (retrieval/index.ts stage 3) when the
 // generated response is sufficiently grounded in retrieved chunks (<=40% unsupported claims).
 export const CitationSchema = z.object({
   claim: z.string(),
   chunk_id: z.string(),
-  source: z.string(),
+  source: SignalSourceSchema,
   similarity_score: z.number().min(0).max(1),
 });
 export type Citation = z.infer<typeof CitationSchema>;
@@ -36,7 +53,7 @@ export type ChatAgentResult = z.infer<typeof ChatAgentResultSchema>;
 // Shape returned by lib/latency-tracker.ts's computePercentiles() and consumed by
 // scripts/latency-report.ts. Percentiles use the nearest-rank method.
 export const LatencyRecordSchema = z.object({
-  agent_name: z.string(),
+  agent_name: AgentNameSchema,
   p50: z.number(),
   p95: z.number(),
   p99: z.number(),
@@ -64,7 +81,7 @@ export const RagEvalRunSummarySchema = z.object({
   total_questions: z.number().int().min(0),
   passed: z.number().int().min(0),
   failed: z.number().int().min(0),
-  aggregate_faithfulness: z.number().min(0).max(1),
+  faithfulness_score: z.number().min(0).max(1),
   threshold: z.number().min(0).max(1),
   ci_triggered: z.boolean(),
   git_commit: z.string().nullable().optional(),

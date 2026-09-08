@@ -21,6 +21,10 @@ export interface AlertCreatedPayload {
 
 // ponytail: only the two events with a concrete producer today. Add more
 // (signal:new, chat:token, etc.) when a real caller needs them.
+//
+// Outbound-only, server-generated payloads — unlike every other schema in this
+// package, these aren't validating untrusted input, so they're plain TS
+// interfaces with no runtime Zod validation by design. Do not convert to Zod.
 export interface ServerToClientEvents {
   "discovery:status_changed": (payload: DiscoveryStatusChangedPayload) => void;
   "alert:created": (payload: AlertCreatedPayload) => void;

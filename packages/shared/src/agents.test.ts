@@ -5,6 +5,8 @@ import {
   ChatAgentResultSchema,
   RagEvalResultSchema,
   RagEvalRunSummarySchema,
+  LatencyRecordSchema,
+  CitationSchema,
 } from "./agents";
 
 describe("CitationResultSchema", () => {
@@ -26,6 +28,32 @@ describe("CitationResultSchema", () => {
       citations: [
         { claim: "Acme raised prices 15% in August.", chunk_id: "chunk-1", source: "pricing", similarity_score: 1.5 },
       ],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("CitationSchema", () => {
+  it("rejects a source outside the shared SignalSourceSchema enum", () => {
+    const result = CitationSchema.safeParse({
+      claim: "Acme raised prices 15% in August.",
+      chunk_id: "chunk-1",
+      source: "not_a_real_source",
+      similarity_score: 0.9,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("LatencyRecordSchema", () => {
+  it("rejects an agent_name outside the CHECK constraint's allowed values", () => {
+    const result = LatencyRecordSchema.safeParse({
+      agent_name: "not_a_real_agent",
+      p50: 100,
+      p95: 200,
+      p99: 300,
+      mean: 150,
+      sample_count: 10,
     });
     expect(result.success).toBe(false);
   });
@@ -107,7 +135,7 @@ describe("RagEvalRunSummarySchema", () => {
       total_questions: 10,
       passed: 9,
       failed: 1,
-      aggregate_faithfulness: 0.88,
+      faithfulness_score: 0.88,
       threshold: 0.8,
       ci_triggered: true,
       git_commit: "abc123",

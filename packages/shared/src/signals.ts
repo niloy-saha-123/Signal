@@ -68,7 +68,7 @@ export const SignalSchema = z.object({
   title: z.string().nullable().optional(),
   raw_text: z.string(),
   quality_score: z.number().min(0).max(1),
-  entities: z.record(z.string(), z.unknown()).default({}),
+  entities: z.record(z.string(), z.unknown()).nullable().default({}),
   cluster_id: z.string().uuid().nullable().optional(),
   collected_at: z.string().datetime(),
   created_at: z.string().datetime(),
@@ -92,10 +92,10 @@ export type SignalCluster = z.infer<typeof SignalClusterSchema>;
 // One row of `competitor_signal_scores` — the 0-100 composite threat score, recomputed
 // daily by SynthesisAgent from these five weighted components.
 export const SignalScoreComponentsSchema = z.object({
-  mention_velocity: z.number(),
-  sentiment_trajectory: z.number(),
-  hiring_momentum: z.number(),
-  pricing_change_recency: z.number(),
+  mention_velocity: z.number().finite(),
+  sentiment_trajectory: z.number().finite(),
+  hiring_momentum: z.number().finite(),
+  pricing_change_recency: z.number().finite(),
   vulnerability_window_status: z.enum(["open", "closed", "none"]),
 });
 export type SignalScoreComponents = z.infer<typeof SignalScoreComponentsSchema>;
@@ -105,8 +105,8 @@ export const SignalScoreSchema = z.object({
   competitor_id: z.string().uuid(),
   score: z.number().int().min(0).max(100),
   components: SignalScoreComponentsSchema,
-  delta_7d: z.number().nullable().optional(),
-  delta_30d: z.number().nullable().optional(),
+  delta_7d: z.number().finite().nullable().optional(),
+  delta_30d: z.number().finite().nullable().optional(),
   computed_at: z.string().datetime(),
 });
 export type SignalScore = z.infer<typeof SignalScoreSchema>;
