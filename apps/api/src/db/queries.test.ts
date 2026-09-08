@@ -6,6 +6,7 @@ const {
   whereMock,
   orderByMock,
   groupByMock,
+  limitMock,
   insertMock,
   insertValuesMock,
   insertReturningMock,
@@ -18,6 +19,7 @@ const {
   whereMock: vi.fn(),
   orderByMock: vi.fn(),
   groupByMock: vi.fn(),
+  limitMock: vi.fn(),
   insertMock: vi.fn(),
   insertValuesMock: vi.fn(),
   insertReturningMock: vi.fn(),
@@ -47,8 +49,14 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   };
 });
 
-import { eq, and, sql } from "drizzle-orm";
-import { competitorsTable, competitorDiscoveryLogTable, signalsTable } from "./schema";
+import { eq, and, sql, desc } from "drizzle-orm";
+import {
+  competitorsTable,
+  competitorDiscoveryLogTable,
+  signalsTable,
+  competitorSignalScoresTable,
+  agentLatenciesTable,
+} from "./schema";
 import {
   createCompetitor,
   getCompetitorById,
@@ -57,6 +65,8 @@ import {
   getCompetitorDiscoveryLog,
   getRecentSignalsByCompetitorAndSource,
   getSignalVolumeByDay,
+  getLatestSignalScores,
+  getLatencyPercentiles,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -288,6 +298,99 @@ describe("db/queries — signals", () => {
       const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
       const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
       expect(intervalCall!.at(-1)).toBe(90);
+    });
+  });
+});
+
+describe("db/queries — signal scores", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+  });
+
+  describe("getLatestSignalScores", () => {
+    it("selects by competitor_id, orders computed_at desc, and applies the default limit of 30", async () => {
+      const rows = [{ id: "s1", competitor_id: "c1", score: 72, computed_at: new Date() }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
+
+      const result = await getLatestSignalScores("c1");
+
+      expect(fromMock).toHaveBeenCalledWith(competitorSignalScoresTable);
+      expect(eq).toHaveBeenCalledWith(competitorSignalScoresTable.competitor_id, "c1");
+      expect(whereMock).toHaveBeenCalled();
+      expect(orderByMock).toHaveBeenCalledWith(desc(competitorSignalScoresTable.computed_at));
+      expect(limitMock).toHaveBeenCalledWith(30);
+      expect(result).toEqual(rows);
+    });
+
+    it("honors a custom limit", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      await getLatestSignalScores("c1", 5);
+
+      expect(limitMock).toHaveBeenCalledWith(5);
+    });
+  });
+});
+
+describe("db/queries — latency percentiles", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+  });
+
+  describe("getLatencyPercentiles", () => {
+    it("groups by agent_name, filters created_at >= NOW() - INTERVAL for the given days (7-day default), and computes p50/p95 via PERCENTILE_CONT", async () => {
+      const rows = [{ agent_name: "synthesis", p50: 120.5, p95: 480.25 }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ groupBy: groupByMock });
+      groupByMock.mockResolvedValue(rows);
+
+      const result = await getLatencyPercentiles();
+
+      expect(selectMock).toHaveBeenCalledWith({
+        agent_name: agentLatenciesTable.agent_name,
+        p50: expect.anything(),
+        p95: expect.anything(),
+      });
+      expect(fromMock).toHaveBeenCalledWith(agentLatenciesTable);
+      expect(groupByMock).toHaveBeenCalledWith(agentLatenciesTable.agent_name);
+
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const rawTexts = sqlCalls.map(rawSqlText);
+
+      // Drizzle's fluent builder can't express PERCENTILE_CONT WITHIN GROUP —
+      // assert the raw SQL text directly, per the task brief.
+      expect(
+        rawTexts.some((t) => t.includes("PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY"))
+      ).toBe(true);
+      expect(
+        rawTexts.some((t) => t.includes("PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY"))
+      ).toBe(true);
+      expect(rawTexts.some((t) => t.includes("NOW() - INTERVAL"))).toBe(true);
+
+      const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+      expect(intervalCall!.at(-1)).toBe(7);
+
+      expect(result).toEqual(rows);
+    });
+
+    it("honors a custom days window", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ groupBy: groupByMock });
+      groupByMock.mockResolvedValue([]);
+
+      await getLatencyPercentiles(14);
+
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+      expect(intervalCall!.at(-1)).toBe(14);
     });
   });
 });

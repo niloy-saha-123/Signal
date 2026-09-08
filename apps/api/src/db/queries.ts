@@ -1,16 +1,32 @@
 // Typed Drizzle query functions used by the API routes and agents.
 import { eq, and, desc, sql } from "drizzle-orm";
 import { db } from "./client";
-import { competitorsTable, competitorDiscoveryLogTable, signalsTable } from "./schema";
+import {
+  competitorsTable,
+  competitorDiscoveryLogTable,
+  signalsTable,
+  competitorSignalScoresTable,
+  agentLatenciesTable,
+} from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
 export type Signal = typeof signalsTable.$inferSelect;
+export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 
 export type SignalVolumeByDay = {
   day: string;
   count: number;
   weighted_count: number;
+};
+
+export type LatencyPercentiles = {
+  agent_name: string;
+  // duration_ms is nullable (skipped nodes never complete) — if every row in
+  // an agent's group is null, PERCENTILE_CONT over an all-null input returns
+  // NULL, not 0. `number | null` reflects that instead of type-lying.
+  p50: number | null;
+  p95: number | null;
 };
 
 // Matches competitors_discovery_status_check in schema.ts.
@@ -102,4 +118,39 @@ export async function getSignalVolumeByDay(
     )
     .groupBy(sql`DATE_TRUNC('day', ${signalsTable.created_at})`)
     .orderBy(sql`DATE_TRUNC('day', ${signalsTable.created_at})`);
+}
+
+// SynthesisAgent's exact query — latest N scores for one competitor, backed
+// by competitor_signal_scores_competitor_computed_idx.
+export async function getLatestSignalScores(
+  competitorId: string,
+  limit = 30
+): Promise<SignalScore[]> {
+  return db
+    .select()
+    .from(competitorSignalScoresTable)
+    .where(eq(competitorSignalScoresTable.competitor_id, competitorId))
+    .orderBy(desc(competitorSignalScoresTable.computed_at))
+    .limit(limit);
+}
+
+// scripts/latency-report.ts's exact query — P50/P95 duration per agent over
+// a rolling day window. PERCENTILE_CONT WITHIN GROUP isn't expressible via
+// the fluent builder's typed helpers, so this uses `sql` fragments, per the
+// established pattern (see getSignalVolumeByDay above).
+// No ::int/::text cast needed here: duration_ms is `integer`, and
+// PERCENTILE_CONT over an integer/numeric input returns `double precision`
+// (float8) — unlike bigint/numeric, pg's default type parser already
+// converts float4/float8 to a real JS number, so the raw driver value
+// already matches LatencyPercentiles' declared `number | null` type.
+export async function getLatencyPercentiles(days = 7): Promise<LatencyPercentiles[]> {
+  return db
+    .select({
+      agent_name: agentLatenciesTable.agent_name,
+      p50: sql<number | null>`PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      p95: sql<number | null>`PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+    })
+    .from(agentLatenciesTable)
+    .where(sql`${agentLatenciesTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
+    .groupBy(agentLatenciesTable.agent_name);
 }
