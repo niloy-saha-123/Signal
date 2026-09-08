@@ -307,6 +307,48 @@ describe("collectors/reddit", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 
+  it("keeps processing a healthy sibling subreddit when an earlier subreddit for the SAME competitor keeps failing", async () => {
+    const multiSubCompetitor = {
+      id: "c5",
+      name: "MultiSub",
+      is_active: true,
+      subreddits: ["badsub", "goodsub"],
+    };
+    listCompetitorsMock.mockResolvedValue([multiSubCompetitor]);
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      if (url.includes("/r/badsub/")) {
+        throw new Error("network down");
+      }
+      if (url.includes("/r/goodsub/")) {
+        return listingResponse([
+          {
+            id: "444",
+            name: "t3_444",
+            permalink: "/r/goodsub/comments/444/mention/",
+            title: "MultiSub mention",
+            selftext: "body",
+            created_utc: Math.floor(Date.now() / 1000),
+          },
+        ]);
+      }
+      return listingResponse([]);
+    });
+
+    await redditCollectorProcessor({} as never);
+
+    // The healthy sibling subreddit listed AFTER the failing one still got
+    // processed — a bad subreddit doesn't starve the rest of the array.
+    expect(createSignalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        competitor_id: "c5",
+        source_url: "https://www.reddit.com/r/goodsub/comments/444/mention/",
+      })
+    );
+    expect(recordFailure).toHaveBeenCalledWith("reddit", expect.any(String));
+    expect(recordSuccess).not.toHaveBeenCalled();
+  }, 10000);
+
   it("registers the collect-reddit worker via initRedditWorker without registering at import time", () => {
     expect(registerWorkerMock).not.toHaveBeenCalled();
 

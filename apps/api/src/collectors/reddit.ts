@@ -83,30 +83,55 @@ async function collectForCompetitor(
     ? Math.floor(lastCollectedAt.getTime() / 1000)
     : Math.floor(Date.now() / 1000) - INITIAL_WINDOW_SECONDS;
 
+  // subreddits is auto-discovered (per CLAUDE.md), so a stale/banned/private/
+  // typo'd entry is a realistic failure mode — one bad subreddit must not
+  // starve this competitor's remaining, healthy subreddits every 6h run.
+  // Isolate per subreddit and keep going; failures surface once, after every
+  // subreddit has had a chance to run, so the caller's existing per-competitor
+  // circuit-breaker recording still fires exactly as it did before this loop
+  // had multiple subreddits per competitor.
+  const failedSubreddits: string[] = [];
+
   for (const subreddit of competitor.subreddits) {
-    const posts = await withRetry(() => fetchSubredditPosts(subreddit, token));
+    try {
+      const posts = await withRetry(() => fetchSubredditPosts(subreddit, token));
 
-    for (const post of posts) {
-      if (post.created_utc <= sinceUnixSeconds) continue;
+      for (const post of posts) {
+        if (post.created_utc <= sinceUnixSeconds) continue;
 
-      const rawText = post.selftext || post.title || "";
-      if (!rawText) continue;
+        const rawText = post.selftext || post.title || "";
+        if (!rawText) continue;
 
-      const sourceUrl = `https://www.reddit.com${post.permalink}`;
+        const sourceUrl = `https://www.reddit.com${post.permalink}`;
 
-      const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
-      if (alreadyCollected) continue;
+        const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
+        if (alreadyCollected) continue;
 
-      const signal = await createSignal({
+        const signal = await createSignal({
+          competitor_id: competitor.id,
+          source: SOURCE,
+          source_url: sourceUrl,
+          title: post.title ?? null,
+          raw_text: rawText,
+        });
+
+        await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+      }
+    } catch (err) {
+      failedSubreddits.push(subreddit);
+      logger.error("reddit collector failed for one subreddit — continuing with the rest", {
         competitor_id: competitor.id,
-        source: SOURCE,
-        source_url: sourceUrl,
-        title: post.title ?? null,
-        raw_text: rawText,
+        competitor_name: competitor.name,
+        subreddit,
+        error: err instanceof Error ? err.message : String(err),
       });
-
-      await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
     }
+  }
+
+  if (failedSubreddits.length > 0) {
+    throw new Error(
+      `Failed to collect ${failedSubreddits.length} subreddit(s) for competitor ${competitor.id}: ${failedSubreddits.join(", ")}`
+    );
   }
 }
 
