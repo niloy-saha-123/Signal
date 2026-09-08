@@ -1,7 +1,6 @@
 // Zod schemas for the Signal record, SignalCluster (deduplication), and SignalScore (0-100 composite
 // threat score per competitor: mention velocity, sentiment trajectory, hiring momentum, pricing
 // change recency, vulnerability window status) shapes.
-// TODO: Signal / SignalCluster / SignalScore schemas — still stubs.
 
 import { z } from "zod";
 
@@ -55,3 +54,59 @@ export const DiscoveryLogSchema = z.object({
   error_message: z.string().nullable(),
 });
 export type DiscoveryLog = z.infer<typeof DiscoveryLogSchema>;
+
+// One row of the `signals` table (apps/api/src/db/schema.ts) — a single collected
+// mention/post/comment/pricing-page-diff before or after clustering.
+export const SignalSourceSchema = z.enum(["reddit", "hn", "jobs", "changelog", "pricing"]);
+export type SignalSource = z.infer<typeof SignalSourceSchema>;
+
+export const SignalSchema = z.object({
+  id: z.string().uuid(),
+  competitor_id: z.string().uuid(),
+  source: SignalSourceSchema,
+  source_url: z.string().url().nullable().optional(),
+  title: z.string().nullable().optional(),
+  raw_text: z.string(),
+  quality_score: z.number().min(0).max(1),
+  entities: z.record(z.string(), z.unknown()).default({}),
+  cluster_id: z.string().uuid().nullable().optional(),
+  collected_at: z.string().datetime(),
+  created_at: z.string().datetime(),
+});
+export type Signal = z.infer<typeof SignalSchema>;
+
+// One row of `signal_clusters` — a deduplicated group of Signals describing the
+// same underlying event, merged by pipeline/deduplicator.ts at >=0.88 cosine similarity.
+export const SignalClusterSchema = z.object({
+  id: z.string().uuid(),
+  competitor_id: z.string().uuid(),
+  canonical_summary: z.string(),
+  contributing_sources: z.array(SignalSourceSchema),
+  corroboration_count: z.number().int().min(1),
+  first_seen_at: z.string().datetime(),
+  last_updated: z.string().datetime(),
+  created_at: z.string().datetime(),
+});
+export type SignalCluster = z.infer<typeof SignalClusterSchema>;
+
+// One row of `competitor_signal_scores` — the 0-100 composite threat score, recomputed
+// daily by SynthesisAgent from these five weighted components.
+export const SignalScoreComponentsSchema = z.object({
+  mention_velocity: z.number(),
+  sentiment_trajectory: z.number(),
+  hiring_momentum: z.number(),
+  pricing_change_recency: z.number(),
+  vulnerability_window_status: z.enum(["open", "closed", "none"]),
+});
+export type SignalScoreComponents = z.infer<typeof SignalScoreComponentsSchema>;
+
+export const SignalScoreSchema = z.object({
+  id: z.string().uuid(),
+  competitor_id: z.string().uuid(),
+  score: z.number().int().min(0).max(100),
+  components: SignalScoreComponentsSchema,
+  delta_7d: z.number().nullable().optional(),
+  delta_30d: z.number().nullable().optional(),
+  computed_at: z.string().datetime(),
+});
+export type SignalScore = z.infer<typeof SignalScoreSchema>;
