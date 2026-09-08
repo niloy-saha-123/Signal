@@ -10,6 +10,9 @@ vi.mock("./registry", () => ({
     "company-profile-update": {},
     "collect-reddit": {},
     "collect-hn": {},
+    "collect-jobs": {},
+    "collect-changelog": {},
+    "collect-pricing": {},
     "pipeline-entity-extraction": {},
     analysis: {},
   },
@@ -31,7 +34,9 @@ describe("queues/scheduler", () => {
   });
 
   it("derives collector queue names from registry's QUEUE_CONFIG, not a hardcoded list", () => {
-    expect(COLLECTOR_QUEUE_NAMES.slice().sort()).toEqual(["collect-hn", "collect-reddit"].sort());
+    expect(COLLECTOR_QUEUE_NAMES.slice().sort()).toEqual(
+      ["collect-reddit", "collect-hn", "collect-jobs", "collect-changelog", "collect-pricing"].sort()
+    );
   });
 
   it("defaults to 24 hours when COLLECT_INTERVAL_HOURS is unset", () => {
@@ -79,17 +84,43 @@ describe("queues/scheduler", () => {
     expect(collectorCronExpression()).toBe("0 0 * * *");
   });
 
-  it("attaches a repeat pattern and a 10/minute rate limiter to every collect-* queue", () => {
-    process.env.COLLECT_INTERVAL_HOURS = "24";
+  it("applies each collector's own stub-sourced cadence when COLLECT_INTERVAL_HOURS is unset", () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
     const config = getCollectorScheduleConfig();
 
     expect(Object.keys(config).sort()).toEqual(COLLECTOR_QUEUE_NAMES.slice().sort());
+    // reddit/hn: 6h, jobs: 24h, changelog: 12h, pricing: 48h — per each
+    // collector's own header-comment spec in collectors/*.ts.
+    expect(config["collect-reddit"]?.repeat.pattern).toBe("0 */6 * * *");
+    expect(config["collect-hn"]?.repeat.pattern).toBe("0 */6 * * *");
+    expect(config["collect-jobs"]?.repeat.pattern).toBe("0 0 * * *");
+    expect(config["collect-changelog"]?.repeat.pattern).toBe("0 */12 * * *");
+    expect(config["collect-pricing"]?.repeat.pattern).toBe("0 0 * * *");
+  });
+
+  it("attaches a 10/minute rate limiter to every collect-* queue regardless of cadence", () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
+    const config = getCollectorScheduleConfig();
     for (const name of COLLECTOR_QUEUE_NAMES) {
-      expect(config[name]).toEqual({
-        repeat: { pattern: "0 0 * * *" },
-        limiter: { max: 10, duration: 60_000 },
-      });
+      expect(config[name]?.limiter).toEqual({ max: 10, duration: 60_000 });
     }
+  });
+
+  it("overrides every collector's cadence uniformly when COLLECT_INTERVAL_HOURS is explicitly set", () => {
+    process.env.COLLECT_INTERVAL_HOURS = "1";
+    const config = getCollectorScheduleConfig();
+
+    for (const name of COLLECTOR_QUEUE_NAMES) {
+      expect(config[name]?.repeat.pattern).toBe("0 * * * *");
+    }
+  });
+
+  it("ignores an invalid COLLECT_INTERVAL_HOURS override and falls back to per-queue defaults", () => {
+    process.env.COLLECT_INTERVAL_HOURS = "not-a-number";
+    const config = getCollectorScheduleConfig();
+
+    expect(config["collect-reddit"]?.repeat.pattern).toBe("0 */6 * * *");
+    expect(config["collect-jobs"]?.repeat.pattern).toBe("0 0 * * *");
   });
 
   it("has no schedule entry for competitor-discovery or company-profile-update", () => {

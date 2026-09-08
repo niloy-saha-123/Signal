@@ -75,6 +75,9 @@ import {
   getLatencyPercentiles,
   getCompanyProfile,
   upsertCompanyProfile,
+  getLatestSignalCollectedAt,
+  signalExistsBySourceUrl,
+  createSignal,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -314,6 +317,92 @@ describe("db/queries — signals", () => {
       const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
       const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
       expect(intervalCall!.at(-1)).toBe(90);
+    });
+  });
+});
+
+describe("db/queries — hn collector support", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+  });
+
+  describe("getLatestSignalCollectedAt", () => {
+    it("selects the most recent collected_at for a competitor+source, most-recent first", async () => {
+      const collectedAt = new Date("2026-09-01T00:00:00.000Z");
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([{ collected_at: collectedAt }]);
+
+      const result = await getLatestSignalCollectedAt("c1", "hn");
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(eq).toHaveBeenCalledWith(signalsTable.competitor_id, "c1");
+      expect(eq).toHaveBeenCalledWith(signalsTable.source, "hn");
+      expect(orderByMock).toHaveBeenCalledWith(desc(signalsTable.collected_at));
+      expect(limitMock).toHaveBeenCalledWith(1);
+      expect(result).toEqual(collectedAt);
+    });
+
+    it("returns undefined when this competitor+source has no prior signals", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      const result = await getLatestSignalCollectedAt("c1", "hn");
+
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("signalExistsBySourceUrl", () => {
+    it("returns true when a signal with that source_url already exists for this competitor+source", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([{ id: "s1" }]);
+
+      const result = await signalExistsBySourceUrl("c1", "hn", "https://news.ycombinator.com/item?id=1");
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(eq).toHaveBeenCalledWith(signalsTable.competitor_id, "c1");
+      expect(eq).toHaveBeenCalledWith(signalsTable.source, "hn");
+      expect(eq).toHaveBeenCalledWith(signalsTable.source_url, "https://news.ycombinator.com/item?id=1");
+      expect(limitMock).toHaveBeenCalledWith(1);
+      expect(result).toBe(true);
+    });
+
+    it("returns false when no matching signal exists", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      const result = await signalExistsBySourceUrl("c1", "hn", "https://news.ycombinator.com/item?id=1");
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("createSignal", () => {
+    it("inserts the given fields and returns the created row", async () => {
+      const input = {
+        competitor_id: "c1",
+        source: "hn" as const,
+        source_url: "https://news.ycombinator.com/item?id=1",
+        title: "Acme raises Series B",
+        raw_text: "Acme just raised a Series B",
+      };
+      const row = { id: "s1", ...input, quality_score: 0, collected_at: new Date(), created_at: new Date() };
+      insertReturningMock.mockResolvedValue([row]);
+
+      const result = await createSignal(input);
+
+      expect(insertMock).toHaveBeenCalledWith(signalsTable);
+      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(result).toEqual(row);
     });
   });
 });

@@ -132,6 +132,56 @@ export async function getSignalVolumeByDay(
     .orderBy(sql`DATE_TRUNC('day', ${signalsTable.created_at})`);
 }
 
+// HN collector's watermark — the most recent collected_at for a
+// competitor+source, so a run only fetches items newer than the last one it
+// already saw. Undefined on a fresh competitor+source pair (no prior run).
+export async function getLatestSignalCollectedAt(
+  competitorId: string,
+  source: SignalSource
+): Promise<Date | undefined> {
+  const [row] = await db
+    .select({ collected_at: signalsTable.collected_at })
+    .from(signalsTable)
+    .where(and(eq(signalsTable.competitor_id, competitorId), eq(signalsTable.source, source)))
+    .orderBy(desc(signalsTable.collected_at))
+    .limit(1);
+  return row?.collected_at;
+}
+
+// Dedup check collectors run before inserting — real schema has no
+// source_id column, so this keys on source_url instead (per CLAUDE.md).
+export async function signalExistsBySourceUrl(
+  competitorId: string,
+  source: SignalSource,
+  sourceUrl: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: signalsTable.id })
+    .from(signalsTable)
+    .where(
+      and(
+        eq(signalsTable.competitor_id, competitorId),
+        eq(signalsTable.source, source),
+        eq(signalsTable.source_url, sourceUrl)
+      )
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+export type CreateSignalInput = {
+  competitor_id: string;
+  source: SignalSource;
+  source_url?: string | null;
+  title?: string | null;
+  raw_text: string;
+};
+
+export async function createSignal(input: CreateSignalInput): Promise<Signal> {
+  const [row] = await db.insert(signalsTable).values(input).returning();
+  return row;
+}
+
 // SynthesisAgent's exact query — latest N scores for one competitor, backed
 // by competitor_signal_scores_competitor_computed_idx.
 export async function getLatestSignalScores(

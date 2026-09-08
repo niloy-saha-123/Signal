@@ -13,6 +13,17 @@ const DEFAULT_COLLECT_INTERVAL_HOURS = 24;
 const RATE_LIMIT_MAX_JOBS_PER_MINUTE = 10;
 const RATE_LIMIT_DURATION_MS = 60_000;
 
+// Sourced from each collector's own header-comment spec (collectors/*.ts) —
+// not uniform. Falls back to DEFAULT_COLLECT_INTERVAL_HOURS for any
+// collect-* queue not listed here.
+const COLLECTOR_DEFAULT_HOURS: Partial<Record<QueueName, number>> = {
+  "collect-reddit": 6,
+  "collect-hn": 6,
+  "collect-jobs": 24,
+  "collect-changelog": 12,
+  "collect-pricing": 48,
+};
+
 export const COLLECTOR_QUEUE_NAMES: QueueName[] = (Object.keys(QUEUE_CONFIG) as QueueName[]).filter(
   (name) => name.startsWith("collect-")
 );
@@ -21,6 +32,18 @@ export function getCollectIntervalHours(): number {
   const raw = process.env.COLLECT_INTERVAL_HOURS;
   const parsed = Number(raw ?? DEFAULT_COLLECT_INTERVAL_HOURS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_COLLECT_INTERVAL_HOURS;
+}
+
+// Only set when COLLECT_INTERVAL_HOURS is present in env AND parses to a
+// valid positive number — distinct from getCollectIntervalHours(), which
+// always resolves to *some* number (falling back to
+// DEFAULT_COLLECT_INTERVAL_HOURS) and so can't be used to detect "was an
+// override explicitly requested?".
+function getExplicitCollectIntervalHoursOverride(): number | undefined {
+  const raw = process.env.COLLECT_INTERVAL_HOURS;
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 // Standard cron hour fields only go 0-23, so `*/N` breaks once N reaches
@@ -39,9 +62,18 @@ export interface CollectorScheduleConfig {
 }
 
 export function getCollectorScheduleConfig(): Partial<Record<QueueName, CollectorScheduleConfig>> {
-  const config: CollectorScheduleConfig = {
-    repeat: { pattern: collectorCronExpression() },
-    limiter: { max: RATE_LIMIT_MAX_JOBS_PER_MINUTE, duration: RATE_LIMIT_DURATION_MS },
-  };
-  return Object.fromEntries(COLLECTOR_QUEUE_NAMES.map((name) => [name, config]));
+  // Explicit env override, when set, wins uniformly over every collector's
+  // own default cadence — otherwise each queue keeps its stub-sourced hours.
+  const override = getExplicitCollectIntervalHoursOverride();
+
+  return Object.fromEntries(
+    COLLECTOR_QUEUE_NAMES.map((name) => {
+      const hours = override ?? COLLECTOR_DEFAULT_HOURS[name] ?? DEFAULT_COLLECT_INTERVAL_HOURS;
+      const config: CollectorScheduleConfig = {
+        repeat: { pattern: collectorCronExpression(hours) },
+        limiter: { max: RATE_LIMIT_MAX_JOBS_PER_MINUTE, duration: RATE_LIMIT_DURATION_MS },
+      };
+      return [name, config];
+    })
+  );
 }
