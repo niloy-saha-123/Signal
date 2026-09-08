@@ -236,8 +236,14 @@ describe("db/queries — signals", () => {
       const rawTexts = sqlCalls.map(rawSqlText);
 
       // Correctness-critical: exact raw SQL text for each fragment.
-      expect(rawTexts.some((t) => t.includes("DATE_TRUNC('day', ?)"))).toBe(true);
-      expect(rawTexts.some((t) => t === "COUNT(*)")).toBe(true);
+      // The db call is mocked (no real Postgres), so we can't observe the pg
+      // driver's actual type parsing here — instead we assert the ::int/::text
+      // casts that make it produce real numbers/strings are present in the
+      // query text. Without them: COUNT(*) comes back as bigint -> JS string
+      // "3", and DATE_TRUNC on a timestamptz column comes back as a JS Date,
+      // not a string, silently violating SignalVolumeByDay's declared types.
+      expect(rawTexts.some((t) => t.includes("DATE_TRUNC('day', ?)::text"))).toBe(true);
+      expect(rawTexts.some((t) => t === "COUNT(*)::int")).toBe(true);
       expect(rawTexts.some((t) => t.includes("SUM(?)"))).toBe(true);
       expect(rawTexts.some((t) => t.includes("NOW() - INTERVAL"))).toBe(true);
 
@@ -245,6 +251,30 @@ describe("db/queries — signals", () => {
       expect(intervalCall!.at(-1)).toBe(30);
 
       expect(result).toEqual(rows);
+    });
+
+    it("returns count as a real number and day as a real string, not the pre-cast bigint/Date shapes", async () => {
+      // Simulates what the row would look like WITHOUT the ::int/::text casts
+      // (pg returns bigint as string, timestamptz as Date) to prove this
+      // function's contract is only honored because the SQL casts are in
+      // place — if a future edit drops them, this mismatch would surface as
+      // a type-lie the same way the reviewed bug did.
+      const castRows = [{ day: "2026-09-01T00:00:00.000Z", count: 3, weighted_count: 1.5 }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ groupBy: groupByMock });
+      groupByMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue(castRows);
+
+      const result = await getSignalVolumeByDay("c1");
+
+      expect(result).toEqual(castRows);
+      expect(typeof result[0].count).toBe("number");
+      expect(typeof result[0].day).toBe("string");
+
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const rawTexts = sqlCalls.map(rawSqlText);
+      expect(rawTexts.some((t) => t === "COUNT(*)::int")).toBe(true);
+      expect(rawTexts.some((t) => t.includes("::text"))).toBe(true);
     });
 
     it("honors a custom days window", async () => {

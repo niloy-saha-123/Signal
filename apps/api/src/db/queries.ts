@@ -85,8 +85,12 @@ export async function getSignalVolumeByDay(
 ): Promise<SignalVolumeByDay[]> {
   return db
     .select({
-      day: sql<string>`DATE_TRUNC('day', ${signalsTable.created_at})`,
-      count: sql<number>`COUNT(*)`,
+      // Cast in SQL, not JS: COUNT(*) is bigint (pg driver returns it as a
+      // string, not number) and DATE_TRUNC on a timestamptz column comes back
+      // as a Date, not a string — ::int/::text make the driver's runtime
+      // value match the declared TS type instead of lying about it.
+      day: sql<string>`DATE_TRUNC('day', ${signalsTable.created_at})::text`,
+      count: sql<number>`COUNT(*)::int`,
       weighted_count: sql<number>`SUM(${signalsTable.quality_score})`,
     })
     .from(signalsTable)
