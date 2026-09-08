@@ -10,26 +10,41 @@ vi.mock("../reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { queueCtorCalls, workerCtorCalls, insertMock, insertValuesMock, updateMock, updateSetMock, updateWhereMock } =
-  vi.hoisted(() => {
-    const insertValuesMock = vi.fn().mockResolvedValue(undefined);
-    const insertMock = vi.fn().mockReturnValue({ values: insertValuesMock });
-    const updateWhereMock = vi.fn().mockResolvedValue(undefined);
-    const updateSetMock = vi.fn().mockReturnValue({ where: updateWhereMock });
-    const updateMock = vi.fn().mockReturnValue({ set: updateSetMock });
-    return {
-      queueCtorCalls: [] as Array<{ name: string; opts: unknown }>,
-      workerCtorCalls: [] as Array<{ name: string; processor: unknown; opts: unknown; instance: unknown }>,
-      insertMock,
-      insertValuesMock,
-      updateMock,
-      updateSetMock,
-      updateWhereMock,
-    };
-  });
+const {
+  queueCtorCalls,
+  workerCtorCalls,
+  insertMock,
+  insertValuesMock,
+  updateMock,
+  updateSetMock,
+  updateWhereMock,
+  transactionMock,
+} = vi.hoisted(() => {
+  const insertValuesMock = vi.fn().mockResolvedValue(undefined);
+  const insertMock = vi.fn().mockReturnValue({ values: insertValuesMock });
+  const updateWhereMock = vi.fn().mockResolvedValue(undefined);
+  const updateSetMock = vi.fn().mockReturnValue({ where: updateWhereMock });
+  const updateMock = vi.fn().mockReturnValue({ set: updateSetMock });
+  // Real drizzle transaction hands the callback a `tx` with the same
+  // query-builder surface as `db` — reuse the same insert/update mocks so
+  // assertions don't care whether the code called db.X or tx.X.
+  const transactionMock = vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
+    cb({ insert: insertMock, update: updateMock })
+  );
+  return {
+    queueCtorCalls: [] as Array<{ name: string; opts: unknown }>,
+    workerCtorCalls: [] as Array<{ name: string; processor: unknown; opts: unknown; instance: unknown }>,
+    insertMock,
+    insertValuesMock,
+    updateMock,
+    updateSetMock,
+    updateWhereMock,
+    transactionMock,
+  };
+});
 
 vi.mock("../db/client", () => ({
-  db: { insert: insertMock, update: updateMock },
+  db: { insert: insertMock, update: updateMock, transaction: transactionMock },
 }));
 
 vi.mock("bullmq", async () => {
@@ -194,28 +209,26 @@ describe("competitor-discovery worker", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   });
 
-  it("writes one competitor_discovery_log row per field and flips discovery_status to failed once retries are exhausted", async () => {
+  it("writes exactly one competitor_discovery_log row and flips discovery_status to failed, atomically, once retries are exhausted", async () => {
     const worker = getRegisteredWorker().instance as import("node:events").EventEmitter;
     const job = fakeJob({ competitor_id: "comp-42", attemptsMade: 2, attempts: 2 });
 
     worker.emit("failed", job, new NotImplementedError("nope"), "active");
     await flushAsync();
 
+    // both writes happen inside db.transaction — proves they commit atomically
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+
+    expect(insertMock).toHaveBeenCalledTimes(1);
     expect(insertMock).toHaveBeenCalledWith(competitorDiscoveryLogTable);
-    const rows = insertValuesMock.mock.calls.at(-1)?.[0];
-    expect(rows).toHaveLength(5);
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          competitor_id: "comp-42",
-          field_name: "subreddits",
-          status: "error",
-        }),
-      ])
-    );
-    for (const field of ["subreddits", "greenhouse", "lever", "pricing_url", "rss_url"]) {
-      expect(rows.some((r: { field_name: string }) => r.field_name === field)).toBe(true);
-    }
+    expect(insertValuesMock).toHaveBeenCalledTimes(1);
+    const row = insertValuesMock.mock.calls[0][0];
+    expect(row).toEqual({
+      competitor_id: "comp-42",
+      field_name: "subreddits",
+      status: "error",
+      error_message: expect.stringContaining("nope"),
+    });
 
     expect(updateMock).toHaveBeenCalledWith(competitorsTable);
     expect(updateSetMock).toHaveBeenCalledWith({ discovery_status: "failed" });
@@ -229,6 +242,7 @@ describe("competitor-discovery worker", () => {
     worker.emit("failed", job, new Error("transient network blip"), "active");
     await flushAsync();
 
+    expect(transactionMock).not.toHaveBeenCalled();
     expect(insertMock).not.toHaveBeenCalled();
     expect(updateMock).not.toHaveBeenCalled();
   });

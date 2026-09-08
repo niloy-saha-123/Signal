@@ -128,10 +128,6 @@ interface CompetitorDiscoveryJobData {
   domain: string;
 }
 
-// One row per field CompetitorDiscoveryAgent (Part 11) will eventually probe —
-// matches competitor_discovery_log's field_name check constraint.
-const DISCOVERY_FIELDS = ["subreddits", "greenhouse", "lever", "pricing_url", "rss_url"] as const;
-
 // CompetitorDiscoveryAgent doesn't exist yet — swap this body out once Part 11 lands,
 // the circuit-breaker/failure-logging wrapper below doesn't need to change.
 async function runDiscovery(_job: Job<CompetitorDiscoveryJobData>): Promise<void> {
@@ -151,19 +147,26 @@ async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>
   }
 }
 
+// One row, not one per field — the placeholder never got far enough to
+// probe any individual field, so claiming all 5 "errored" would be false.
+// 'subreddits' is just the first value the field_name check constraint
+// allows; it's a NOT NULL column with no generic "job-level failure"
+// sentinel value available. Insert + status flip commit atomically so a
+// crash between them can't orphan a log row with discovery_status left
+// stale.
 async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<void> {
-  await db.insert(competitorDiscoveryLogTable).values(
-    DISCOVERY_FIELDS.map((field_name) => ({
+  await db.transaction(async (tx) => {
+    await tx.insert(competitorDiscoveryLogTable).values({
       competitor_id: competitorId,
-      field_name,
-      status: "error" as const,
-      error_message: err.message,
-    }))
-  );
-  await db
-    .update(competitorsTable)
-    .set({ discovery_status: "failed" })
-    .where(eq(competitorsTable.id, competitorId));
+      field_name: "subreddits",
+      status: "error",
+      error_message: `discovery job failed after exhausting retries: ${err.message}`,
+    });
+    await tx
+      .update(competitorsTable)
+      .set({ discovery_status: "failed" })
+      .where(eq(competitorsTable.id, competitorId));
+  });
 }
 
 export const competitorDiscoveryWorker = registerWorker(
