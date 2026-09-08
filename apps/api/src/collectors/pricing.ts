@@ -135,6 +135,13 @@ async function collectForCompetitor(competitor: {
     .map((l) => l.trim())
     .filter(Boolean);
   const diff = computeLineDiff(oldText, scrapedText);
+
+  // Identical re-scrape — the steady-state case for any competitor whose
+  // pricing didn't change this run. No real diff exists, so don't fabricate
+  // a 'minor' pricing_diffs/signals row (and don't feed a fake "change
+  // happened" event into Signal Score / the signal feed) for it.
+  if (diff.added.length === 0 && diff.removed.length === 0) return;
+
   const significance = classifySignificance(diff, oldLines.length, newLines.length);
 
   await createPricingDiff({

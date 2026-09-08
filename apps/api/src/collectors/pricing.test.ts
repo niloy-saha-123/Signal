@@ -196,6 +196,28 @@ describe("collectors/pricing", () => {
     expect(queueAddMock).not.toHaveBeenCalled();
   });
 
+  it("an identical re-scrape (no textual change) inserts only the new baseline — no diff, no signal, no enqueue", async () => {
+    // Scraped text matches the prior baseline's raw_text exactly (default
+    // evaluateMock value from beforeEach) — the steady-state case for a
+    // competitor whose pricing page hasn't changed.
+    getLatestPricingBaselineMock.mockResolvedValue({
+      id: "b-old",
+      competitor_id: "c1",
+      snapshot: { raw_text: "Pro plan $99/mo\nEnterprise: contact us" },
+      captured_at: new Date("2026-08-01"),
+    });
+
+    await pricingCollectorProcessor({} as never);
+
+    expect(createPricingBaselineMock).toHaveBeenCalledWith({
+      competitor_id: "c1",
+      snapshot: { raw_text: "Pro plan $99/mo\nEnterprise: contact us" },
+    });
+    expect(createPricingDiffMock).not.toHaveBeenCalled();
+    expect(createSignalMock).not.toHaveBeenCalled();
+    expect(queueAddMock).not.toHaveBeenCalled();
+  });
+
   it("computes a line-set diff, inserts a pricing_diffs row against the NEW baseline id, and enqueues entity extraction", async () => {
     getLatestPricingBaselineMock.mockResolvedValue({
       id: "b-old",
