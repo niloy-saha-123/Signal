@@ -18,7 +18,10 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {
-        const delay = baseDelayMs * 2 ** (attempt - 1);
+        // Jitter (0.5x-1x of the exponential delay) so concurrent callers failing at the
+        // same moment (e.g. multiple collectors hitting a rate-limited API) don't retry
+        // in lockstep.
+        const delay = baseDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random() * 0.5);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }

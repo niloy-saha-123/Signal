@@ -4,11 +4,11 @@ vi.mock("../db/client", () => ({
   db: { select: vi.fn() },
 }));
 vi.mock("./redis-client", () => ({
-  redis: { get: vi.fn(), setex: vi.fn() },
+  cacheRedis: { get: vi.fn(), setex: vi.fn() },
 }));
 
 import { db } from "../db/client";
-import { redis } from "./redis-client";
+import { cacheRedis } from "./redis-client";
 import { getCompanyContext } from "./company-context";
 
 describe("getCompanyContext", () => {
@@ -17,14 +17,14 @@ describe("getCompanyContext", () => {
   });
 
   it("returns the cached string from Redis without querying Postgres", async () => {
-    (redis.get as ReturnType<typeof vi.fn>).mockResolvedValue("ABOUT THE USER'S COMPANY:\ncached");
+    (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue("ABOUT THE USER'S COMPANY:\ncached");
     const context = await getCompanyContext();
     expect(context).toBe("ABOUT THE USER'S COMPANY:\ncached");
     expect(db.select).not.toHaveBeenCalled();
   });
 
   it("builds context from Postgres and caches it when Redis is empty", async () => {
-    (redis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     (db.select as ReturnType<typeof vi.fn>).mockReturnValue({
       from: vi.fn().mockReturnValue({
         limit: vi.fn().mockResolvedValue([
@@ -43,11 +43,11 @@ describe("getCompanyContext", () => {
     const context = await getCompanyContext();
     expect(context).toContain("Competitive intelligence platform");
     expect(context).toContain("VP Product");
-    expect(redis.setex).toHaveBeenCalledWith("company:profile", 3600, expect.any(String));
+    expect(cacheRedis.setex).toHaveBeenCalledWith("company:profile", 3600, expect.any(String));
   });
 
   it("returns an empty string (not a throw) when no company_profile row exists", async () => {
-    (redis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     (db.select as ReturnType<typeof vi.fn>).mockReturnValue({
       from: vi.fn().mockReturnValue({
         limit: vi.fn().mockResolvedValue([]),

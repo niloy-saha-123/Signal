@@ -14,6 +14,7 @@ import { and, eq, gte } from "drizzle-orm";
 import type { AgentName, LatencyRecord } from "@signal/shared";
 import { db } from "../db/client";
 import { agentLatenciesTable } from "../db/schema";
+import { logger } from "./logger";
 
 export async function trackLatency<T>(
   agentName: AgentName,
@@ -25,27 +26,43 @@ export async function trackLatency<T>(
   try {
     const result = await fn();
     const completedAt = new Date();
-    await db.insert(agentLatenciesTable).values({
-      run_id: runId,
-      competitor_id: competitorId,
-      agent_name: agentName,
-      started_at: startedAt,
-      completed_at: completedAt,
-      duration_ms: completedAt.getTime() - startedAt.getTime(),
-      status: "success",
-    });
+    try {
+      await db.insert(agentLatenciesTable).values({
+        run_id: runId,
+        competitor_id: competitorId,
+        agent_name: agentName,
+        started_at: startedAt,
+        completed_at: completedAt,
+        duration_ms: completedAt.getTime() - startedAt.getTime(),
+        status: "success",
+      });
+    } catch (insertError) {
+      logger.error("Failed to write agent_latencies row (success)", {
+        agentName,
+        runId,
+        error: insertError,
+      });
+    }
     return result;
   } catch (error) {
     const completedAt = new Date();
-    await db.insert(agentLatenciesTable).values({
-      run_id: runId,
-      competitor_id: competitorId,
-      agent_name: agentName,
-      started_at: startedAt,
-      completed_at: completedAt,
-      duration_ms: completedAt.getTime() - startedAt.getTime(),
-      status: "failed",
-    });
+    try {
+      await db.insert(agentLatenciesTable).values({
+        run_id: runId,
+        competitor_id: competitorId,
+        agent_name: agentName,
+        started_at: startedAt,
+        completed_at: completedAt,
+        duration_ms: completedAt.getTime() - startedAt.getTime(),
+        status: "failed",
+      });
+    } catch (insertError) {
+      logger.error("Failed to write agent_latencies row (failed)", {
+        agentName,
+        runId,
+        error: insertError,
+      });
+    }
     throw error;
   }
 }

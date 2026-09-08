@@ -4,7 +4,12 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
+import { logger } from "../lib/logger";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Idle-client errors (dropped connection, backend restart) emit on the pool;
+// with zero listeners, Node throws synchronously and crashes the process.
+pool.on("error", (err) => logger.error("Unexpected pg pool error", { error: err }));
 
 export const db = drizzle(pool, { schema });

@@ -41,6 +41,35 @@ describe("trackLatency", () => {
     ).rejects.toThrow("agent crashed");
     expect(db.insert).toHaveBeenCalled();
   });
+
+  it("still returns fn's result when the success-path insert throws", async () => {
+    (db.insert as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      values: vi.fn().mockRejectedValue(new Error("db down")),
+    });
+    const fn = vi.fn().mockResolvedValue("agent-output");
+    const result = await trackLatency(
+      "intent_analyzer",
+      "550e8400-e29b-41d4-a716-446655440000",
+      "550e8400-e29b-41d4-a716-446655440001",
+      fn
+    );
+    expect(result).toBe("agent-output");
+  });
+
+  it("still throws fn's original error when the failure-path insert also throws", async () => {
+    (db.insert as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+      values: vi.fn().mockRejectedValue(new Error("db down")),
+    });
+    const fn = vi.fn().mockRejectedValue(new Error("agent crashed"));
+    await expect(
+      trackLatency(
+        "synthesis",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "550e8400-e29b-41d4-a716-446655440001",
+        fn
+      )
+    ).rejects.toThrow("agent crashed");
+  });
 });
 
 describe("computePercentiles", () => {

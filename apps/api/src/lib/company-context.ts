@@ -28,14 +28,14 @@
 //   without it and just produce generic output, not throw.
 
 import { db } from "../db/client";
-import { redis } from "./redis-client";
+import { cacheRedis } from "./redis-client";
 import { companyProfileTable } from "../db/schema";
 
 const CACHE_KEY = "company:profile";
 const CACHE_TTL_SECONDS = 3600;
 
 export async function getCompanyContext(): Promise<string> {
-  const cached = await redis.get(CACHE_KEY);
+  const cached = await cacheRedis.get(CACHE_KEY);
   if (cached) return cached;
 
   const rows = await db.select().from(companyProfileTable).limit(1);
@@ -64,6 +64,6 @@ export async function getCompanyContext(): Promise<string> {
     "to this company, not generic advice.",
   ].join("\n");
 
-  await redis.setex(CACHE_KEY, CACHE_TTL_SECONDS, context);
+  await cacheRedis.setex(CACHE_KEY, CACHE_TTL_SECONDS, context);
   return context;
 }
