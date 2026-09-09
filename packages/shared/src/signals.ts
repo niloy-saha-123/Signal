@@ -78,11 +78,29 @@ export type Signal = z.infer<typeof SignalSchema>;
 // pipeline/entity-extractor.ts's structured-output shape — the value stored in
 // signals.entities. All three keys are always present; empty arrays (never an
 // omitted key) when the LLM finds no matches for a category.
-export const SignalEntitiesSchema = z.object({
-  prices: z.array(z.string()),
-  products: z.array(z.string()),
-  features: z.array(z.string()),
-});
+// .describe() text is forwarded verbatim into the LLM's structured-output function
+// schema — it's the highest-leverage place to shape the response, so keep it concrete.
+export const SignalEntitiesSchema = z
+  .object({
+    prices: z
+      .array(z.string())
+      .describe(
+        'Every price or dollar amount mentioned, verbatim and with its unit, e.g. "$99/month", "$1,200/year", "$0.02 per request". Empty array if none.'
+      ),
+    products: z
+      .array(z.string())
+      .describe(
+        'Named products, plans, or SKUs mentioned, e.g. "Widget Pro", "Enterprise tier". Product names only — not the company name itself. Empty array if none.'
+      ),
+    features: z
+      .array(z.string())
+      .describe(
+        'Named capabilities or features mentioned, e.g. "SSO", "audit logs", "Slack integration". Empty array if none.'
+      ),
+  })
+  .describe(
+    "Structured entities extracted from one collected competitor signal. Always return all three keys — use an empty array for a category with no matches, never omit a key."
+  );
 export type SignalEntities = z.infer<typeof SignalEntitiesSchema>;
 
 // One row of `signal_clusters` — a deduplicated group of Signals describing the
