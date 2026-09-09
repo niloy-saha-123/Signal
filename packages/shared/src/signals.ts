@@ -75,6 +75,16 @@ export const SignalSchema = z.object({
 });
 export type Signal = z.infer<typeof SignalSchema>;
 
+// pipeline/entity-extractor.ts's structured-output shape — the value stored in
+// signals.entities. All three keys are always present; empty arrays (never an
+// omitted key) when the LLM finds no matches for a category.
+export const SignalEntitiesSchema = z.object({
+  prices: z.array(z.string()),
+  products: z.array(z.string()),
+  features: z.array(z.string()),
+});
+export type SignalEntities = z.infer<typeof SignalEntitiesSchema>;
+
 // One row of `signal_clusters` — a deduplicated group of Signals describing the
 // same underlying event, merged by pipeline/deduplicator.ts at >=0.88 cosine similarity.
 export const SignalClusterSchema = z.object({
