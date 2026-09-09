@@ -26,6 +26,12 @@ vi.mock("../db/queries", () => ({
   getSignalsByIds: getSignalsByIdsMock,
 }));
 
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock("../lib/logger", () => ({ logger: loggerMock }));
+
 import {
   hybridRetrieve,
   MIN_QUALITY_SCORE_FOR_RETRIEVAL,
@@ -227,6 +233,35 @@ describe("retrieval/hybrid-retrieval — hybridRetrieve", () => {
     expect(result[0].rrf_score).toBeGreaterThanOrEqual(result[1].rrf_score);
     // "a": bm25 rank1 + semantic rank1; "b": semantic rank2 only -> a > b > c > d.
     expect(result.map((c) => c.id)).toEqual(["a", "b"]);
+  });
+
+  it("isolates a per-competitor pineconeQuery rejection — surviving competitors' matches still come back", async () => {
+    const survivor = makeSignal({ id: "survivor", competitor_id: "c2", source: "hn" });
+    getRecentSignalsByCompetitorIdsMock.mockResolvedValue([]);
+    getSignalsByIdsMock.mockResolvedValue([survivor]);
+    pineconeQueryMock.mockImplementation((competitorId: string) => {
+      if (competitorId === "c1") return Promise.reject(new Error("Pinecone namespace error"));
+      return Promise.resolve([{ id: "survivor", score: 0.8, metadata: {} }]);
+    });
+
+    const result = await hybridRetrieve("query", ["c1", "c2"]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("survivor");
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("pineconeQuery failed"),
+      expect.objectContaining({ competitor_id: "c1" })
+    );
+  });
+
+  it("returns [] instead of throwing when every competitor's pineconeQuery rejects, BM25 side still applies", async () => {
+    pineconeQueryMock.mockRejectedValue(new Error("Pinecone outage"));
+    getRecentSignalsByCompetitorIdsMock.mockResolvedValue([]);
+
+    const result = await hybridRetrieve("query", ["c1", "c2"]);
+
+    expect(result).toEqual([]);
+    expect(loggerMock.warn).toHaveBeenCalledTimes(2);
   });
 
   it("uses HYBRID_RETRIEVAL_TOP_K as the default topK when not passed explicitly", async () => {

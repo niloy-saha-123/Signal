@@ -13,6 +13,7 @@
 import { Index } from "flexsearch";
 import type { SignalSource } from "@signal/shared";
 import { embedText } from "../lib/embeddings";
+import { logger } from "../lib/logger";
 import { pineconeQuery } from "../vector/pinecone";
 import { buildEmbeddingText } from "../pipeline/deduplicator";
 import { getRecentSignalsByCompetitorIds, getSignalsByIds, type Signal } from "../db/queries";
@@ -49,11 +50,22 @@ export async function hybridRetrieve(
 
   // Semantic side: one query per competitor namespace (pineconeQuery is single-namespace,
   // competitorId is mandatory), flattened and re-ranked by score across the whole fan-out.
-  const semanticMatches = (
-    await Promise.all(
-      competitorIds.map((competitorId) => pineconeQuery(competitorId, queryEmbedding, topK))
-    )
-  ).flat();
+  // allSettled, not all — pineconeQuery already retries internally (lib/retry.ts), so a
+  // rejection here means a persistent per-competitor failure. Isolate it: skip that
+  // competitor's semantic results and continue with the rest rather than failing the
+  // whole multi-competitor call. BM25 results (and other competitors' semantic results)
+  // still come back even if every competitor fails here.
+  const semanticSettled = await Promise.allSettled(
+    competitorIds.map((competitorId) => pineconeQuery(competitorId, queryEmbedding, topK))
+  );
+  const semanticMatches = semanticSettled.flatMap((result, index) => {
+    if (result.status === "fulfilled") return result.value;
+    logger.warn("hybridRetrieve: pineconeQuery failed for competitor — skipping", {
+      competitor_id: competitorIds[index],
+      error: result.reason,
+    });
+    return [];
+  });
   semanticMatches.sort((a, b) => b.score - a.score);
 
   const semanticRanks = new Map<string, number>();
