@@ -4,4 +4,7 @@
 // Re-exports hybridRetrieve (hybrid-retrieval.ts), rerankChunks (reranker.ts), and
 // enforceCitations (citation-enforcer.ts) as the single entry point for retrieval. Pipeline order
 // is fixed: hybridRetrieve -> rerankChunks -> enforceCitations — do not skip stages.
-export {};
+
+export { hybridRetrieve, type RetrievedChunk } from "./hybrid-retrieval";
+export { rerankChunks, type RerankedChunk } from "./reranker";
+export { enforceCitations } from "./citation-enforcer";
