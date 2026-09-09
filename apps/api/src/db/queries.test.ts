@@ -59,6 +59,7 @@ import {
   competitorsTable,
   competitorDiscoveryLogTable,
   signalsTable,
+  signalClustersTable,
   competitorSignalScoresTable,
   agentLatenciesTable,
   companyProfileTable,
@@ -83,6 +84,13 @@ import {
   createPricingBaseline,
   getLatestPricingBaseline,
   createPricingDiff,
+  getSignalById,
+  updateSignalEntities,
+  updateSignalQualityScore,
+  updateSignalCluster,
+  createSignalCluster,
+  getSignalClusterById,
+  mergeSignalIntoCluster,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -682,6 +690,193 @@ describe("db/queries — company profile", () => {
       expect(insertValuesMock).toHaveBeenCalledWith(profileInput);
       expect(updateMock).not.toHaveBeenCalled();
       expect(result).toEqual(inserted);
+    });
+  });
+});
+
+describe("db/queries — signal pipeline", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockResolvedValue(undefined);
+  });
+
+  describe("getSignalById", () => {
+    it("selects by id and returns the first row", async () => {
+      const row = { id: "s1", raw_text: "Acme raised a Series B" };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([row]);
+
+      const result = await getSignalById("s1");
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(eq).toHaveBeenCalledWith(signalsTable.id, "s1");
+      expect(result).toEqual(row);
+    });
+
+    it("returns undefined when no row matches", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      const result = await getSignalById("missing");
+
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("updateSignalEntities", () => {
+    it("sets entities for the given signal id", async () => {
+      const entities = { prices: ["$99/mo"], products: [], features: [] };
+
+      await updateSignalEntities("s1", entities);
+
+      expect(updateMock).toHaveBeenCalledWith(signalsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({ entities });
+      expect(eq).toHaveBeenCalledWith(signalsTable.id, "s1");
+      expect(updateWhereMock).toHaveBeenCalled();
+    });
+  });
+
+  describe("updateSignalQualityScore", () => {
+    it("sets quality_score for the given signal id", async () => {
+      await updateSignalQualityScore("s1", 0.72);
+
+      expect(updateMock).toHaveBeenCalledWith(signalsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({ quality_score: 0.72 });
+      expect(eq).toHaveBeenCalledWith(signalsTable.id, "s1");
+      expect(updateWhereMock).toHaveBeenCalled();
+    });
+  });
+
+  describe("updateSignalCluster", () => {
+    it("sets cluster_id for the given signal id", async () => {
+      await updateSignalCluster("s1", "cluster-1");
+
+      expect(updateMock).toHaveBeenCalledWith(signalsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({ cluster_id: "cluster-1" });
+      expect(eq).toHaveBeenCalledWith(signalsTable.id, "s1");
+      expect(updateWhereMock).toHaveBeenCalled();
+    });
+  });
+
+  describe("createSignalCluster", () => {
+    it("inserts the given fields and returns the created row", async () => {
+      const input = {
+        competitor_id: "c1",
+        canonical_summary: "Acme raised a Series B",
+        contributing_sources: ["hn"],
+      };
+      const row = {
+        id: "cluster-1",
+        ...input,
+        corroboration_count: 2,
+        first_seen_at: new Date(),
+        last_updated: new Date(),
+        created_at: new Date(),
+      };
+      insertReturningMock.mockResolvedValue([row]);
+
+      const result = await createSignalCluster(input);
+
+      expect(insertMock).toHaveBeenCalledWith(signalClustersTable);
+      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(result).toEqual(row);
+    });
+  });
+
+  describe("getSignalClusterById", () => {
+    it("selects by id and returns the first row", async () => {
+      const row = { id: "cluster-1", canonical_summary: "Acme raised a Series B" };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([row]);
+
+      const result = await getSignalClusterById("cluster-1");
+
+      expect(fromMock).toHaveBeenCalledWith(signalClustersTable);
+      expect(eq).toHaveBeenCalledWith(signalClustersTable.id, "cluster-1");
+      expect(result).toEqual(row);
+    });
+
+    it("returns undefined when no row matches", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      const result = await getSignalClusterById("missing");
+
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("mergeSignalIntoCluster", () => {
+    it("appends a new source, increments corroboration_count, and bumps last_updated", async () => {
+      const existing = {
+        id: "cluster-1",
+        contributing_sources: ["hn"],
+        corroboration_count: 2,
+      };
+      const updated = {
+        ...existing,
+        contributing_sources: ["hn", "reddit"],
+        corroboration_count: 3,
+        last_updated: new Date(),
+      };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([existing]);
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([updated]);
+
+      const result = await mergeSignalIntoCluster("cluster-1", "reddit");
+
+      expect(fromMock).toHaveBeenCalledWith(signalClustersTable);
+      expect(updateMock).toHaveBeenCalledWith(signalClustersTable);
+      expect(updateSetMock).toHaveBeenCalledWith({
+        contributing_sources: ["hn", "reddit"],
+        corroboration_count: 3,
+        last_updated: expect.any(Date),
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it("does not double-append a source already present in contributing_sources", async () => {
+      const existing = {
+        id: "cluster-1",
+        contributing_sources: ["hn", "reddit"],
+        corroboration_count: 2,
+      };
+      const updated = {
+        ...existing,
+        corroboration_count: 3,
+        last_updated: new Date(),
+      };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([existing]);
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([updated]);
+
+      const result = await mergeSignalIntoCluster("cluster-1", "reddit");
+
+      // Second signal from a source already in contributing_sources — the array
+      // must stay exactly as it was, not grow a duplicate "reddit" entry.
+      expect(updateSetMock).toHaveBeenCalledWith({
+        contributing_sources: ["hn", "reddit"],
+        corroboration_count: 3,
+        last_updated: expect.any(Date),
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it("throws when the cluster does not exist", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      await expect(mergeSignalIntoCluster("missing", "reddit")).rejects.toThrow(
+        "missing"
+      );
+      expect(updateMock).not.toHaveBeenCalled();
     });
   });
 });

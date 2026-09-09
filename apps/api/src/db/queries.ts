@@ -5,6 +5,7 @@ import {
   competitorsTable,
   competitorDiscoveryLogTable,
   signalsTable,
+  signalClustersTable,
   competitorSignalScoresTable,
   agentLatenciesTable,
   companyProfileTable,
@@ -15,6 +16,7 @@ import {
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
 export type Signal = typeof signalsTable.$inferSelect;
+export type SignalCluster = typeof signalClustersTable.$inferSelect;
 export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
 export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
@@ -298,4 +300,87 @@ export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<
     const [row] = await tx.insert(companyProfileTable).values(input).returning();
     return row;
   });
+}
+
+// ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
+// Collectors (Part 6) only INSERT raw signal rows; these UPDATE the columns each
+// pipeline stage populates as a signal moves through it.
+
+export async function getSignalById(id: string): Promise<Signal | undefined> {
+  const [row] = await db.select().from(signalsTable).where(eq(signalsTable.id, id));
+  return row;
+}
+
+export async function updateSignalEntities(
+  id: string,
+  entities: Record<string, unknown>
+): Promise<void> {
+  await db.update(signalsTable).set({ entities }).where(eq(signalsTable.id, id));
+}
+
+export async function updateSignalQualityScore(id: string, qualityScore: number): Promise<void> {
+  await db
+    .update(signalsTable)
+    .set({ quality_score: qualityScore })
+    .where(eq(signalsTable.id, id));
+}
+
+export async function updateSignalCluster(id: string, clusterId: string): Promise<void> {
+  await db.update(signalsTable).set({ cluster_id: clusterId }).where(eq(signalsTable.id, id));
+}
+
+export type CreateSignalClusterInput = {
+  competitor_id: string;
+  canonical_summary: string;
+  contributing_sources: string[];
+};
+
+export async function createSignalCluster(
+  input: CreateSignalClusterInput
+): Promise<SignalCluster> {
+  const [row] = await db.insert(signalClustersTable).values(input).returning();
+  return row;
+}
+
+export async function getSignalClusterById(id: string): Promise<SignalCluster | undefined> {
+  const [row] = await db
+    .select()
+    .from(signalClustersTable)
+    .where(eq(signalClustersTable.id, id));
+  return row;
+}
+
+// Select-then-write (same shape as upsertCompanyProfile above) rather than a single
+// atomic UPDATE, so the "don't double-append a source already present" rule lives in
+// plain JS instead of a SQL CASE expression. Two signals from the same competitor
+// landing in pipeline-deduplication concurrently (QUEUE_CONFIG concurrency: 2) can
+// race between the select and the write here — flagged for production-reviewer per
+// 07-pipeline.md, not addressed in this task.
+export async function mergeSignalIntoCluster(
+  clusterId: string,
+  source: string
+): Promise<SignalCluster> {
+  const [existing] = await db
+    .select()
+    .from(signalClustersTable)
+    .where(eq(signalClustersTable.id, clusterId));
+
+  if (!existing) {
+    throw new Error(`mergeSignalIntoCluster: signal cluster ${clusterId} not found`);
+  }
+
+  const contributing_sources = existing.contributing_sources.includes(source)
+    ? existing.contributing_sources
+    : [...existing.contributing_sources, source];
+
+  const [row] = await db
+    .update(signalClustersTable)
+    .set({
+      contributing_sources,
+      corroboration_count: existing.corroboration_count + 1,
+      last_updated: new Date(),
+    })
+    .where(eq(signalClustersTable.id, clusterId))
+    .returning();
+  return row;
 }
