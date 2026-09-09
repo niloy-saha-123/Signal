@@ -11,13 +11,31 @@ const { loggerWarnMock } = vi.hoisted(() => ({
 vi.mock("../lib/logger", () => ({
   logger: {
     warn: loggerWarnMock,
+    error: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
   },
+}));
+
+// intentAnalyzerNode is now real (Task 2, Part 10) — it imports db/queries and
+// lib/company-context (which in turn opens real ioredis connections at module load).
+// Mocked here so this DAG-level test stays isolated from Postgres/Redis: an empty
+// postings list drives the node down its no-LLM-call short-circuit path.
+const { getRecentSignalsByCompetitorAndSourceMock } = vi.hoisted(() => ({
+  getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../db/queries", () => ({
+  getRecentSignalsByCompetitorAndSource: getRecentSignalsByCompetitorAndSourceMock,
+}));
+
+vi.mock("../lib/company-context", () => ({
+  getCompanyContext: vi.fn().mockResolvedValue(""),
 }));
 
 import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
-  intentAnalyzer: "intentAnalyzerNode: not yet implemented (Part 10) — returning no-op update",
   sentimentClusterer: "sentimentClustererNode: not yet implemented (Part 10) — returning no-op update",
   changeDetector: "changeDetectorNode: not yet implemented (Part 10) — returning no-op update",
   patternDetector: "patternDetectorNode: not yet implemented (Part 10) — returning no-op update",
@@ -35,14 +53,19 @@ describe("analysisGraph — compiled DAG", () => {
   });
 
   it("runs changeDetector and all other nodes, synthesis exactly once, when has_pricing_diff is true", async () => {
-    await analysisGraph.invoke({
+    const result = await analysisGraph.invoke({
       competitor_id: "competitor-1",
       run_id: "run-1",
       has_pricing_diff: true,
     });
 
-    // (a) all expected nodes ran
-    expect(callCountFor(LOG_MESSAGES.intentAnalyzer)).toBe(1);
+    // (a) all expected nodes ran — intentAnalyzerNode is real now (Task 2) and takes its
+    // no-recent-postings short-circuit since getRecentSignalsByCompetitorAndSource is mocked
+    // to return [].
+    expect(result.hiring_intent).toEqual({
+      summary: "No recent job postings found.",
+      intent_level: "low",
+    });
     expect(callCountFor(LOG_MESSAGES.sentimentClusterer)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
@@ -53,14 +76,17 @@ describe("analysisGraph — compiled DAG", () => {
   });
 
   it("skips changeDetector and still runs synthesis exactly once when has_pricing_diff is false", async () => {
-    await analysisGraph.invoke({
+    const result = await analysisGraph.invoke({
       competitor_id: "competitor-2",
       run_id: "run-2",
       has_pricing_diff: false,
     });
 
-    // (a) all expected nodes ran
-    expect(callCountFor(LOG_MESSAGES.intentAnalyzer)).toBe(1);
+    // (a) all expected nodes ran — see the short-circuit note in the test above.
+    expect(result.hiring_intent).toEqual({
+      summary: "No recent job postings found.",
+      intent_level: "low",
+    });
     expect(callCountFor(LOG_MESSAGES.sentimentClusterer)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
