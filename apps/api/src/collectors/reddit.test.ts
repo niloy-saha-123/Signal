@@ -409,6 +409,11 @@ describe("collectors/reddit", () => {
     const listingCalls = fetchMock.mock.calls.filter((call: any[]) => call[0].includes("oauth.reddit.com"));
     expect(listingCalls).toHaveLength(1);
     expect(listingCalls[0][0]).toBe("https://oauth.reddit.com/r/acme/new.json?limit=25");
+    // Regression guard: a mid-run trip must not force-close a circuit that
+    // was just correctly observed open (e.g. tripped by a concurrent run of
+    // this same collector) — recordSuccess must not fire on this exit path,
+    // even though every competitor actually attempted came back clean.
+    expect(recordSuccess).not.toHaveBeenCalled();
   });
 
   it("registers the collect-reddit worker via initRedditWorker without registering at import time", () => {

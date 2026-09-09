@@ -241,6 +241,11 @@ describe("collectors/hn", () => {
     const queries = fetchMock.mock.calls.filter((call: any[]) => call[0].includes("hn.algolia.com"));
     expect(queries).toHaveLength(1);
     expect(queries[0][0]).toContain(encodeURIComponent("Acme"));
+    // Regression guard: a mid-run trip must not force-close a circuit that
+    // was just correctly observed open (e.g. tripped by a concurrent run of
+    // this same collector) — recordSuccess must not fire on this exit path,
+    // even though every competitor actually attempted came back clean.
+    expect(recordSuccess).not.toHaveBeenCalled();
   });
 
   it("registers the collect-hn worker via initHnWorker without registering at import time", () => {

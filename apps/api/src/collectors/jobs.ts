@@ -173,11 +173,21 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
   // other service keeps going independently.
   let greenhouseStillClosed = !greenhouseOpen;
   let leverStillClosed = !leverOpen;
+  // Set only when THIS run observes the circuit open mid-loop (as opposed
+  // to it already being open before the run started, when greenhouseAttempted
+  // simply stays false). A mid-run trip can be caused by a concurrent run of
+  // this same collector (collect-jobs runs at concurrency 2) even when every
+  // competitor this run itself attempted came back clean — that must not
+  // let the trailing recordSuccess() force-close a circuit that was
+  // correctly just observed open.
+  let greenhouseTrippedMidRun = false;
+  let leverTrippedMidRun = false;
 
   for (const competitor of competitors) {
     if (competitor.greenhouse_token && greenhouseStillClosed) {
       if (await isCircuitOpen(GREENHOUSE_SERVICE)) {
         greenhouseStillClosed = false;
+        greenhouseTrippedMidRun = true;
         logger.warn("greenhouse circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
@@ -201,6 +211,7 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
     if (competitor.lever_token && leverStillClosed) {
       if (await isCircuitOpen(LEVER_SERVICE)) {
         leverStillClosed = false;
+        leverTrippedMidRun = true;
         logger.warn("lever circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
@@ -224,11 +235,14 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
 
   // recordSuccess only fires for a service that actually ran clean this
   // pass — a service nobody had a token for this run stays silent rather
-  // than claiming a success it didn't earn.
-  if (greenhouseAttempted && !greenhouseHadFailure) {
+  // than claiming a success it didn't earn. Also gated on !trippedMidRun:
+  // this run's own attempts can all have succeeded while the circuit was
+  // still just observed open (tripped by a concurrent run of this same
+  // collector), and recordSuccess must not force-close that.
+  if (greenhouseAttempted && !greenhouseHadFailure && !greenhouseTrippedMidRun) {
     await recordSuccess(GREENHOUSE_SERVICE);
   }
-  if (leverAttempted && !leverHadFailure) {
+  if (leverAttempted && !leverHadFailure && !leverTrippedMidRun) {
     await recordSuccess(LEVER_SERVICE);
   }
 }

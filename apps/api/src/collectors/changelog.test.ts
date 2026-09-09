@@ -366,6 +366,11 @@ describe("collectors/changelog", () => {
 
     expect(parseURLMock).toHaveBeenCalledTimes(1);
     expect(parseURLMock).toHaveBeenCalledWith(activeCompetitor.changelog_rss);
+    // Regression guard: a mid-run trip must not force-close a circuit that
+    // was just correctly observed open (e.g. tripped by a concurrent run of
+    // this same collector) — recordSuccess must not fire on this exit path,
+    // even though every competitor actually attempted came back clean.
+    expect(recordSuccess).not.toHaveBeenCalled();
   });
 
   it("registers the collect-changelog worker via initChangelogWorker without registering at import time", () => {

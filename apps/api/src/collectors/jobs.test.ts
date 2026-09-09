@@ -407,7 +407,10 @@ describe("collectors/jobs", () => {
       greenhouse_token: "second-gh",
       lever_token: null,
     };
-    listCompetitorsMock.mockResolvedValue([greenhouseOnlyCompetitor, secondGhCompetitor]);
+    // bothTokensCompetitor first so its Lever collection runs and succeeds
+    // this pass — proves a greenhouse trip doesn't stop lever's own
+    // recordSuccess from firing.
+    listCompetitorsMock.mockResolvedValue([bothTokensCompetitor, secondGhCompetitor]);
 
     let greenhouseCallCount = 0;
     isCircuitOpenMock().mockImplementation(async (service: string) => {
@@ -421,8 +424,16 @@ describe("collectors/jobs", () => {
     await jobsCollectorProcessor({} as never);
 
     const urls = fetchMock.mock.calls.map((c: any[]) => c[0]);
-    expect(urls).toContain("https://boards-api.greenhouse.io/v1/boards/gh-only/jobs");
+    expect(urls).toContain("https://boards-api.greenhouse.io/v1/boards/acme-gh/jobs");
     expect(urls).not.toContain("https://boards-api.greenhouse.io/v1/boards/second-gh/jobs");
+
+    // Regression guard: this run's own greenhouse attempt (competitor 1)
+    // came back clean, but the loop still exited via a mid-run trip — that
+    // must not force-close a circuit that was just correctly observed open
+    // (e.g. tripped by a concurrent run of this same collector). Lever's own
+    // circuit was never observed open, so its recordSuccess is unaffected.
+    expect(recordSuccess).not.toHaveBeenCalledWith("greenhouse");
+    expect(recordSuccess).toHaveBeenCalledWith("lever");
   });
 
   it("registers the collect-jobs worker via initJobsWorker without registering at import time", () => {

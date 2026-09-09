@@ -202,12 +202,19 @@ export async function pricingCollectorProcessor(_job: Job<PricingCollectJobData>
     // pricing page failing (after withRetry exhausts its attempts) must not
     // abort collection for every other competitor in this run.
     let hadFailure = false;
+    // Set when the loop exits via the mid-run circuit trip below, rather
+    // than by running out of competitors — that's not a clean run, so it
+    // must not let the trailing recordSuccess() force-close a circuit that
+    // was correctly just observed open (e.g. tripped by a concurrent run of
+    // this same collector — collect-pricing runs at concurrency 2).
+    let circuitTrippedMidRun = false;
     for (const competitor of competitors) {
       // The breaker can trip mid-run off an earlier competitor's failures —
       // re-check before every attempt so the remaining competitors don't
       // each still pay the full withRetry cost against a dependency the
       // breaker just confirmed is down.
       if (await isCircuitOpen(SERVICE_NAME)) {
+        circuitTrippedMidRun = true;
         logger.warn("pricing circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
@@ -228,7 +235,7 @@ export async function pricingCollectorProcessor(_job: Job<PricingCollectJobData>
       }
     }
 
-    if (!hadFailure) {
+    if (!hadFailure && !circuitTrippedMidRun) {
       await recordSuccess(SERVICE_NAME);
     }
   } catch (err) {
