@@ -8,6 +8,7 @@
     "worker": "tsx watch worker.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "backfill": "tsx scripts/backfill.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -16,14 +17,22 @@
     "seed-rag-eval": "tsx scripts/seed-rag-eval.ts"
   },
   "dependencies": {
+    "@langchain/anthropic": "^1.5.9",
+    "@langchain/langgraph": "^1.4.7",
+    "@langchain/openai": "^1.5.11",
+    "@pinecone-database/pinecone": "^8.2.0",
     "@signal/shared": "*",
     "bullmq": "^5.34.5",
+    "cheerio": "^1.2.0",
     "cohere-ai": "^7.14.0",
     "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
     "flexsearch": "^0.7.43",
+    "ioredis": "^6.0.0",
     "langsmith": "^0.3.14",
     "pg": "^8.13.1",
+    "playwright": "^1.63.0",
+    "rss-parser": "^3.13.0",
     "socket.io": "^4.8.1",
     "winston": "^3.17.0",
     "zod": "^3.24.1"
@@ -37,6 +46,7 @@
     "drizzle-kit": "^0.31.10",
     "openai": "^6.46.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.0"
   }
 }

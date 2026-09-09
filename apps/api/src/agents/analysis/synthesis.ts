@@ -5,4 +5,14 @@
 // Signal Score computation happens here. Score components are stored as JSONB in
 // competitor_signal_scores alongside the composite score. Latency of this node is tracked via
 // latency-tracker.ts.
-export {};
+import type { AnalysisGraphState } from "../../graph/state";
+import { logger } from "../../lib/logger";
+
+export async function synthesisNode(
+  state: typeof AnalysisGraphState.State
+): Promise<Partial<typeof AnalysisGraphState.State>> {
+  logger.warn("synthesisNode: not yet implemented (Part 10) — returning no-op update", {
+    competitor_id: state.competitor_id,
+  });
+  return {};
+}

@@ -7,4 +7,14 @@
 // feature names) that vector search sometimes misses. Results are NOT reranked — PatternDetector
 // processes all 150 chunks, and reranking would discard potentially relevant trend signals.
 // P50/P95 tracked via latency-tracker.ts.
-export {};
+import type { AnalysisGraphState } from "../../graph/state";
+import { logger } from "../../lib/logger";
+
+export async function patternDetectorNode(
+  state: typeof AnalysisGraphState.State
+): Promise<Partial<typeof AnalysisGraphState.State>> {
+  logger.warn("patternDetectorNode: not yet implemented (Part 10) — returning no-op update", {
+    competitor_id: state.competitor_id,
+  });
+  return {};
+}

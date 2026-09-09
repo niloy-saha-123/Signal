@@ -1,0 +1,89 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { AnalysisGraphState } from "../../graph/state";
+
+const { loggerWarnMock } = vi.hoisted(() => ({
+  loggerWarnMock: vi.fn(),
+}));
+
+vi.mock("../../lib/logger", () => ({
+  logger: {
+    warn: loggerWarnMock,
+  },
+}));
+
+import { intentAnalyzerNode } from "./intent-analyzer";
+import { sentimentClustererNode } from "./sentiment-clusterer";
+import { changeDetectorNode } from "./change-detector";
+import { patternDetectorNode } from "./pattern-detector";
+import { vulnerabilityDetectorNode } from "./vulnerability-detector";
+import { synthesisNode } from "./synthesis";
+
+// Minimal state for testing
+const createMinimalState = (): typeof AnalysisGraphState.State => ({
+  competitor_id: "test-competitor",
+  run_id: "test-run",
+  has_pricing_diff: false,
+  hiring_intent: null,
+  sentiment_clusters: null,
+  pricing_change: null,
+  patterns: null,
+  vulnerability: null,
+  signal_score: null,
+  decision: null,
+});
+
+const placeholderNodes = [
+  {
+    name: "intentAnalyzerNode",
+    fn: intentAnalyzerNode,
+    logMessage: "intentAnalyzerNode: not yet implemented (Part 10) — returning no-op update",
+  },
+  {
+    name: "sentimentClustererNode",
+    fn: sentimentClustererNode,
+    logMessage: "sentimentClustererNode: not yet implemented (Part 10) — returning no-op update",
+  },
+  {
+    name: "changeDetectorNode",
+    fn: changeDetectorNode,
+    logMessage: "changeDetectorNode: not yet implemented (Part 10) — returning no-op update",
+  },
+  {
+    name: "patternDetectorNode",
+    fn: patternDetectorNode,
+    logMessage: "patternDetectorNode: not yet implemented (Part 10) — returning no-op update",
+  },
+  {
+    name: "vulnerabilityDetectorNode",
+    fn: vulnerabilityDetectorNode,
+    logMessage: "vulnerabilityDetectorNode: not yet implemented (Part 10) — returning no-op update",
+  },
+  {
+    name: "synthesisNode",
+    fn: synthesisNode,
+    logMessage: "synthesisNode: not yet implemented (Part 10) — returning no-op update",
+  },
+];
+
+describe("agents/analysis — placeholder nodes (Part 10 stubs)", () => {
+  beforeEach(() => {
+    loggerWarnMock.mockClear();
+  });
+
+  it.each(placeholderNodes)(
+    "$name returns empty update and logs warning",
+    async ({ fn, logMessage, name }) => {
+      const state = createMinimalState() as typeof AnalysisGraphState.State;
+      const result = await fn(state);
+
+      // Verify return value is empty
+      expect(result).toEqual({});
+
+      // Verify logger.warn was called with expected message
+      expect(loggerWarnMock).toHaveBeenCalledWith(logMessage, {
+        competitor_id: "test-competitor",
+      });
+      expect(loggerWarnMock).toHaveBeenCalledTimes(1);
+    }
+  );
+});
