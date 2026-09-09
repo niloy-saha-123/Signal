@@ -106,16 +106,12 @@ describe("pipeline/quality-scorer — completenessScore", () => {
     expect(score).toBe(1.0);
   });
 
-  it("scores lower when title is missing", () => {
-    const score = completenessScore(null, "This is a sufficiently long body of raw text.");
-    expect(score).toBeLessThan(1.0);
-    expect(score).toBeGreaterThan(0);
+  it("scores exactly 0.5 when title is missing but raw_text is non-trivial", () => {
+    expect(completenessScore(null, "This is a sufficiently long body of raw text.")).toBe(0.5);
   });
 
-  it("scores lower when raw_text is present but too short", () => {
-    const score = completenessScore("A real title", "short");
-    expect(score).toBeLessThan(1.0);
-    expect(score).toBeGreaterThan(0);
+  it("scores exactly 0.5 when title is present but raw_text is too short", () => {
+    expect(completenessScore("A real title", "short")).toBe(0.5);
   });
 
   it("scores 0 when both title is missing and raw_text is too short", () => {
@@ -130,16 +126,23 @@ describe("pipeline/quality-scorer — completenessScore", () => {
 });
 
 describe("pipeline/quality-scorer — computeQualityScore", () => {
+  // Weights: authority 0.5, recency 0.4, completeness 0.1 (AUTHORITY_WEIGHT/RECENCY_WEIGHT/
+  // COMPLETENESS_WEIGHT in quality-scorer.ts). pricing authority = 1.0, collected_at === now
+  // gives recency = 1.0, title + long raw_text gives completeness = 1.0:
+  // 0.5*1.0 + 0.4*1.0 + 0.1*1.0 = 1.0 exactly.
   it("combines authority/recency/completeness and stays within [0, 1]", () => {
     const now = new Date("2026-01-15T12:00:00Z");
     const score = computeQualityScore(
       { source: "pricing", collected_at: now, title: "Pricing changed", raw_text: "New pricing tiers announced today with three new plans." },
       now
     );
-    expect(score).toBeGreaterThan(0);
-    expect(score).toBeLessThanOrEqual(1);
+    expect(score).toBeCloseTo(1.0, 5);
   });
 
+  // good: same inputs as above -> 1.0 exactly.
+  // bad: reddit authority = 0.3 (the third-party floor, not 0), 30-day-old collected_at ->
+  // recency = 0.5^(30/7) = 0.05127095975047738, title null + raw_text "meh" (< 30 chars) ->
+  // completeness = 0.0. 0.5*0.3 + 0.4*0.05127095975047738 + 0.1*0 = 0.17050838390019096.
   it("scores a fresh, high-authority, complete signal higher than a stale, low-authority, incomplete one", () => {
     const now = new Date("2026-01-15T12:00:00Z");
     const good = computeQualityScore(
@@ -151,10 +154,18 @@ describe("pipeline/quality-scorer — computeQualityScore", () => {
       { source: "reddit", collected_at: stale, title: null, raw_text: "meh" },
       now
     );
+    expect(good).toBeCloseTo(1.0, 5);
+    expect(bad).toBeCloseTo(0.17050838390019096, 5);
     expect(good).toBeGreaterThan(bad);
   });
 
-  it("never exceeds 1 or drops below 0 across the extremes", () => {
+  // max: pricing/now/title/long raw_text -> 1.0 exactly, same as above.
+  // min: reddit authority = 0.3, collected_at at the Unix epoch (~56 years before `now`) decays
+  // recency to 0 (Math.pow(0.5, hugeExponent) underflows to 0 in double precision), title null
+  // + empty raw_text -> completeness = 0. 0.5*0.3 + 0.4*0 + 0.1*0 = 0.15 exactly — not 0, because
+  // the reddit authority floor alone contributes 0.15 regardless of how stale/incomplete the
+  // rest of the signal is.
+  it("never exceeds 1 or drops below the reddit-authority floor across the extremes", () => {
     const now = new Date("2026-01-15T12:00:00Z");
     const max = computeQualityScore(
       { source: "pricing", collected_at: now, title: "T", raw_text: "This is a sufficiently long body of raw text." },
@@ -164,8 +175,8 @@ describe("pipeline/quality-scorer — computeQualityScore", () => {
       { source: "reddit", collected_at: new Date(0), title: null, raw_text: "" },
       now
     );
-    expect(max).toBeLessThanOrEqual(1);
-    expect(min).toBeGreaterThanOrEqual(0);
+    expect(max).toBeCloseTo(1.0, 5);
+    expect(min).toBeCloseTo(0.15, 5);
   });
 });
 
