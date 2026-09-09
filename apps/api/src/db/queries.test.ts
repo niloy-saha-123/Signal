@@ -41,7 +41,7 @@ vi.mock("./client", () => ({
   },
 }));
 
-// Spy on drizzle-orm's real eq/and/sql so we can assert the Drizzle call
+// Spy on drizzle-orm's real eq/and/sql/inArray so we can assert the Drizzle call
 // shape (which columns/values/raw-SQL text were used) without reimplementing
 // SQL compilation in the test.
 vi.mock("drizzle-orm", async (importOriginal) => {
@@ -50,11 +50,12 @@ vi.mock("drizzle-orm", async (importOriginal) => {
     ...actual,
     eq: vi.fn(actual.eq),
     and: vi.fn(actual.and),
+    inArray: vi.fn(actual.inArray),
     sql: Object.assign(vi.fn(actual.sql), actual.sql),
   };
 });
 
-import { eq, and, sql, asc, desc } from "drizzle-orm";
+import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
 import {
   competitorsTable,
   competitorDiscoveryLogTable,
@@ -265,7 +266,7 @@ describe("db/queries — signals", () => {
       const result = await getRecentSignalsByCompetitorIds(["c1", "c2"]);
 
       expect(fromMock).toHaveBeenCalledWith(signalsTable);
-      // inArray should be called with competitor_id and the array of ids
+      expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, ["c1", "c2"]);
       expect(whereMock).toHaveBeenCalled();
       // and() must be called with exactly 2 predicates: competitor_ids filter and date window.
       expect(and).toHaveBeenCalledTimes(1);
@@ -314,6 +315,7 @@ describe("db/queries — signals", () => {
       const result = await getSignalsByIds(["s1", "s2"]);
 
       expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(inArray).toHaveBeenCalledWith(signalsTable.id, ["s1", "s2"]);
       expect(whereMock).toHaveBeenCalled();
       expect(result).toEqual(rows);
     });
