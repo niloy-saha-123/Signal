@@ -1,21 +1,131 @@
-// Hybrid retrieval — combines BM25 keyword search (flexsearch) and semantic vector search (Pinecone).
-// Used by: ChatAgent (stage 1 of its three-stage retrieval pipeline) and PatternDetector Phase 2.
+// Hybrid retrieval — combines BM25 keyword search (flexsearch) and semantic vector search
+// (Pinecone) via Reciprocal Rank Fusion (RRF). Read side of the index Part 7's deduplicator
+// writes (pipeline/deduplicator.ts: pineconeUpsert keyed by signal.id). Standalone, fully
+// synchronous library function — no queue/worker involvement.
 //
-// BM25 side: indexes are built in-memory from recently retrieved signal chunks for a given
-// competitor namespace, and rebuilt on each query. Acceptable at current scale — flagged for
-// Redis-backed index caching once query volume or chunk count makes per-query rebuild too slow.
+// BM25 side: index is rebuilt in-memory from getRecentSignalsByCompetitorIds on every call.
+// No caching — that's flagged as future work (Redis-backed index), not this function's scope.
 //
-// Semantic side: queries Pinecone with the embedded query vector, filtered by competitor_id
-// namespace and a minimum quality_score in metadata (same weighting scheme used elsewhere —
-// see vector/pinecone.ts).
-//
-// Merge: results from both sources are combined with Reciprocal Rank Fusion (RRF):
-//   score = sum(1 / (k + rank_i))  where k = 60
-// RRF is model-agnostic and outperforms simple score averaging when combining heterogeneous
-// ranking signals (BM25 scores and cosine similarities live on incompatible scales).
-//
-// Output: a deduplicated, RRF-ranked list of chunks with source metadata tagging each chunk as
-// bm25 | semantic | both.
-//
-// Exported function: hybridRetrieve(query, competitorIds, topK)
-export {};
+// Merge: RRF, rrf_score = sum(1 / (60 + rank)) across whichever list(s) an id appears in.
+// RRF is model-agnostic and outperforms score averaging when combining heterogeneous ranking
+// signals (BM25 has no comparable scale to cosine similarity — flexsearch.search doesn't even
+// return scores, only rank order, which is all RRF needs).
+import { Index } from "flexsearch";
+import type { SignalSource } from "@signal/shared";
+import { embedText } from "../lib/embeddings";
+import { pineconeQuery } from "../vector/pinecone";
+import { buildEmbeddingText } from "../pipeline/deduplicator";
+import { getRecentSignalsByCompetitorIds, getSignalsByIds, type Signal } from "../db/queries";
+
+export interface RetrievedChunk {
+  id: string; // signal.id, same id Pinecone was upserted under
+  competitor_id: string;
+  source: SignalSource;
+  source_url: string | null;
+  text: string; // same title+raw_text concatenation as the embedded text
+  quality_score: number;
+  origin: "bm25" | "semantic" | "both";
+  rrf_score: number;
+}
+
+const RRF_K = 60;
+
+// Pinecone has no quality_score in its metadata (deduplicator's upsert only writes
+// { source }) — a Pinecone filter on it would silently match nothing. Apply the floor in
+// application code, after hydrating each matched id's real row from Postgres. Drop, don't
+// clamp. No env var exists for this (checked .env.example) — a documented local constant.
+export const MIN_QUALITY_SCORE_FOR_RETRIEVAL = 0.15;
+
+export async function hybridRetrieve(
+  query: string,
+  competitorIds: string[],
+  topK: number = Number(process.env.HYBRID_RETRIEVAL_TOP_K) || 20
+): Promise<RetrievedChunk[]> {
+  if (competitorIds.length === 0) {
+    return [];
+  }
+
+  const queryEmbedding = await embedText(query);
+
+  // Semantic side: one query per competitor namespace (pineconeQuery is single-namespace,
+  // competitorId is mandatory), flattened and re-ranked by score across the whole fan-out.
+  const semanticMatches = (
+    await Promise.all(
+      competitorIds.map((competitorId) => pineconeQuery(competitorId, queryEmbedding, topK))
+    )
+  ).flat();
+  semanticMatches.sort((a, b) => b.score - a.score);
+
+  const semanticRanks = new Map<string, number>();
+  semanticMatches.forEach((match, index) => {
+    if (!semanticRanks.has(match.id)) {
+      semanticRanks.set(match.id, index + 1);
+    }
+  });
+
+  // BM25 side: fresh in-memory index every call (documented tradeoff above — no caching).
+  const corpus = await getRecentSignalsByCompetitorIds(competitorIds);
+  const corpusById = new Map(corpus.map((signal) => [signal.id, signal]));
+
+  const bm25Index = new Index();
+  for (const signal of corpus) {
+    bm25Index.add(signal.id, buildEmbeddingText(signal));
+  }
+  const bm25Results = bm25Index.search(query, { limit: topK });
+
+  const bm25Ranks = new Map<string, number>();
+  bm25Results.forEach((id, index) => {
+    bm25Ranks.set(String(id), index + 1);
+  });
+
+  // RRF merge over the union of both lists.
+  const allIds = new Set([...semanticRanks.keys(), ...bm25Ranks.keys()]);
+  const merged: { id: string; origin: RetrievedChunk["origin"]; rrf_score: number }[] = [];
+  for (const id of allIds) {
+    const semanticRank = semanticRanks.get(id);
+    const bm25Rank = bm25Ranks.get(id);
+    const rrf_score =
+      (semanticRank !== undefined ? 1 / (RRF_K + semanticRank) : 0) +
+      (bm25Rank !== undefined ? 1 / (RRF_K + bm25Rank) : 0);
+    const origin: RetrievedChunk["origin"] =
+      semanticRank !== undefined && bm25Rank !== undefined
+        ? "both"
+        : semanticRank !== undefined
+          ? "semantic"
+          : "bm25";
+    merged.push({ id, origin, rrf_score });
+  }
+
+  // Hydrate: bm25-side ids already have their row from the corpus fetch above — only
+  // semantic-only ids need a bulk lookup.
+  const missingIds = merged.filter((m) => !corpusById.has(m.id)).map((m) => m.id);
+  if (missingIds.length > 0) {
+    const hydrated = await getSignalsByIds(missingIds);
+    for (const signal of hydrated) {
+      corpusById.set(signal.id, signal);
+    }
+  }
+
+  const chunks: RetrievedChunk[] = [];
+  for (const m of merged) {
+    const signal: Signal | undefined = corpusById.get(m.id);
+    // A matched id with no corresponding db row (deleted signal, stale vector) — skip
+    // rather than throw, same defensive pattern as deduplicator's matched-id lookup.
+    if (!signal) continue;
+    if (signal.quality_score < MIN_QUALITY_SCORE_FOR_RETRIEVAL) continue;
+
+    chunks.push({
+      id: signal.id,
+      competitor_id: signal.competitor_id,
+      source: signal.source,
+      source_url: signal.source_url,
+      text: buildEmbeddingText(signal),
+      quality_score: signal.quality_score,
+      origin: m.origin,
+      rrf_score: m.rrf_score,
+    });
+  }
+
+  chunks.sort((a, b) => b.rrf_score - a.rrf_score);
+  return chunks.slice(0, topK);
+}
