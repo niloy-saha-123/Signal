@@ -17,16 +17,19 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-// intentAnalyzerNode (Task 2) and sentimentClustererNode (Task 3) are now real — both
-// import db/queries and lib/company-context (which in turn opens real ioredis connections
-// at module load). Mocked here so this DAG-level test stays isolated from Postgres/Redis: an
-// empty signals list drives both nodes down their no-LLM-call short-circuit paths.
-const { getRecentSignalsByCompetitorAndSourceMock } = vi.hoisted(() => ({
+// intentAnalyzerNode (Task 2), sentimentClustererNode (Task 3), and changeDetectorNode
+// (Task 4) are now real — all three import db/queries and lib/company-context (which in
+// turn opens real ioredis connections at module load). Mocked here so this DAG-level test
+// stays isolated from Postgres/Redis: an empty result list drives all three nodes down
+// their no-LLM-call short-circuit/defensive paths.
+const { getRecentSignalsByCompetitorAndSourceMock, getRecentPricingDiffsMock } = vi.hoisted(() => ({
   getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
+  getRecentPricingDiffsMock: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../db/queries", () => ({
   getRecentSignalsByCompetitorAndSource: getRecentSignalsByCompetitorAndSourceMock,
+  getRecentPricingDiffs: getRecentPricingDiffsMock,
 }));
 
 vi.mock("../lib/company-context", () => ({
@@ -36,7 +39,7 @@ vi.mock("../lib/company-context", () => ({
 import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
-  changeDetector: "changeDetectorNode: not yet implemented (Part 10) — returning no-op update",
+  changeDetector: "change-detector: no recent pricing diffs found — unexpected since the router only invokes this node when has_pricing_diff is true",
   patternDetector: "patternDetectorNode: not yet implemented (Part 10) — returning no-op update",
   vulnerabilityDetector: "vulnerabilityDetectorNode: not yet implemented (Part 10) — returning no-op update",
   synthesis: "synthesisNode: not yet implemented (Part 10) — returning no-op update",
@@ -72,7 +75,9 @@ describe("analysisGraph — compiled DAG", () => {
     });
     expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
-    // (b) changeDetector runs when has_pricing_diff is true
+    // (b) changeDetector runs when has_pricing_diff is true — it takes its own
+    // defensive no-diffs-found short-circuit since getRecentPricingDiffs is mocked to
+    // return [] (real behavior since Task 4).
     expect(callCountFor(LOG_MESSAGES.changeDetector)).toBe(1);
     // (c) synthesis runs exactly once, not once per fan-in source
     expect(callCountFor(LOG_MESSAGES.synthesis)).toBe(1);

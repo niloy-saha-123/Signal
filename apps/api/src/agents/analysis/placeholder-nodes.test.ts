@@ -11,7 +11,6 @@ vi.mock("../../lib/logger", () => ({
   },
 }));
 
-import { changeDetectorNode } from "./change-detector";
 import { patternDetectorNode } from "./pattern-detector";
 import { vulnerabilityDetectorNode } from "./vulnerability-detector";
 import { synthesisNode } from "./synthesis";
@@ -30,15 +29,11 @@ const createMinimalState = (): typeof AnalysisGraphState.State => ({
   decision: null,
 });
 
-// intentAnalyzerNode (Task 2) and sentimentClustererNode (Task 3) are no longer
-// placeholders — they have their own real-behavior coverage in ./intent-analyzer.test.ts and
-// ./sentiment-clusterer.test.ts respectively, and are excluded from this table.
+// intentAnalyzerNode (Task 2), sentimentClustererNode (Task 3), and changeDetectorNode
+// (Task 4) are no longer placeholders — they have their own real-behavior coverage in
+// ./intent-analyzer.test.ts, ./sentiment-clusterer.test.ts, and ./change-detector.test.ts
+// respectively, and are excluded from this table.
 const placeholderNodes = [
-  {
-    name: "changeDetectorNode",
-    fn: changeDetectorNode,
-    logMessage: "changeDetectorNode: not yet implemented (Part 10) — returning no-op update",
-  },
   {
     name: "patternDetectorNode",
     fn: patternDetectorNode,
