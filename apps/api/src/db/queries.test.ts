@@ -73,6 +73,8 @@ import {
   updateDiscoveryStatus,
   getCompetitorDiscoveryLog,
   getRecentSignalsByCompetitorAndSource,
+  getRecentSignalsByCompetitorIds,
+  getSignalsByIds,
   getSignalVolumeByDay,
   getLatestSignalScores,
   getLatencyPercentiles,
@@ -248,6 +250,81 @@ describe("db/queries — signals", () => {
       const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
       const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
       expect(intervalCall!.at(-1)).toBe(14);
+    });
+  });
+
+  describe("getRecentSignalsByCompetitorIds", () => {
+    it("filters by multiple competitor_ids and a created_at date window (7-day default)", async () => {
+      const rows = [
+        { id: "s1", competitor_id: "c1", source: "jobs" },
+        { id: "s2", competitor_id: "c2", source: "reddit" },
+      ];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue(rows);
+
+      const result = await getRecentSignalsByCompetitorIds(["c1", "c2"]);
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      // inArray should be called with competitor_id and the array of ids
+      expect(whereMock).toHaveBeenCalled();
+      // and() must be called with exactly 2 predicates: competitor_ids filter and date window.
+      expect(and).toHaveBeenCalledTimes(1);
+      expect((and as ReturnType<typeof vi.fn>).mock.calls[0]).toHaveLength(2);
+
+      // The date-window predicate is a raw sql fragment
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+      expect(intervalCall).toBeDefined();
+      expect(rawSqlText(intervalCall!)).toContain("NOW() - INTERVAL");
+      expect(intervalCall!.at(-1)).toBe(7);
+
+      expect(result).toEqual(rows);
+    });
+
+    it("honors a custom days window", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      await getRecentSignalsByCompetitorIds(["c1", "c2"], 14);
+
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+      expect(intervalCall!.at(-1)).toBe(14);
+    });
+
+    it("returns empty array immediately when competitorIds is empty, without issuing a query", async () => {
+      const result = await getRecentSignalsByCompetitorIds([]);
+
+      expect(selectMock).not.toHaveBeenCalled();
+      expect(fromMock).not.toHaveBeenCalled();
+      expect(whereMock).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("getSignalsByIds", () => {
+    it("filters by multiple signal ids", async () => {
+      const rows = [
+        { id: "s1", raw_text: "Text 1", quality_score: 0.8 },
+        { id: "s2", raw_text: "Text 2", quality_score: 0.6 },
+      ];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue(rows);
+
+      const result = await getSignalsByIds(["s1", "s2"]);
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(whereMock).toHaveBeenCalled();
+      expect(result).toEqual(rows);
+    });
+
+    it("returns empty array immediately when ids is empty, without issuing a query", async () => {
+      const result = await getSignalsByIds([]);
+
+      expect(selectMock).not.toHaveBeenCalled();
+      expect(fromMock).not.toHaveBeenCalled();
+      expect(whereMock).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
     });
   });
 

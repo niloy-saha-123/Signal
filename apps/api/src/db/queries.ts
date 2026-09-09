@@ -108,6 +108,37 @@ export async function getRecentSignalsByCompetitorAndSource(
     );
 }
 
+// Retrieval pipeline source — fetch recent signals across multiple competitors
+// for BM25 corpus. inArray with empty array is a Drizzle footgun, so short-circuit.
+export async function getRecentSignalsByCompetitorIds(
+  competitorIds: string[],
+  days = 7
+): Promise<Signal[]> {
+  if (competitorIds.length === 0) {
+    return [];
+  }
+
+  return db
+    .select()
+    .from(signalsTable)
+    .where(
+      and(
+        inArray(signalsTable.competitor_id, competitorIds),
+        sql`${signalsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`
+      )
+    );
+}
+
+// Retrieval pipeline hydration — fetch Signal rows by their Pinecone match ids.
+// inArray with empty array is a Drizzle footgun, so short-circuit.
+export async function getSignalsByIds(ids: string[]): Promise<Signal[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+
+  return db.select().from(signalsTable).where(inArray(signalsTable.id, ids));
+}
+
 // PatternDetector Phase 1 — pure SQL volume counts (no LLM per CLAUDE.md).
 // DATE_TRUNC/GROUP BY isn't expressible via the fluent builder's typed helpers,
 // so this uses `sql` fragments in the select/groupBy/orderBy, per the
