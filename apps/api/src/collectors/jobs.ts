@@ -12,6 +12,7 @@
 // track (unlike reddit.ts/hn.ts) — every run re-fetches each board's full
 // current listing and relies entirely on signalExistsBySourceUrl for dedup.
 import type { Job } from "bullmq";
+import * as cheerio from "cheerio";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
@@ -45,7 +46,7 @@ interface LeverPosting {
 
 async function fetchGreenhouseJobs(token: string): Promise<GreenhouseJob[]> {
   const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(token)}/jobs`;
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) {
     throw new Error(`Greenhouse API returned ${response.status} for board "${token}"`);
   }
@@ -55,7 +56,7 @@ async function fetchGreenhouseJobs(token: string): Promise<GreenhouseJob[]> {
 
 async function fetchLeverPostings(site: string): Promise<LeverPosting[]> {
   const url = `https://api.lever.co/v0/postings/${encodeURIComponent(site)}?mode=json`;
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) {
     throw new Error(`Lever API returned ${response.status} for site "${site}"`);
   }
@@ -73,15 +74,23 @@ async function collectGreenhouse(competitor: { id: string; greenhouse_token: str
     const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
     if (alreadyCollected) continue;
 
+    // Greenhouse's content field is HTML by API design — strip tags before
+    // storing so raw_text stays plain text like every other collector's
+    // (matches changelog.ts's parseArticleContent; Lever's descriptionPlain
+    // below is already plain text and needs no stripping).
+    const plainContent = job.content ? cheerio.load(job.content).text().trim() : "";
+
     const signal = await createSignal({
       competitor_id: competitor.id,
       source: SOURCE,
       source_url: sourceUrl,
       title: job.title ?? null,
-      raw_text: job.content || job.title || "",
+      raw_text: plainContent || job.title || "",
     });
 
-    await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+    await withRetry(() =>
+      queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
+    );
   }
 }
 
@@ -103,7 +112,9 @@ async function collectLever(competitor: { id: string; lever_token: string }): Pr
       raw_text: posting.descriptionPlain || posting.text || "",
     });
 
-    await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+    await withRetry(() =>
+      queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
+    );
   }
 }
 
@@ -154,34 +165,59 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
   let leverAttempted = false;
   let leverHadFailure = false;
 
+  // Track each circuit's open/closed state as this run progresses — a
+  // breaker can trip mid-run off an earlier competitor's failures, and the
+  // remaining competitors shouldn't each still pay the full withRetry cost
+  // against a dependency the breaker just confirmed is down. Once tripped,
+  // that service is skipped for every remaining competitor in this run; the
+  // other service keeps going independently.
+  let greenhouseStillClosed = !greenhouseOpen;
+  let leverStillClosed = !leverOpen;
+
   for (const competitor of competitors) {
-    if (competitor.greenhouse_token && !greenhouseOpen) {
-      greenhouseAttempted = true;
-      try {
-        await collectGreenhouse({ id: competitor.id, greenhouse_token: competitor.greenhouse_token });
-      } catch (err) {
-        greenhouseHadFailure = true;
-        logger.error("jobs collector failed to collect Greenhouse postings for one competitor — continuing", {
+    if (competitor.greenhouse_token && greenhouseStillClosed) {
+      if (await isCircuitOpen(GREENHOUSE_SERVICE)) {
+        greenhouseStillClosed = false;
+        logger.warn("greenhouse circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
-          error: err instanceof Error ? err.message : String(err),
         });
-        await recordCircuitFailure(GREENHOUSE_SERVICE, err);
+      } else {
+        greenhouseAttempted = true;
+        try {
+          await collectGreenhouse({ id: competitor.id, greenhouse_token: competitor.greenhouse_token });
+        } catch (err) {
+          greenhouseHadFailure = true;
+          logger.error("jobs collector failed to collect Greenhouse postings for one competitor — continuing", {
+            competitor_id: competitor.id,
+            competitor_name: competitor.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          await recordCircuitFailure(GREENHOUSE_SERVICE, err);
+        }
       }
     }
 
-    if (competitor.lever_token && !leverOpen) {
-      leverAttempted = true;
-      try {
-        await collectLever({ id: competitor.id, lever_token: competitor.lever_token });
-      } catch (err) {
-        leverHadFailure = true;
-        logger.error("jobs collector failed to collect Lever postings for one competitor — continuing", {
+    if (competitor.lever_token && leverStillClosed) {
+      if (await isCircuitOpen(LEVER_SERVICE)) {
+        leverStillClosed = false;
+        logger.warn("lever circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
-          error: err instanceof Error ? err.message : String(err),
         });
-        await recordCircuitFailure(LEVER_SERVICE, err);
+      } else {
+        leverAttempted = true;
+        try {
+          await collectLever({ id: competitor.id, lever_token: competitor.lever_token });
+        } catch (err) {
+          leverHadFailure = true;
+          logger.error("jobs collector failed to collect Lever postings for one competitor — continuing", {
+            competitor_id: competitor.id,
+            competitor_name: competitor.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          await recordCircuitFailure(LEVER_SERVICE, err);
+        }
       }
     }
   }

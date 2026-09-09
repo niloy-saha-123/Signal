@@ -162,7 +162,9 @@ async function collectForCompetitor(competitor: {
     raw_text: summarizeDiff(diff, significance),
   });
 
-  await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+  await withRetry(() =>
+    queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
+  );
 }
 
 interface PricingCollectJobData {
@@ -192,15 +194,29 @@ export async function pricingCollectorProcessor(_job: Job<PricingCollectJobData>
   }
 
   try {
-    const competitors = (await listCompetitors()).filter((c) => c.is_active && c.pricing_url);
+    const competitors = (await listCompetitors()).filter(
+      (c): c is typeof c & { pricing_url: string } => c.is_active && Boolean(c.pricing_url)
+    );
 
     // Same per-competitor isolation as hn.ts/jobs.ts — one competitor's
     // pricing page failing (after withRetry exhausts its attempts) must not
     // abort collection for every other competitor in this run.
     let hadFailure = false;
     for (const competitor of competitors) {
+      // The breaker can trip mid-run off an earlier competitor's failures —
+      // re-check before every attempt so the remaining competitors don't
+      // each still pay the full withRetry cost against a dependency the
+      // breaker just confirmed is down.
+      if (await isCircuitOpen(SERVICE_NAME)) {
+        logger.warn("pricing circuit opened mid-run — stopping before remaining competitors", {
+          competitor_id: competitor.id,
+          competitor_name: competitor.name,
+        });
+        break;
+      }
+
       try {
-        await collectForCompetitor({ id: competitor.id, pricing_url: competitor.pricing_url as string });
+        await collectForCompetitor({ id: competitor.id, pricing_url: competitor.pricing_url });
       } catch (err) {
         hadFailure = true;
         logger.error("pricing collector failed for one competitor — continuing with the rest", {

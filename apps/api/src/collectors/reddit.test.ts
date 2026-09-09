@@ -349,6 +349,68 @@ describe("collectors/reddit", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 
+  it("sets a 30s abort timeout on the OAuth token request and the subreddit listing fetch", async () => {
+    await redditCollectorProcessor({} as never);
+
+    for (const call of fetchMock.mock.calls) {
+      const [, options] = call;
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("keeps processing subsequent posts in the same subreddit's batch when an earlier post fails", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return listingResponse([
+        {
+          id: "bad",
+          name: "t3_bad",
+          permalink: "/r/acme/comments/bad/bad_post/",
+          title: "Bad post",
+          selftext: "bad body",
+          created_utc: Math.floor(Date.now() / 1000),
+        },
+        {
+          id: "good",
+          name: "t3_good",
+          permalink: "/r/acme/comments/good/good_post/",
+          title: "Good post",
+          selftext: "good body",
+          created_utc: Math.floor(Date.now() / 1000),
+        },
+      ]);
+    });
+    createSignalMock
+      .mockImplementationOnce(async () => {
+        throw new Error("insert failed");
+      })
+      .mockImplementationOnce(async (input: Record<string, unknown>) => ({ id: "s2", ...input }));
+
+    await redditCollectorProcessor({} as never);
+
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+    expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s2" });
+    // A single item's failure is logged and skipped — it's not a
+    // subreddit/competitor-level failure, so the run still records success.
+    expect(recordSuccess).toHaveBeenCalledWith("reddit");
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("stops attempting remaining competitors once the circuit trips mid-run", async () => {
+    const secondCompetitor = { id: "c2b", name: "Later", is_active: true, subreddits: ["later"] };
+    listCompetitorsMock.mockResolvedValue([activeCompetitor, secondCompetitor]);
+    (isCircuitOpen as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(false) // initial job-level check
+      .mockResolvedValueOnce(false) // before competitor 1
+      .mockResolvedValueOnce(true); // before competitor 2 — breaks
+
+    await redditCollectorProcessor({} as never);
+
+    const listingCalls = fetchMock.mock.calls.filter((call: any[]) => call[0].includes("oauth.reddit.com"));
+    expect(listingCalls).toHaveLength(1);
+    expect(listingCalls[0][0]).toBe("https://oauth.reddit.com/r/acme/new.json?limit=25");
+  });
+
   it("registers the collect-reddit worker via initRedditWorker without registering at import time", () => {
     expect(registerWorkerMock).not.toHaveBeenCalled();
 

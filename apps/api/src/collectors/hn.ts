@@ -35,7 +35,7 @@ async function searchHn(competitorName: string, sinceUnixSeconds: number): Promi
     `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(competitorName)}` +
     `&tags=comment&numericFilters=created_at_i>${sinceUnixSeconds}`;
 
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) {
     throw new Error(`Algolia HN API returned ${response.status} for query "${competitorName}"`);
   }
@@ -59,18 +59,32 @@ async function collectForCompetitor(competitor: { id: string; name: string }): P
     // for dedup, since the schema has no source_id column.
     const sourceUrl = `https://news.ycombinator.com/item?id=${hit.objectID}`;
 
-    const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
-    if (alreadyCollected) continue;
+    // One hit throwing (dedup check, insert, or enqueue) must not abort the
+    // rest of this competitor's batch — same isolation one level up as the
+    // per-competitor loop, just per-item here.
+    try {
+      const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
+      if (alreadyCollected) continue;
 
-    const signal = await createSignal({
-      competitor_id: competitor.id,
-      source: SOURCE,
-      source_url: sourceUrl,
-      title: hit.story_title ?? hit.title ?? null,
-      raw_text: rawText,
-    });
+      const signal = await createSignal({
+        competitor_id: competitor.id,
+        source: SOURCE,
+        source_url: sourceUrl,
+        title: hit.story_title ?? hit.title ?? null,
+        raw_text: rawText,
+      });
 
-    await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+      await withRetry(() =>
+        queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
+      );
+    } catch (err) {
+      logger.error("hn collector failed to process one item — continuing with the rest", {
+        competitor_id: competitor.id,
+        competitor_name: competitor.name,
+        hn_object_id: hit.objectID,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 
@@ -104,6 +118,18 @@ export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise
     // degraded circuit-breaker health rather than silently looking fine.
     let hadFailure = false;
     for (const competitor of competitors) {
+      // The breaker can trip mid-run off an earlier competitor's failures —
+      // re-check before every attempt so the remaining competitors don't
+      // each still pay the full withRetry cost against a dependency the
+      // breaker just confirmed is down.
+      if (await isCircuitOpen(SERVICE_NAME)) {
+        logger.warn("hn circuit opened mid-run — stopping before remaining competitors", {
+          competitor_id: competitor.id,
+          competitor_name: competitor.name,
+        });
+        break;
+      }
+
       try {
         await collectForCompetitor(competitor);
       } catch (err) {

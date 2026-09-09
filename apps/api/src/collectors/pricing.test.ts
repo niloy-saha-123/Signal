@@ -330,6 +330,23 @@ describe("collectors/pricing", () => {
     expect(recordFailure).not.toHaveBeenCalled();
   });
 
+  it("stops attempting remaining competitors once the circuit trips mid-run", async () => {
+    const secondCompetitor = { id: "c4", name: "Gamma", is_active: true, pricing_url: "https://gamma.com/pricing" };
+    listCompetitorsMock.mockResolvedValue([competitorWithPricing, secondCompetitor]);
+    (isCircuitOpen as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(false) // initial job-level check
+      .mockResolvedValueOnce(false) // before competitor 1
+      .mockResolvedValueOnce(true); // before competitor 2 — breaks
+
+    await pricingCollectorProcessor({} as never);
+
+    expect(launchMock).toHaveBeenCalledTimes(1);
+    expect(createPricingBaselineMock).toHaveBeenCalledTimes(1);
+    expect(createPricingBaselineMock).toHaveBeenCalledWith(
+      expect.objectContaining({ competitor_id: "c1" })
+    );
+  });
+
   it("registers the collect-pricing worker via initPricingWorker without registering at import time", () => {
     expect(registerWorkerMock).not.toHaveBeenCalled();
 

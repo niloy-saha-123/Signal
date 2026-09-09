@@ -31,12 +31,20 @@ vi.mock("../queues/registry", () => ({
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
 }));
 
-const { parseURLMock } = vi.hoisted(() => ({
+const { parseURLMock, capturedParserOptions } = vi.hoisted(() => ({
   parseURLMock: vi.fn(),
+  // A plain array, not a vi.fn() call log — the Parser is constructed once
+  // at module import time (before any test's beforeEach/vi.clearAllMocks
+  // runs), so a vi.fn()'s call history would already be wiped by the time
+  // the first test asserts on it.
+  capturedParserOptions: [] as unknown[],
 }));
 
 vi.mock("rss-parser", () => ({
   default: class {
+    constructor(options?: unknown) {
+      capturedParserOptions.push(options);
+    }
     parseURL(url: string) {
       return parseURLMock(url);
     }
@@ -183,7 +191,10 @@ describe("collectors/changelog", () => {
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).toHaveBeenCalledWith("https://acme.example.com/posts/teaser");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme.example.com/posts/teaser",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(createSignalMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source_url: "https://acme.example.com/posts/teaser",
@@ -212,7 +223,10 @@ describe("collectors/changelog", () => {
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).toHaveBeenCalledWith("https://acme.example.com/posts/2");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme.example.com/posts/2",
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
     expect(createSignalMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source_url: "https://acme.example.com/posts/2",
@@ -295,6 +309,64 @@ describe("collectors/changelog", () => {
     expect(recordFailure).toHaveBeenCalledWith("changelog", expect.any(String));
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
+
+  it("configures the RSS parser with a 30s timeout", () => {
+    expect(capturedParserOptions[0]).toEqual({ timeout: 30000 });
+  });
+
+  it("sets a 30s abort timeout when fetching a changelog entry page", async () => {
+    parseURLMock.mockResolvedValue(
+      feed([{ link: "https://acme.example.com/posts/x", content: "short excerpt" }])
+    );
+
+    await changelogCollectorProcessor({} as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("keeps processing subsequent feed entries when an earlier one fails", async () => {
+    parseURLMock.mockResolvedValue(
+      feed([
+        { link: "https://acme.example.com/posts/bad", "content:encoded": `<p>${LONG_TEXT}</p>` },
+        { link: "https://acme.example.com/posts/good", "content:encoded": `<p>${LONG_TEXT}</p>` },
+      ])
+    );
+    createSignalMock
+      .mockImplementationOnce(async () => {
+        throw new Error("insert failed");
+      })
+      .mockImplementationOnce(async (input: Record<string, unknown>) => ({ id: "s2", ...input }));
+
+    await changelogCollectorProcessor({} as never);
+
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+    expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s2" });
+    // A single entry's failure is logged and skipped — it's not a
+    // competitor-level failure, so the run still records success.
+    expect(recordSuccess).toHaveBeenCalledWith("changelog");
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("stops attempting remaining competitors once the circuit trips mid-run", async () => {
+    const secondCompetitor = {
+      id: "c2b",
+      name: "Later",
+      is_active: true,
+      changelog_rss: "https://later.example.com/changelog.rss",
+    };
+    listCompetitorsMock.mockResolvedValue([activeCompetitor, secondCompetitor]);
+    (isCircuitOpen as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(false) // initial job-level check
+      .mockResolvedValueOnce(false) // before competitor 1
+      .mockResolvedValueOnce(true); // before competitor 2 — breaks
+
+    await changelogCollectorProcessor({} as never);
+
+    expect(parseURLMock).toHaveBeenCalledTimes(1);
+    expect(parseURLMock).toHaveBeenCalledWith(activeCompetitor.changelog_rss);
+  });
 
   it("registers the collect-changelog worker via initChangelogWorker without registering at import time", () => {
     expect(registerWorkerMock).not.toHaveBeenCalled();

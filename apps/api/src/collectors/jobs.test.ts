@@ -215,10 +215,35 @@ describe("collectors/jobs", () => {
         source: "jobs",
         source_url: "https://acme.com/jobs/42",
         title: "Senior Engineer",
-        raw_text: "<p>Join Acme</p>",
+        raw_text: "Join Acme",
       })
     );
     expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s1" });
+  });
+
+  it("strips HTML from Greenhouse's content field before storing raw_text", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("boards-api.greenhouse.io")) {
+        return greenhouseResponse([
+          {
+            id: 7,
+            title: "Backend Engineer",
+            absolute_url: "https://acme.com/jobs/7",
+            content: "<div><p>We are <strong>hiring</strong>!</p><ul><li>Node.js</li></ul></div>",
+          },
+        ]);
+      }
+      return leverResponse([]);
+    });
+
+    await jobsCollectorProcessor({} as never);
+
+    const call = createSignalMock.mock.calls.find(
+      (c: any[]) => c[0].source_url === "https://acme.com/jobs/7"
+    );
+    expect(call![0].raw_text).not.toMatch(/<[^>]+>/);
+    expect(call![0].raw_text).toContain("We are hiring!");
+    expect(call![0].raw_text).toContain("Node.js");
   });
 
   it("inserts a jobs signal per Lever posting, deduped by source_url, and enqueues entity extraction", async () => {
@@ -363,6 +388,42 @@ describe("collectors/jobs", () => {
     expect(recordSuccess).not.toHaveBeenCalledWith("lever");
     expect(recordFailure).toHaveBeenCalledWith("lever", expect.any(String));
   }, 10000);
+
+  it("sets a 30s abort timeout on Greenhouse and Lever fetches", async () => {
+    await jobsCollectorProcessor({} as never);
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+    for (const call of fetchMock.mock.calls) {
+      const [, options] = call;
+      expect(options.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("stops attempting Greenhouse for remaining competitors once the greenhouse circuit trips mid-run, without affecting Lever", async () => {
+    const secondGhCompetitor = {
+      id: "c2z",
+      name: "SecondGh",
+      is_active: true,
+      greenhouse_token: "second-gh",
+      lever_token: null,
+    };
+    listCompetitorsMock.mockResolvedValue([greenhouseOnlyCompetitor, secondGhCompetitor]);
+
+    let greenhouseCallCount = 0;
+    isCircuitOpenMock().mockImplementation(async (service: string) => {
+      if (service !== "greenhouse") return false;
+      greenhouseCallCount += 1;
+      // 1st call: initial job-level check. 2nd: before competitor 1. 3rd:
+      // before competitor 2 — trips here.
+      return greenhouseCallCount >= 3;
+    });
+
+    await jobsCollectorProcessor({} as never);
+
+    const urls = fetchMock.mock.calls.map((c: any[]) => c[0]);
+    expect(urls).toContain("https://boards-api.greenhouse.io/v1/boards/gh-only/jobs");
+    expect(urls).not.toContain("https://boards-api.greenhouse.io/v1/boards/second-gh/jobs");
+  });
 
   it("registers the collect-jobs worker via initJobsWorker without registering at import time", () => {
     expect(registerWorkerMock).not.toHaveBeenCalled();

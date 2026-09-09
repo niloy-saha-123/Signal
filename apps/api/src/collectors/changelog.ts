@@ -24,7 +24,7 @@ interface ChangelogFeedItem {
   "content:encoded"?: string;
 }
 
-const parser = new Parser<Record<string, unknown>, ChangelogFeedItem>();
+const parser = new Parser<Record<string, unknown>, ChangelogFeedItem>({ timeout: 30000 });
 
 // Per .claude/skills/signal-scraping/SKILL.md's parseArticleContent pattern
 // exactly — strip boilerplate tags, prefer semantic content containers, fall
@@ -37,7 +37,7 @@ function parseArticleContent(html: string): string {
 }
 
 async function fetchArticleText(url: string): Promise<string> {
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) {
     throw new Error(`Fetching changelog entry ${url} returned ${response.status}`);
   }
@@ -83,21 +83,35 @@ async function collectForCompetitor(competitor: {
       if (!Number.isNaN(entryDate.getTime()) && entryDate <= lastCollectedAt) continue;
     }
 
-    const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
-    if (alreadyCollected) continue;
+    // One entry throwing (dedup check, article fetch, insert, or enqueue)
+    // must not abort the rest of this competitor's batch — same isolation
+    // one level up as the per-competitor loop, just per-item here.
+    try {
+      const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
+      if (alreadyCollected) continue;
 
-    const rawText = await resolveRawText(item, sourceUrl);
-    if (!rawText) continue;
+      const rawText = await resolveRawText(item, sourceUrl);
+      if (!rawText) continue;
 
-    const signal = await createSignal({
-      competitor_id: competitor.id,
-      source: SOURCE,
-      source_url: sourceUrl,
-      title: item.title ?? null,
-      raw_text: rawText,
-    });
+      const signal = await createSignal({
+        competitor_id: competitor.id,
+        source: SOURCE,
+        source_url: sourceUrl,
+        title: item.title ?? null,
+        raw_text: rawText,
+      });
 
-    await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+      await withRetry(() =>
+        queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
+      );
+    } catch (err) {
+      logger.error("changelog collector failed to process one item — continuing with the rest", {
+        competitor_id: competitor.id,
+        competitor_name: competitor.name,
+        source_url: sourceUrl,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 
@@ -130,6 +144,18 @@ export async function changelogCollectorProcessor(_job: Job<ChangelogCollectJobD
     // same per-competitor isolation as hn.ts/reddit.ts.
     let hadFailure = false;
     for (const competitor of competitors) {
+      // The breaker can trip mid-run off an earlier competitor's failures —
+      // re-check before every attempt so the remaining competitors don't
+      // each still pay the full withRetry cost against a dependency the
+      // breaker just confirmed is down.
+      if (await isCircuitOpen(SERVICE_NAME)) {
+        logger.warn("changelog circuit opened mid-run — stopping before remaining competitors", {
+          competitor_id: competitor.id,
+          competitor_name: competitor.name,
+        });
+        break;
+      }
+
       try {
         await collectForCompetitor(competitor);
       } catch (err) {

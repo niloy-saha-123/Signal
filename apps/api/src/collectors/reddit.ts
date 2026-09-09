@@ -49,6 +49,7 @@ async function getRedditAccessToken(): Promise<string> {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: "grant_type=client_credentials",
+    signal: AbortSignal.timeout(30000),
   });
   if (!response.ok) {
     throw new Error(`Reddit OAuth token request returned ${response.status}`);
@@ -64,6 +65,7 @@ async function fetchSubredditPosts(subreddit: string, token: string): Promise<Re
       Authorization: `Bearer ${token}`,
       "User-Agent": process.env.REDDIT_USER_AGENT ?? "Signal/1.0",
     },
+    signal: AbortSignal.timeout(30000),
   });
   if (!response.ok) {
     throw new Error(`Reddit API returned ${response.status} for r/${subreddit}`);
@@ -104,18 +106,33 @@ async function collectForCompetitor(
 
         const sourceUrl = `https://www.reddit.com${post.permalink}`;
 
-        const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
-        if (alreadyCollected) continue;
+        // One post throwing (dedup check, insert, or enqueue) must not abort
+        // the rest of this subreddit's batch — same isolation one level up
+        // as the per-subreddit loop, just per-item here.
+        try {
+          const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
+          if (alreadyCollected) continue;
 
-        const signal = await createSignal({
-          competitor_id: competitor.id,
-          source: SOURCE,
-          source_url: sourceUrl,
-          title: post.title ?? null,
-          raw_text: rawText,
-        });
+          const signal = await createSignal({
+            competitor_id: competitor.id,
+            source: SOURCE,
+            source_url: sourceUrl,
+            title: post.title ?? null,
+            raw_text: rawText,
+          });
 
-        await queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id });
+          await withRetry(() =>
+            queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
+          );
+        } catch (err) {
+          logger.error("reddit collector failed to process one item — continuing with the rest", {
+            competitor_id: competitor.id,
+            competitor_name: competitor.name,
+            subreddit,
+            reddit_post_id: post.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     } catch (err) {
       failedSubreddits.push(subreddit);
@@ -169,6 +186,18 @@ export async function redditCollectorProcessor(_job: Job<RedditCollectJobData>):
     // degraded circuit-breaker health rather than silently looking fine.
     let hadFailure = false;
     for (const competitor of competitors) {
+      // The breaker can trip mid-run off an earlier competitor's failures —
+      // re-check before every attempt so the remaining competitors don't
+      // each still pay the full withRetry cost against a dependency the
+      // breaker just confirmed is down.
+      if (await isCircuitOpen(SERVICE_NAME)) {
+        logger.warn("reddit circuit opened mid-run — stopping before remaining competitors", {
+          competitor_id: competitor.id,
+          competitor_name: competitor.name,
+        });
+        break;
+      }
+
       try {
         await collectForCompetitor(competitor, token);
       } catch (err) {

@@ -198,6 +198,51 @@ describe("collectors/hn", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 
+  it("sets a 30s abort timeout on the Algolia fetch", async () => {
+    await hnCollectorProcessor({} as never);
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("keeps processing subsequent hits in the same competitor's batch when an earlier hit fails", async () => {
+    fetchMock.mockResolvedValue(
+      algoliaResponse([
+        { objectID: "bad", created_at_i: 1700000000, comment_text: "bad hit" },
+        { objectID: "good", created_at_i: 1700000000, comment_text: "good hit" },
+      ])
+    );
+    createSignalMock
+      .mockImplementationOnce(async () => {
+        throw new Error("insert failed");
+      })
+      .mockImplementationOnce(async (input: Record<string, unknown>) => ({ id: "s2", ...input }));
+
+    await hnCollectorProcessor({} as never);
+
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+    expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s2" });
+    // A single item's failure is logged and skipped — it's not a
+    // competitor-level failure, so the run still records success.
+    expect(recordSuccess).toHaveBeenCalledWith("hn");
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("stops attempting remaining competitors once the circuit trips mid-run", async () => {
+    const secondCompetitor = { id: "c2b", name: "Later", is_active: true };
+    listCompetitorsMock.mockResolvedValue([activeCompetitor, secondCompetitor]);
+    (isCircuitOpen as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(false) // initial job-level check
+      .mockResolvedValueOnce(false) // before competitor 1
+      .mockResolvedValueOnce(true); // before competitor 2 — breaks
+
+    await hnCollectorProcessor({} as never);
+
+    const queries = fetchMock.mock.calls.filter((call: any[]) => call[0].includes("hn.algolia.com"));
+    expect(queries).toHaveLength(1);
+    expect(queries[0][0]).toContain(encodeURIComponent("Acme"));
+  });
+
   it("registers the collect-hn worker via initHnWorker without registering at import time", () => {
     expect(registerWorkerMock).not.toHaveBeenCalled();
 
