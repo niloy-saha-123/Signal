@@ -63,6 +63,7 @@ import {
   signalClustersTable,
   competitorSignalScoresTable,
   agentLatenciesTable,
+  agentRunsTable,
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
@@ -78,21 +79,25 @@ import {
   getSignalsByIds,
   getSignalVolumeByDay,
   getLatestSignalScores,
+  createSignalScore,
   getLatencyPercentiles,
   getCompanyProfile,
   upsertCompanyProfile,
   getLatestSignalCollectedAt,
+  getFirstSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
   createPricingBaseline,
   getLatestPricingBaseline,
   createPricingDiff,
+  getRecentPricingDiffs,
   getSignalById,
   updateSignalEntities,
   updateSignalQualityScore,
   createClusterForSignalPair,
   getSignalClusterById,
   mergeSignalIntoCluster,
+  completeAgentRun,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -450,6 +455,35 @@ describe("db/queries — hn collector support", () => {
     });
   });
 
+  describe("getFirstSignalCollectedAt", () => {
+    it("selects the earliest collected_at for a competitor across all sources, oldest first", async () => {
+      const collectedAt = new Date("2026-01-01T00:00:00.000Z");
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([{ collected_at: collectedAt }]);
+
+      const result = await getFirstSignalCollectedAt("c1");
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(eq).toHaveBeenCalledWith(signalsTable.competitor_id, "c1");
+      expect(orderByMock).toHaveBeenCalledWith(asc(signalsTable.collected_at));
+      expect(limitMock).toHaveBeenCalledWith(1);
+      expect(result).toEqual(collectedAt);
+    });
+
+    it("returns undefined when this competitor has no signals at all", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      const result = await getFirstSignalCollectedAt("c1");
+
+      expect(result).toBeUndefined();
+    });
+  });
+
   describe("signalExistsBySourceUrl", () => {
     it("returns true when a signal with that source_url already exists for this competitor+source", async () => {
       fromMock.mockReturnValue({ where: whereMock });
@@ -567,12 +601,53 @@ describe("db/queries — pricing", () => {
       expect(result).toEqual(row);
     });
   });
+
+  describe("getRecentPricingDiffs", () => {
+    it("filters by competitor_id and a detected_at date window (7-day default), most recent first", async () => {
+      const rows = [{ id: "d1", competitor_id: "c1", significance: "critical" }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue(rows);
+
+      const result = await getRecentPricingDiffs("c1");
+
+      expect(fromMock).toHaveBeenCalledWith(pricingDiffsTable);
+      expect(eq).toHaveBeenCalledWith(pricingDiffsTable.competitor_id, "c1");
+
+      // and() must be called with exactly 2 predicates: competitor_id, date window.
+      expect(and).toHaveBeenCalledTimes(1);
+      expect((and as ReturnType<typeof vi.fn>).mock.calls[0]).toHaveLength(2);
+
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+      expect(intervalCall).toBeDefined();
+      expect(rawSqlText(intervalCall!)).toContain("NOW() - INTERVAL");
+      expect(intervalCall!.at(-1)).toBe(7);
+
+      expect(orderByMock).toHaveBeenCalledWith(desc(pricingDiffsTable.detected_at));
+      expect(result).toEqual(rows);
+    });
+
+    it("honors a custom days window", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([]);
+
+      await getRecentPricingDiffs("c1", 14);
+
+      const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+      expect(intervalCall!.at(-1)).toBe(14);
+    });
+  });
 });
 
 describe("db/queries — signal scores", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     selectMock.mockReturnValue({ from: fromMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
   });
 
   describe("getLatestSignalScores", () => {
@@ -602,6 +677,26 @@ describe("db/queries — signal scores", () => {
       await getLatestSignalScores("c1", 5);
 
       expect(limitMock).toHaveBeenCalledWith(5);
+    });
+  });
+
+  describe("createSignalScore", () => {
+    it("inserts the given fields and returns the created row", async () => {
+      const input = {
+        competitor_id: "c1",
+        score: 72,
+        components: { hiring: 0.4, sentiment: 0.2 },
+        delta_7d: 3.5,
+        delta_30d: -1.2,
+      };
+      const row = { id: "s1", ...input, computed_at: new Date() };
+      insertReturningMock.mockResolvedValue([row]);
+
+      const result = await createSignalScore(input);
+
+      expect(insertMock).toHaveBeenCalledWith(competitorSignalScoresTable);
+      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(result).toEqual(row);
     });
   });
 });
@@ -997,6 +1092,40 @@ describe("db/queries — signal pipeline", () => {
 
       await expect(mergeSignalIntoCluster("missing", "s1", "reddit")).rejects.toThrow("missing");
       expect(updateMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("db/queries — agent runs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockResolvedValue(undefined);
+  });
+
+  describe("completeAgentRun", () => {
+    it("sets status, outcome, and completed_at for the given run id", async () => {
+      await completeAgentRun("run-1", "completed", "alert");
+
+      expect(updateMock).toHaveBeenCalledWith(agentRunsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({
+        status: "completed",
+        outcome: "alert",
+        completed_at: expect.any(Date),
+      });
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.id, "run-1");
+      expect(updateWhereMock).toHaveBeenCalled();
+    });
+
+    it("allows an undefined outcome (e.g. a failed run with no outcome yet)", async () => {
+      await completeAgentRun("run-1", "failed");
+
+      expect(updateSetMock).toHaveBeenCalledWith({
+        status: "failed",
+        outcome: undefined,
+        completed_at: expect.any(Date),
+      });
     });
   });
 });
