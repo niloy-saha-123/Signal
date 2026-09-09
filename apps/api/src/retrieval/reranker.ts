@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { CohereClient } from "cohere-ai";
 import { withRetry } from "../lib/retry";
 import { cacheRedis } from "../lib/redis-client";
+import { logger } from "../lib/logger";
 import type { RetrievedChunk } from "./hybrid-retrieval";
 
 export interface RerankedChunk extends RetrievedChunk {
@@ -24,6 +25,22 @@ export interface RerankedChunk extends RetrievedChunk {
 }
 
 const CACHE_TTL_SECONDS = 7200;
+// Same 15-30s bound every other external client in this codebase uses (lib/embeddings.ts,
+// citation-enforcer.ts's ChatOpenAI) — Node's fetch has no default timeout, and a hang here
+// never throws, so withRetry never even gets a chance to retry.
+const COHERE_TIMEOUT_SECONDS = 15;
+
+let cohereClient: CohereClient | undefined;
+
+function getCohereClient(): CohereClient {
+  if (!cohereClient) {
+    cohereClient = new CohereClient({
+      token: process.env.COHERE_API_KEY,
+      timeoutInSeconds: COHERE_TIMEOUT_SECONDS,
+    });
+  }
+  return cohereClient;
+}
 
 // Chunk id count is unbounded — hash rather than use the raw "query|id,id,..." string
 // directly as the Redis key.
@@ -49,18 +66,35 @@ export async function rerankChunks(
   const cacheKey = buildCacheKey(query, chunks);
   const cached = await cacheRedis.get(cacheKey);
   if (cached) {
-    return JSON.parse(cached) as RerankedChunk[];
+    try {
+      return JSON.parse(cached) as RerankedChunk[];
+    } catch (error) {
+      logger.warn("rerankChunks: failed to parse cached value — treating as cache miss", {
+        cache_key: cacheKey,
+        error,
+      });
+    }
   }
 
-  const client = new CohereClient({ token: process.env.COHERE_API_KEY });
-  const response = await withRetry(() =>
-    client.rerank({
-      model: "rerank-english-v3.0",
+  const client = getCohereClient();
+  let response;
+  try {
+    response = await withRetry(() =>
+      client.rerank({
+        model: "rerank-english-v3.0",
+        query,
+        documents: chunks.map((c) => ({ text: c.text })),
+        topN: topK,
+      })
+    );
+  } catch (error) {
+    logger.error("rerankChunks: Cohere rerank failed after retries", {
       query,
-      documents: chunks.map((c) => ({ text: c.text })),
-      topN: topK,
-    })
-  );
+      chunk_count: chunks.length,
+      error,
+    });
+    throw error;
+  }
 
   const minRelevanceScore = Number(process.env.RERANKER_MIN_RELEVANCE_SCORE) || 0.4;
   // response.results arrive pre-sorted by relevance descending — don't re-sort.

@@ -21,6 +21,12 @@ vi.mock("../lib/redis-client", () => ({
   cacheRedis: { get: getMock, setex: setexMock },
 }));
 
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock("../lib/logger", () => ({ logger: loggerMock }));
+
 import { rerankChunks } from "./reranker";
 
 function chunk(overrides: Partial<RetrievedChunk> = {}): RetrievedChunk {
@@ -148,5 +154,49 @@ describe("rerankChunks", () => {
     expect(rerankMock).toHaveBeenCalledWith(
       expect.objectContaining({ topN: 3 })
     );
+  });
+
+  it("constructs the CohereClient with a bounded timeout, once, as a memoized singleton", async () => {
+    // Isolated via resetModules — other tests in this file already exercise the cache-miss
+    // path, which would have memoized the module-level singleton before this test runs.
+    vi.resetModules();
+    const fresh = await import("./reranker.js");
+    rerankMock.mockResolvedValue({ results: [{ index: 0, relevanceScore: 0.9 }] });
+
+    await fresh.rerankChunks("query1", [chunk({ id: "s1" })]);
+    await fresh.rerankChunks("query2", [chunk({ id: "s2" })]);
+
+    expect(cohereClientMock).toHaveBeenCalledTimes(1);
+    expect(cohereClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutInSeconds: 15 })
+    );
+  });
+
+  it("logs and rethrows when the Cohere call fails after retries, without swallowing the error", async () => {
+    const cohereError = new Error("Cohere unreachable");
+    rerankMock.mockRejectedValue(cohereError);
+    const chunks = [chunk({ id: "s1" })];
+
+    await expect(rerankChunks("query", chunks)).rejects.toThrow("Cohere unreachable");
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("Cohere rerank failed"),
+      expect.objectContaining({ query: "query", chunk_count: 1 })
+    );
+  });
+
+  it("treats a malformed cached JSON value as a cache miss and still calls Cohere", async () => {
+    getMock.mockResolvedValue("{not valid json");
+    rerankMock.mockResolvedValue({ results: [{ index: 0, relevanceScore: 0.9 }] });
+    const chunks = [chunk({ id: "s1" })];
+
+    const result = await rerankChunks("query", chunks);
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to parse cached value"),
+      expect.objectContaining({ cache_key: expect.any(String) })
+    );
+    expect(rerankMock).toHaveBeenCalled();
+    expect(result).toEqual([{ ...chunks[0], relevance_score: 0.9 }]);
   });
 });

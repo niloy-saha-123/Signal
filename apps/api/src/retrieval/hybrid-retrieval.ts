@@ -55,9 +55,15 @@ export async function hybridRetrieve(
   // competitor's semantic results and continue with the rest rather than failing the
   // whole multi-competitor call. BM25 results (and other competitors' semantic results)
   // still come back even if every competitor fails here.
-  const semanticSettled = await Promise.allSettled(
-    competitorIds.map((competitorId) => pineconeQuery(competitorId, queryEmbedding, topK))
-  );
+  // Neither side depends on the other's result — the semantic fan-out only needs
+  // queryEmbedding/competitorIds, the BM25 corpus fetch only needs competitorIds. Run them
+  // concurrently instead of adding a full Postgres round-trip to this latency-sensitive path.
+  const [semanticSettled, corpus] = await Promise.all([
+    Promise.allSettled(
+      competitorIds.map((competitorId) => pineconeQuery(competitorId, queryEmbedding, topK))
+    ),
+    getRecentSignalsByCompetitorIds(competitorIds),
+  ]);
   const semanticMatches = semanticSettled.flatMap((result, index) => {
     if (result.status === "fulfilled") return result.value;
     logger.warn("hybridRetrieve: pineconeQuery failed for competitor — skipping", {
@@ -76,7 +82,6 @@ export async function hybridRetrieve(
   });
 
   // BM25 side: fresh in-memory index every call (documented tradeoff above — no caching).
-  const corpus = await getRecentSignalsByCompetitorIds(competitorIds);
   const corpusById = new Map(corpus.map((signal) => [signal.id, signal]));
 
   const bm25Index = new Index();

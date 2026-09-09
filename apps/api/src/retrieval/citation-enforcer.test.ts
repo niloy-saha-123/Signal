@@ -270,14 +270,40 @@ describe("enforceCitations", () => {
     );
   });
 
-  it("throws when structured output returns a null parse (schema validation failure), and logs it", async () => {
+  it("degrades to zero claims (not a throw) when structured output returns a null parse, logging the failure", async () => {
     invokeMock.mockResolvedValue({ raw: { usage_metadata: { input_tokens: 1, output_tokens: 1 } }, parsed: null });
 
-    await expect(enforceCitations("resp", [], "q")).rejects.toThrow("schema validation");
+    const result = await enforceCitations("The response text.", [chunk()], "q");
 
+    expect(result).toEqual({ refused: false, answer: "The response text.", citations: [] });
     expect(loggerMock.error).toHaveBeenCalledWith(
       expect.stringContaining("schema validation"),
       expect.any(Object)
+    );
+    // Degrade path returns before the embedding fan-out, same as the budget-exhausted case.
+    expect(embedTextMock).not.toHaveBeenCalled();
+  });
+
+  it("truncates extracted claims to MAX_CLAIMS before the embedding fan-out, logging the truncation", async () => {
+    const manyClaims = Array.from({ length: 35 }, (_, i) => `Claim ${i}`);
+    invokeMock.mockResolvedValue(claimsResult(manyClaims));
+    const vectors: Record<string, number[]> = { Text: [1, 0] };
+    manyClaims.forEach((c) => {
+      vectors[c] = [1, 0];
+    });
+    mockVectors(vectors);
+    const chunks = [chunk({ id: "c-a", text: "Text" })];
+
+    const result = await enforceCitations("resp", chunks, "q");
+
+    expect(result.refused).toBe(false);
+    const citationResult = result as Extract<typeof result, { refused: false }>;
+    expect(citationResult.citations).toHaveLength(30);
+    // 30 claim embeddings + 1 chunk embedding, never the full 35.
+    expect(embedTextMock).toHaveBeenCalledTimes(31);
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("truncating"),
+      expect.objectContaining({ extracted_count: 35, max_claims: 30 })
     );
   });
 

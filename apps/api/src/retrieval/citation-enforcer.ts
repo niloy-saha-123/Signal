@@ -32,6 +32,11 @@ const LLM_MAX_RETRIES = 2;
 
 const UNSUPPORTED_REFUSAL_RATIO = 0.4;
 
+// Each claim fires its own concurrent embedText call — an unbounded claim count from a
+// claim-dense response multiplies real OpenAI embedding cost/latency per request with no
+// bound. Cap and truncate rather than reject the whole response.
+const MAX_CLAIMS = 30;
+
 const CLAIM_EXTRACTION_PROMPT =
   "Extract every distinct factual claim made in the following text, each as a short " +
   "standalone sentence. Return an empty array if the text makes no checkable factual " +
@@ -106,12 +111,24 @@ async function extractClaims(response: string): Promise<string[]> {
 
   // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
   // failure — it hands back parsed: null while the TS type still claims otherwise.
+  // Unlike entity-extractor.ts (BullMQ worker, job-level retry safety net), this runs
+  // synchronously inline in a chat request with no queue behind it — degrade the same way
+  // the budget-exhausted path above does (zero claims -> fully-supported passthrough)
+  // rather than throwing.
   if (!parsed) {
     logger.error("citation-enforcer: structured output failed schema validation", {
       model,
       raw_content: (raw as AIMessage)?.content,
     });
-    throw new Error("citation-enforcer: structured output failed schema validation for claim extraction");
+    return [];
+  }
+
+  if (parsed.claims.length > MAX_CLAIMS) {
+    logger.warn("citation-enforcer: truncating extracted claims to MAX_CLAIMS", {
+      extracted_count: parsed.claims.length,
+      max_claims: MAX_CLAIMS,
+    });
+    return parsed.claims.slice(0, MAX_CLAIMS);
   }
 
   return parsed.claims;

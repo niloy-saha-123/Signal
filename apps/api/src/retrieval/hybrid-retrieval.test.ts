@@ -271,4 +271,19 @@ describe("retrieval/hybrid-retrieval — hybridRetrieve", () => {
 
     expect(pineconeQueryMock).toHaveBeenCalledWith("c1", [1], 20);
   });
+
+  it("fires the Pinecone fan-out and the BM25 corpus fetch concurrently, not sequentially", async () => {
+    // pineconeQuery never resolves in this test — if getRecentSignalsByCompetitorIds were
+    // awaited only after the semantic fan-out settled, it would never be called at all.
+    pineconeQueryMock.mockReturnValue(new Promise(() => {}));
+
+    hybridRetrieve("query", ["c1"]);
+    // Flush microtasks so the embedText await, then the Promise.all's two calls, settle.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pineconeQueryMock).toHaveBeenCalled();
+    expect(getRecentSignalsByCompetitorIdsMock).toHaveBeenCalledWith(["c1"]);
+  });
 });
