@@ -17,10 +17,10 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-// intentAnalyzerNode is now real (Task 2, Part 10) — it imports db/queries and
-// lib/company-context (which in turn opens real ioredis connections at module load).
-// Mocked here so this DAG-level test stays isolated from Postgres/Redis: an empty
-// postings list drives the node down its no-LLM-call short-circuit path.
+// intentAnalyzerNode (Task 2) and sentimentClustererNode (Task 3) are now real — both
+// import db/queries and lib/company-context (which in turn opens real ioredis connections
+// at module load). Mocked here so this DAG-level test stays isolated from Postgres/Redis: an
+// empty signals list drives both nodes down their no-LLM-call short-circuit paths.
 const { getRecentSignalsByCompetitorAndSourceMock } = vi.hoisted(() => ({
   getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
 }));
@@ -36,7 +36,6 @@ vi.mock("../lib/company-context", () => ({
 import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
-  sentimentClusterer: "sentimentClustererNode: not yet implemented (Part 10) — returning no-op update",
   changeDetector: "changeDetectorNode: not yet implemented (Part 10) — returning no-op update",
   patternDetector: "patternDetectorNode: not yet implemented (Part 10) — returning no-op update",
   vulnerabilityDetector: "vulnerabilityDetectorNode: not yet implemented (Part 10) — returning no-op update",
@@ -59,14 +58,18 @@ describe("analysisGraph — compiled DAG", () => {
       has_pricing_diff: true,
     });
 
-    // (a) all expected nodes ran — intentAnalyzerNode is real now (Task 2) and takes its
-    // no-recent-postings short-circuit since getRecentSignalsByCompetitorAndSource is mocked
-    // to return [].
+    // (a) all expected nodes ran — intentAnalyzerNode and sentimentClustererNode are real now
+    // (Tasks 2-3) and take their no-recent-signals short-circuits since
+    // getRecentSignalsByCompetitorAndSource is mocked to return [].
     expect(result.hiring_intent).toEqual({
       summary: "No recent job postings found.",
       intent_level: "low",
     });
-    expect(callCountFor(LOG_MESSAGES.sentimentClusterer)).toBe(1);
+    expect(result.sentiment_clusters).toEqual({
+      summary: "No recent community discussion found.",
+      new_complaints: [],
+      chronic_complaints: [],
+    });
     expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
     // (b) changeDetector runs when has_pricing_diff is true
@@ -87,7 +90,11 @@ describe("analysisGraph — compiled DAG", () => {
       summary: "No recent job postings found.",
       intent_level: "low",
     });
-    expect(callCountFor(LOG_MESSAGES.sentimentClusterer)).toBe(1);
+    expect(result.sentiment_clusters).toEqual({
+      summary: "No recent community discussion found.",
+      new_complaints: [],
+      chronic_complaints: [],
+    });
     expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
     // (b) changeDetector is skipped when has_pricing_diff is false
