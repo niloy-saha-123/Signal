@@ -1,5 +1,6 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, sql } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, sql } from "drizzle-orm";
+import type { SignalSource } from "@signal/shared";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -44,8 +45,6 @@ export type LatencyPercentiles = {
 // Matches competitors_discovery_status_check in schema.ts.
 type DiscoveryStatus = "pending" | "in_progress" | "complete" | "failed";
 
-// Matches signals_source_check in schema.ts.
-type SignalSource = "reddit" | "hn" | "jobs" | "changelog" | "pricing";
 
 export async function createCompetitor(input: {
   name: string;
@@ -325,21 +324,50 @@ export async function updateSignalQualityScore(id: string, qualityScore: number)
     .where(eq(signalsTable.id, id));
 }
 
-export async function updateSignalCluster(id: string, clusterId: string): Promise<void> {
-  await db.update(signalsTable).set({ cluster_id: clusterId }).where(eq(signalsTable.id, id));
-}
-
-export type CreateSignalClusterInput = {
+export type CreateClusterForSignalPairInput = {
   competitor_id: string;
   canonical_summary: string;
-  contributing_sources: string[];
+  matched_signal_id: string;
+  matched_source: string;
+  new_signal_id: string;
+  new_source: string;
 };
 
-export async function createSignalCluster(
-  input: CreateSignalClusterInput
+// The whole "first duplicate pair" branch of pipeline/deduplicator.ts as one atomic
+// write. Split across createSignalCluster + mergeSignalIntoCluster + two
+// updateSignalCluster calls it was non-idempotent: a failure partway through left a
+// cluster row with no signals pointing at it, and the BullMQ retry then created a
+// second cluster or double-incremented corroboration_count. Queries are inlined
+// against `tx` rather than delegating to the single-write helpers above — same
+// pattern as upsertCompanyProfile and registry.ts's writeDiscoveryFailure.
+export async function createClusterForSignalPair(
+  input: CreateClusterForSignalPairInput
 ): Promise<SignalCluster> {
-  const [row] = await db.insert(signalClustersTable).values(input).returning();
-  return row;
+  return db.transaction(async (tx) => {
+    const contributing_sources =
+      input.matched_source === input.new_source
+        ? [input.matched_source]
+        : [input.matched_source, input.new_source];
+
+    const [cluster] = await tx
+      .insert(signalClustersTable)
+      .values({
+        competitor_id: input.competitor_id,
+        canonical_summary: input.canonical_summary,
+        contributing_sources,
+        // Two signals corroborate this cluster the moment it exists — the column
+        // defaults to 1, which is only right for a single-signal cluster.
+        corroboration_count: 2,
+      })
+      .returning();
+
+    await tx
+      .update(signalsTable)
+      .set({ cluster_id: cluster.id })
+      .where(inArray(signalsTable.id, [input.matched_signal_id, input.new_signal_id]));
+
+    return cluster;
+  });
 }
 
 export async function getSignalClusterById(id: string): Promise<SignalCluster | undefined> {
@@ -356,31 +384,44 @@ export async function getSignalClusterById(id: string): Promise<SignalCluster | 
 // landing in pipeline-deduplication concurrently (QUEUE_CONFIG concurrency: 2) can
 // race between the select and the write here — flagged for production-reviewer per
 // 07-pipeline.md, not addressed in this task.
+//
+// The cluster bump and the joining signal's cluster_id commit together: split apart, a
+// failure between them left corroboration_count already incremented while the signal
+// still looked unclustered, so the BullMQ retry incremented it a second time.
 export async function mergeSignalIntoCluster(
   clusterId: string,
+  signalId: string,
   source: string
 ): Promise<SignalCluster> {
-  const [existing] = await db
-    .select()
-    .from(signalClustersTable)
-    .where(eq(signalClustersTable.id, clusterId));
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(signalClustersTable)
+      .where(eq(signalClustersTable.id, clusterId));
 
-  if (!existing) {
-    throw new Error(`mergeSignalIntoCluster: signal cluster ${clusterId} not found`);
-  }
+    if (!existing) {
+      throw new Error(`mergeSignalIntoCluster: signal cluster ${clusterId} not found`);
+    }
 
-  const contributing_sources = existing.contributing_sources.includes(source)
-    ? existing.contributing_sources
-    : [...existing.contributing_sources, source];
+    const contributing_sources = existing.contributing_sources.includes(source)
+      ? existing.contributing_sources
+      : [...existing.contributing_sources, source];
 
-  const [row] = await db
-    .update(signalClustersTable)
-    .set({
-      contributing_sources,
-      corroboration_count: existing.corroboration_count + 1,
-      last_updated: new Date(),
-    })
-    .where(eq(signalClustersTable.id, clusterId))
-    .returning();
-  return row;
+    const [row] = await tx
+      .update(signalClustersTable)
+      .set({
+        contributing_sources,
+        corroboration_count: existing.corroboration_count + 1,
+        last_updated: new Date(),
+      })
+      .where(eq(signalClustersTable.id, clusterId))
+      .returning();
+
+    await tx
+      .update(signalsTable)
+      .set({ cluster_id: clusterId })
+      .where(eq(signalsTable.id, signalId));
+
+    return row;
+  });
 }

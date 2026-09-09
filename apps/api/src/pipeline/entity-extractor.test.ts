@@ -20,13 +20,21 @@ vi.mock("../queues/registry", () => ({
   queues: { "pipeline-quality-scoring": { add: queueAddMock } },
 }));
 
-const { selectModelMock } = vi.hoisted(() => ({
+const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
   selectModelMock: vi.fn().mockResolvedValue("gpt-4o-mini"),
+  getDailyBudgetMock: vi.fn().mockReturnValue(2.0),
 }));
 
 vi.mock("../llm/adaptive-router", () => ({
   selectModel: selectModelMock,
+  getDailyBudget: getDailyBudgetMock,
 }));
+
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock("../lib/logger", () => ({ logger: loggerMock }));
 
 const { getActivePromptMock } = vi.hoisted(() => ({
   getActivePromptMock: vi.fn().mockResolvedValue(null),
@@ -36,12 +44,14 @@ vi.mock("../llm/prompt-registry", () => ({
   getActivePrompt: getActivePromptMock,
 }));
 
-const { trackCostMock } = vi.hoisted(() => ({
+const { trackCostMock, getDailySpendMock } = vi.hoisted(() => ({
   trackCostMock: vi.fn().mockResolvedValue(0),
+  getDailySpendMock: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../llm/cost-tracker", () => ({
   trackCost: trackCostMock,
+  getDailySpend: getDailySpendMock,
 }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
@@ -105,6 +115,8 @@ describe("pipeline/entity-extractor", () => {
     vi.clearAllMocks();
     getSignalByIdMock.mockResolvedValue(signal);
     selectModelMock.mockResolvedValue("gpt-4o-mini");
+    getDailyBudgetMock.mockReturnValue(2.0);
+    getDailySpendMock.mockResolvedValue(0);
     getActivePromptMock.mockResolvedValue(null);
     trackCostMock.mockResolvedValue(0);
     updateSignalEntitiesMock.mockResolvedValue(undefined);
@@ -131,7 +143,14 @@ describe("pipeline/entity-extractor", () => {
     await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
 
     expect(selectModelMock).toHaveBeenCalledWith("gpt-4o-mini", true);
-    expect(chatOpenAIMock).toHaveBeenCalledWith({ model: "gpt-4o-mini" });
+    // timeout/maxRetries are explicit rather than inherited: LangChain's defaults
+    // (openai-node's 10-minute timeout × AsyncCaller's maxRetries: 6) can hold one of
+    // this queue's two worker slots for ~70 minutes on a hung endpoint.
+    expect(chatOpenAIMock).toHaveBeenCalledWith({
+      model: "gpt-4o-mini",
+      timeout: 30_000,
+      maxRetries: 2,
+    });
   });
 
   it("requests structured output against SignalEntitiesSchema with includeRaw so usage_metadata is reachable", async () => {
@@ -223,6 +242,101 @@ describe("pipeline/entity-extractor", () => {
     await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
 
     expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
+  });
+
+  // withStructuredOutput({ includeRaw: true }) resolves { parsed: null } on a Zod
+  // validation failure rather than throwing, while the TS type still claims
+  // SignalEntities — writing that through would set entities to NULL silently.
+  it("never writes a null parse to the signal, and logs it", async () => {
+    invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
+
+    await expect(
+      entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
+    ).resolves.toBeUndefined();
+
+    expect(updateSignalEntitiesMock).not.toHaveBeenCalled();
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("schema validation"),
+      expect.objectContaining({ signal_id: "s1" })
+    );
+  });
+
+  it("still advances the pipeline after a null parse", async () => {
+    invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
+
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
+  });
+
+  // Extraction is enrichment; quality-scoring and Pinecone indexing downstream are not.
+  it("logs and still enqueues quality-scoring when the LLM call throws", async () => {
+    invokeMock.mockRejectedValue(new Error("openai is down"));
+
+    await expect(
+      entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
+    ).resolves.toBeUndefined();
+
+    expect(updateSignalEntitiesMock).not.toHaveBeenCalled();
+    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("advancing pipeline"),
+      expect.objectContaining({ signal_id: "s1", error: "openai is down" })
+    );
+  });
+
+  it("skips the LLM entirely once the daily budget is spent, but still enqueues quality-scoring", async () => {
+    getDailyBudgetMock.mockReturnValue(2.0);
+    getDailySpendMock.mockResolvedValue(2.0);
+
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(updateSignalEntitiesMock).not.toHaveBeenCalled();
+    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("budget"),
+      expect.objectContaining({ signal_id: "s1" })
+    );
+  });
+
+  // getDailySpend fails safe to Infinity on a DB error — the budget check must then
+  // skip extraction rather than fail open into unbounded spend.
+  it("skips the LLM when getDailySpend fails safe to Infinity", async () => {
+    getDailySpendMock.mockResolvedValue(Number.POSITIVE_INFINITY);
+
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
+  });
+
+  // A retry after the LLM call already succeeded must not re-pay for it, nor write a
+  // second llm_costs / agent_latencies row for one logical extraction.
+  it("does not re-invoke the LLM when entities are already populated, but still enqueues", async () => {
+    getSignalByIdMock.mockResolvedValue({
+      ...signal,
+      entities: { prices: ["$99/month"], products: [], features: [] },
+    });
+
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+    expect(updateSignalEntitiesMock).not.toHaveBeenCalled();
+    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
+  });
+
+  it("treats an all-empty entities object as not-yet-extracted and runs the LLM", async () => {
+    getSignalByIdMock.mockResolvedValue({
+      ...signal,
+      entities: { prices: [], products: [], features: [] },
+    });
+
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(invokeMock).toHaveBeenCalled();
   });
 
   it("registers the pipeline-entity-extraction worker via initEntityExtractorWorker without registering at import time", () => {

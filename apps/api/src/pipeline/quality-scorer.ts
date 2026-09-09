@@ -59,6 +59,9 @@ const AUTHORITY_WEIGHT = 0.5;
 const RECENCY_WEIGHT = 0.4;
 const COMPLETENESS_WEIGHT = 0.1;
 
+// Ingest-time snapshot, not a live value: recency is measured from `now` at the moment
+// the job runs and is never recomputed, so a processing backlog bakes the delay into the
+// score. Accepted tradeoff — scores are used comparatively within a recent window.
 export function computeQualityScore(
   signal: Pick<Signal, "source" | "collected_at" | "title" | "raw_text">,
   now: Date = new Date()

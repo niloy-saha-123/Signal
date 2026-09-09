@@ -28,25 +28,22 @@ describe("embedText", () => {
     expect(embedQueryMock).toHaveBeenCalledWith("hello world");
     // The OpenAIEmbeddings client is a lazily-initialized module-level singleton
     // (matches vector/pinecone.ts's getIndex() pattern) — it's only constructed
-    // once across this whole test file, on whichever test runs first.
-    expect(OpenAIEmbeddingsMock).toHaveBeenCalledWith({ model: "text-embedding-3-small" });
+    // once across this whole test file, on whichever test runs first, so the
+    // constructor assertion has to live in this test.
+    // Bounded explicitly rather than inheriting LangChain's defaults (openai-node's
+    // 10-minute timeout × AsyncCaller's maxRetries: 6 ≈ 70 minutes on one worker slot).
+    expect(OpenAIEmbeddingsMock).toHaveBeenCalledWith({
+      model: "text-embedding-3-small",
+      timeout: 15_000,
+      maxRetries: 2,
+    });
   });
 
-  it("retries on a transient failure and succeeds on a later attempt", async () => {
-    embedQueryMock
-      .mockRejectedValueOnce(new Error("rate limited"))
-      .mockResolvedValueOnce([0.5, 0.6]);
-
-    const result = await embedText("retry me");
-
-    expect(result).toEqual([0.5, 0.6]);
-    expect(embedQueryMock).toHaveBeenCalledTimes(2);
-  }, 10000);
-
-  it("throws after exhausting retries on a persistent failure", async () => {
+  // Retry is the client's job now; a second withRetry layer on top multiplied the two.
+  it("does not add a second retry layer on top of the client's own", async () => {
     embedQueryMock.mockRejectedValue(new Error("always fails"));
 
     await expect(embedText("never works")).rejects.toThrow("always fails");
-    expect(embedQueryMock).toHaveBeenCalledTimes(3);
-  }, 10000);
+    expect(embedQueryMock).toHaveBeenCalledTimes(1);
+  });
 });

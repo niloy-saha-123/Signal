@@ -11,7 +11,10 @@ const DEFAULT_DAILY_BUDGET_USD = 2.0;
 
 let warnedBadBudgetEnv = false;
 
-function getDailyBudget(): number {
+// Exported so callers whose preferred model has no downgrade target (the whole
+// DOWNGRADE_MAP miss path below) can still enforce the budget as a hard stop —
+// otherwise DAILY_BUDGET_USD is unenforced for them.
+export function getDailyBudget(): number {
   const raw = process.env.DAILY_BUDGET_USD;
   const parsed = Number(raw ?? DEFAULT_DAILY_BUDGET_USD);
 

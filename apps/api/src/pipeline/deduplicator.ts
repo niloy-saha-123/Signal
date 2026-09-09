@@ -9,10 +9,10 @@ import { embedText } from "../lib/embeddings";
 import { pineconeQuery, pineconeUpsert } from "../vector/pinecone";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
+import { trackLatency } from "../lib/latency-tracker";
 import {
   getSignalById,
-  updateSignalCluster,
-  createSignalCluster,
+  createClusterForSignalPair,
   mergeSignalIntoCluster,
   type Signal,
 } from "../db/queries";
@@ -30,8 +30,16 @@ export const DEDUP_TOP_K = 5;
 // cluster row can't balloon off one long raw_text.
 export const CANONICAL_SUMMARY_MAX_LENGTH = 500;
 
+// text-embedding-3-small hard-caps at 8192 tokens and answers a longer input with a
+// non-retryable 400 — which would burn every BullMQ attempt and strand the signal
+// unindexed forever. 24k chars is roughly 6k tokens, comfortably under. Reddit
+// selftext, changelog RSS bodies and Greenhouse job descriptions all reach this
+// length as ordinary (not adversarial) input.
+export const EMBEDDING_TEXT_MAX_LENGTH = 24_000;
+
 export function buildEmbeddingText(signal: Pick<Signal, "title" | "raw_text">): string {
-  return signal.title ? `${signal.title}\n\n${signal.raw_text}` : signal.raw_text;
+  const text = signal.title ? `${signal.title}\n\n${signal.raw_text}` : signal.raw_text;
+  return text.slice(0, EMBEDDING_TEXT_MAX_LENGTH);
 }
 
 function truncate(text: string, maxLength: number): string {
@@ -51,14 +59,45 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
     return;
   }
 
-  const embedding = await embedText(buildEmbeddingText(signal));
+  // Idempotency guard, before any embedding work: this queue runs attempts: 3, and
+  // the merge/create writes below are not replay-safe (corroboration_count would
+  // double-increment). A cluster_id already set means a previous attempt got all the
+  // way through — terminal no-op, and it also skips a pointless re-embed/re-query.
+  if (signal.cluster_id) {
+    logger.info("deduplicator: signal already clustered by a previous attempt — skipping", {
+      signal_id: signal.id,
+      cluster_id: signal.cluster_id,
+    });
+    return;
+  }
 
-  // The one-time embed+index write this signal will ever get.
-  await pineconeUpsert(signal.competitor_id, [
-    { id: signal.id, values: embedding, metadata: { source: signal.source } },
-  ]);
+  const embeddingText = buildEmbeddingText(signal);
+  // raw_text is NOT NULL but not non-empty (collectors can write ""), and OpenAI 400s
+  // on empty input — the same permanent-failure shape as an over-long input.
+  if (!embeddingText.trim()) {
+    logger.warn("deduplicator: signal has no embeddable text — skipping", {
+      signal_id: signal.id,
+    });
+    return;
+  }
 
-  const matches = await pineconeQuery(signal.competitor_id, embedding, DEDUP_TOP_K);
+  // job.id is only optional on a not-yet-added Job — matches entity-extractor.ts's
+  // same fallback rather than casting.
+  const runId = job.id ?? signal.id;
+
+  // The most external I/O of any pipeline stage (one embedding + two Pinecone
+  // round-trips) — tracked as one span so it shows up in scripts/latency-report.ts.
+  const matches = await trackLatency("deduplicator", signal.competitor_id, runId, async () => {
+    const embedding = await embedText(embeddingText);
+
+    // The one-time embed+index write this signal will ever get.
+    await pineconeUpsert(signal.competitor_id, [
+      { id: signal.id, values: embedding, metadata: { source: signal.source } },
+    ]);
+
+    return pineconeQuery(signal.competitor_id, embedding, DEDUP_TOP_K);
+  });
+
   const bestMatch = matches
     .filter((match) => match.id !== signal.id && match.score >= DUPLICATE_THRESHOLD)
     .sort((a, b) => b.score - a.score)[0];
@@ -79,23 +118,38 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
   }
 
   if (matchedSignal.cluster_id) {
-    await mergeSignalIntoCluster(matchedSignal.cluster_id, signal.source);
-    await updateSignalCluster(signal.id, matchedSignal.cluster_id);
+    // Atomic: the corroboration bump and this signal's cluster_id land together, so a
+    // retry can never double-count one signal joining once.
+    const cluster = await mergeSignalIntoCluster(
+      matchedSignal.cluster_id,
+      signal.id,
+      signal.source
+    );
+    logger.info("deduplicator: signal joined an existing cluster", {
+      signal_id: signal.id,
+      cluster_id: cluster.id,
+      corroboration_count: cluster.corroboration_count,
+    });
     return;
   }
 
-  // First duplicate pair — create the cluster seeded by the matched signal's own source,
-  // then merge the new signal's source in via the same "append if not already present"
-  // logic used for every later join (mergeSignalIntoCluster also bumps corroboration_count
-  // from its default of 1 to 2, correctly reflecting that two signals now contribute).
-  const cluster = await createSignalCluster({
+  // First duplicate pair — one atomic write (see createClusterForSignalPair): the cluster
+  // row plus both signals' cluster_id, so a partial failure can't leave an orphaned
+  // cluster for a retry to duplicate.
+  const cluster = await createClusterForSignalPair({
     competitor_id: signal.competitor_id,
     canonical_summary: truncate(matchedSignal.raw_text, CANONICAL_SUMMARY_MAX_LENGTH),
-    contributing_sources: [matchedSignal.source],
+    matched_signal_id: matchedSignal.id,
+    matched_source: matchedSignal.source,
+    new_signal_id: signal.id,
+    new_source: signal.source,
   });
-  await mergeSignalIntoCluster(cluster.id, signal.source);
-  await updateSignalCluster(matchedSignal.id, cluster.id);
-  await updateSignalCluster(signal.id, cluster.id);
+  logger.info("deduplicator: created a new cluster for a duplicate pair", {
+    signal_id: signal.id,
+    matched_signal_id: matchedSignal.id,
+    cluster_id: cluster.id,
+    corroboration_count: cluster.corroboration_count,
+  });
 }
 
 // Extension point — must only be called from the standalone worker process

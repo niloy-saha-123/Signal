@@ -4,6 +4,12 @@ vi.mock("../lib/redis-client", () => ({
   redis: { __fake: "shared-redis-connection" },
 }));
 
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
+vi.mock("../lib/logger", () => ({ logger: loggerMock }));
+
 vi.mock("../reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
@@ -182,6 +188,46 @@ describe("queues/registry", () => {
   it("throws on a second registerWorker call for the same queue name", () => {
     registerWorker("collect-hn", vi.fn());
     expect(() => registerWorker("collect-hn", vi.fn())).toThrow();
+  });
+
+  // Without this every failure lands only in Redis's failed-job hash — a stuck signal
+  // is then undebuggable from logs. Wired in registerWorker so all 11 queues get it.
+  it("logs every job failure with queue, job id/data, attempt counts and the stack", () => {
+    loggerMock.error.mockClear();
+    registerWorker("analysis", vi.fn());
+    const worker = workerCtorCalls.find((c) => c.name === "analysis")
+      ?.instance as import("node:events").EventEmitter;
+    const err = new Error("boom");
+
+    worker.emit(
+      "failed",
+      { id: "job-9", data: { signal_id: "s1" }, attemptsMade: 2, opts: { attempts: 3 } },
+      err,
+      "active"
+    );
+
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("analysis"),
+      expect.objectContaining({
+        queue: "analysis",
+        job_id: "job-9",
+        job_data: { signal_id: "s1" },
+        attempts_made: 2,
+        attempts_allowed: 3,
+        error: "boom",
+        stack: err.stack,
+      })
+    );
+  });
+
+  // BullMQ can emit 'failed' with a null job (e.g. a stalled job it can't reload) —
+  // the listener must not throw inside an event handler.
+  it("survives a failed event with no job attached", () => {
+    registerWorker("collect-jobs", vi.fn());
+    const worker = workerCtorCalls.find((c) => c.name === "collect-jobs")
+      ?.instance as import("node:events").EventEmitter;
+
+    expect(() => worker.emit("failed", undefined, new Error("stalled"), "active")).not.toThrow();
   });
 });
 

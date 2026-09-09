@@ -116,10 +116,30 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
   }
   registeredWorkers.add(queueName);
 
-  return new Worker(queueName, processor, {
+  const worker = new Worker(queueName, processor, {
     connection,
     concurrency: config.concurrency,
   });
+
+  // Without this a failed job lands in Redis's failed-job hash and nowhere else,
+  // which makes a stuck signal undebuggable from logs. Wired here rather than per
+  // worker so all 11 queues get it and no future worker has to remember. Fires on
+  // every attempt, including retryable ones — attempts_made/attempts_allowed tell
+  // them apart. Additional per-queue 'failed' listeners (competitor-discovery has
+  // one) still run; EventEmitter allows many.
+  worker.on("failed", (job, err) => {
+    logger.error(`Job failed on queue "${queueName}"`, {
+      queue: queueName,
+      job_id: job?.id,
+      job_data: job?.data,
+      attempts_made: job?.attemptsMade,
+      attempts_allowed: job?.opts?.attempts ?? 1,
+      error: err?.message,
+      stack: err?.stack,
+    });
+  });
+
+  return worker;
 }
 
 // Reusable across queues whose real processing logic hasn't landed yet

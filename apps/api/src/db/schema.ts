@@ -18,6 +18,7 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { SignalSource } from "@signal/shared";
 
 // ── competitors ──────────────────────────────────────────────────────────
 // Entities being monitored. One row per `POST /api/competitors` call — the
@@ -67,7 +68,11 @@ export const signalsTable = pgTable(
     competitor_id: uuid("competitor_id")
       .notNull()
       .references(() => competitorsTable.id, { onDelete: "cascade" }),
-    source: text("source").notNull(),
+    // .$type<> is TS-inference only (same technique as `entities` below) — no
+    // migration, the column stays plain text guarded by signals_source_check.
+    // Without it Signal["source"] widens to `string` and every
+    // Record<Signal["source"], …> map downstream silently stops being exhaustive.
+    source: text("source").$type<SignalSource>().notNull(),
     source_url: text("source_url"),
     title: text("title"),
     raw_text: text("raw_text").notNull(),

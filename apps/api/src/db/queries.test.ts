@@ -87,8 +87,7 @@ import {
   getSignalById,
   updateSignalEntities,
   updateSignalQualityScore,
-  updateSignalCluster,
-  createSignalCluster,
+  createClusterForSignalPair,
   getSignalClusterById,
   mergeSignalIntoCluster,
 } from "./queries";
@@ -752,39 +751,60 @@ describe("db/queries — signal pipeline", () => {
     });
   });
 
-  describe("updateSignalCluster", () => {
-    it("sets cluster_id for the given signal id", async () => {
-      await updateSignalCluster("s1", "cluster-1");
+  describe("createClusterForSignalPair", () => {
+    const pairInput = {
+      competitor_id: "c1",
+      canonical_summary: "Acme raised a Series B",
+      matched_signal_id: "matched1",
+      matched_source: "hn",
+      new_signal_id: "s1",
+      new_source: "reddit",
+    };
 
-      expect(updateMock).toHaveBeenCalledWith(signalsTable);
-      expect(updateSetMock).toHaveBeenCalledWith({ cluster_id: "cluster-1" });
-      expect(eq).toHaveBeenCalledWith(signalsTable.id, "s1");
-      expect(updateWhereMock).toHaveBeenCalled();
+    beforeEach(() => {
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ insert: insertMock, update: updateMock })
+      );
     });
-  });
 
-  describe("createSignalCluster", () => {
-    it("inserts the given fields and returns the created row", async () => {
-      const input = {
+    it("writes the cluster row and both signals' cluster_id inside one transaction", async () => {
+      const cluster = { id: "cluster-1", competitor_id: "c1" };
+      insertReturningMock.mockResolvedValue([cluster]);
+
+      const result = await createClusterForSignalPair(pairInput);
+
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(insertMock).toHaveBeenCalledWith(signalClustersTable);
+      expect(insertValuesMock).toHaveBeenCalledWith({
         competitor_id: "c1",
         canonical_summary: "Acme raised a Series B",
-        contributing_sources: ["hn"],
-      };
-      const row = {
-        id: "cluster-1",
-        ...input,
+        contributing_sources: ["hn", "reddit"],
+        // Two signals corroborate the cluster from the moment it exists — the
+        // column's own default of 1 would undercount it.
         corroboration_count: 2,
-        first_seen_at: new Date(),
-        last_updated: new Date(),
-        created_at: new Date(),
-      };
-      insertReturningMock.mockResolvedValue([row]);
+      });
+      expect(updateMock).toHaveBeenCalledWith(signalsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({ cluster_id: "cluster-1" });
+      expect(result).toEqual(cluster);
+    });
 
-      const result = await createSignalCluster(input);
+    it("does not duplicate the source when both signals came from the same one", async () => {
+      insertReturningMock.mockResolvedValue([{ id: "cluster-1" }]);
 
-      expect(insertMock).toHaveBeenCalledWith(signalClustersTable);
-      expect(insertValuesMock).toHaveBeenCalledWith(input);
-      expect(result).toEqual(row);
+      await createClusterForSignalPair({ ...pairInput, matched_source: "reddit" });
+
+      expect(insertValuesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ contributing_sources: ["reddit"] })
+      );
+    });
+
+    // A failure partway through must not commit the cluster row on its own — that
+    // orphan is what let a BullMQ retry create a second cluster.
+    it("propagates a failure from inside the transaction so nothing is committed", async () => {
+      insertReturningMock.mockResolvedValue([{ id: "cluster-1" }]);
+      updateWhereMock.mockRejectedValueOnce(new Error("connection reset"));
+
+      await expect(createClusterForSignalPair(pairInput)).rejects.toThrow("connection reset");
     });
   });
 
@@ -812,6 +832,12 @@ describe("db/queries — signal pipeline", () => {
   });
 
   describe("mergeSignalIntoCluster", () => {
+    beforeEach(() => {
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ select: selectMock, update: updateMock })
+      );
+    });
+
     it("appends a new source, increments corroboration_count, and bumps last_updated", async () => {
       const existing = {
         id: "cluster-1",
@@ -829,7 +855,7 @@ describe("db/queries — signal pipeline", () => {
       updateWhereMock.mockReturnValue({ returning: updateReturningMock });
       updateReturningMock.mockResolvedValue([updated]);
 
-      const result = await mergeSignalIntoCluster("cluster-1", "reddit");
+      const result = await mergeSignalIntoCluster("cluster-1", "s1", "reddit");
 
       expect(fromMock).toHaveBeenCalledWith(signalClustersTable);
       expect(updateMock).toHaveBeenCalledWith(signalClustersTable);
@@ -839,6 +865,23 @@ describe("db/queries — signal pipeline", () => {
         last_updated: expect.any(Date),
       });
       expect(result).toEqual(updated);
+    });
+
+    // The corroboration bump and the joining signal's cluster_id must commit together:
+    // split apart, a failure between them let a BullMQ retry increment the count twice.
+    it("stamps the joining signal's cluster_id in the same transaction as the bump", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([
+        { id: "cluster-1", contributing_sources: ["hn"], corroboration_count: 2 },
+      ]);
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([{ id: "cluster-1" }]);
+
+      await mergeSignalIntoCluster("cluster-1", "s1", "reddit");
+
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(updateMock).toHaveBeenCalledWith(signalsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({ cluster_id: "cluster-1" });
     });
 
     it("does not double-append a source already present in contributing_sources", async () => {
@@ -857,7 +900,7 @@ describe("db/queries — signal pipeline", () => {
       updateWhereMock.mockReturnValue({ returning: updateReturningMock });
       updateReturningMock.mockResolvedValue([updated]);
 
-      const result = await mergeSignalIntoCluster("cluster-1", "reddit");
+      const result = await mergeSignalIntoCluster("cluster-1", "s1", "reddit");
 
       // Second signal from a source already in contributing_sources — the array
       // must stay exactly as it was, not grow a duplicate "reddit" entry.
@@ -873,9 +916,7 @@ describe("db/queries — signal pipeline", () => {
       fromMock.mockReturnValue({ where: whereMock });
       whereMock.mockResolvedValue([]);
 
-      await expect(mergeSignalIntoCluster("missing", "reddit")).rejects.toThrow(
-        "missing"
-      );
+      await expect(mergeSignalIntoCluster("missing", "s1", "reddit")).rejects.toThrow("missing");
       expect(updateMock).not.toHaveBeenCalled();
     });
   });
