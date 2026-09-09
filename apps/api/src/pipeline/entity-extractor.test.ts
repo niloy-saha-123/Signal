@@ -73,6 +73,7 @@ vi.mock("@langchain/openai", () => ({
   ChatOpenAI: chatOpenAIMock,
 }));
 
+import { SignalEntitiesSchema } from "@signal/shared";
 import { entityExtractorProcessor, initEntityExtractorWorker } from "./entity-extractor";
 
 const signal = {
@@ -131,6 +132,14 @@ describe("pipeline/entity-extractor", () => {
 
     expect(selectModelMock).toHaveBeenCalledWith("gpt-4o-mini", true);
     expect(chatOpenAIMock).toHaveBeenCalledWith({ model: "gpt-4o-mini" });
+  });
+
+  it("requests structured output against SignalEntitiesSchema with includeRaw so usage_metadata is reachable", async () => {
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(withStructuredOutputMock).toHaveBeenCalledWith(SignalEntitiesSchema, {
+      includeRaw: true,
+    });
   });
 
   it("uses the active prompt from the registry when one exists", async () => {
