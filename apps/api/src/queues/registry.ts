@@ -26,7 +26,8 @@
 // no per-queue spec exists for these yet.
 import { Queue, Worker, type ConnectionOptions, type Job, type Processor } from "bullmq";
 import { eq } from "drizzle-orm";
-import { redis } from "../lib/redis-client";
+import { z } from "zod";
+import { cacheRedis, redis } from "../lib/redis-client";
 import { db } from "../db/client";
 import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
@@ -169,26 +170,19 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
   return worker;
 }
 
-// Reusable across queue processors whose real processing logic has not landed
-// yet — distinct from a transient failure so logs read "not built" rather
-// than "broken".
-export class NotImplementedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotImplementedError";
-  }
-}
-
-interface CompetitorDiscoveryJobData {
-  competitor_id: string;
-  name: string;
-  domain: string;
-}
+const CompetitorDiscoveryJobDataSchema = z
+  .object({
+    competitor_id: z.string().uuid(),
+    name: z.string().trim().min(1).max(200),
+    domain: z.string().trim().min(1).max(253),
+  })
+  .strict();
+type CompetitorDiscoveryJobData = z.infer<typeof CompetitorDiscoveryJobDataSchema>;
 
 // Keep discovery orchestration here, inside the standalone worker boundary:
 // Express only enqueues the immutable job payload and never performs probes.
 async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
-  const { competitor_id, name, domain } = job.data;
+  const { competitor_id, name, domain } = CompetitorDiscoveryJobDataSchema.parse(job.data);
   const competitor = await getCompetitorById(competitor_id);
   if (!competitor) {
     throw new Error(`competitor ${competitor_id} not found`);
@@ -278,14 +272,18 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
   });
 }
 
-interface CompanyProfileUpdateJobData {
-  // The profile row is loaded by each analysis node through company-context;
-  // no payload snapshot is needed here.
-}
+const CompanyProfileUpdateJobDataSchema = z.object({}).strict();
+type CompanyProfileUpdateJobData = z.infer<typeof CompanyProfileUpdateJobDataSchema>;
 
 async function companyProfileUpdateProcessor(
   _job: Job<CompanyProfileUpdateJobData>
 ): Promise<void> {
+  CompanyProfileUpdateJobDataSchema.parse(_job.data);
+  // The API already attempts this after the DB write. Repeat it at the worker
+  // boundary so a transient API-side cache failure cannot make the queued
+  // analyses read stale company context.
+  await cacheRedis.del("company:profile");
+
   // Bounded by the active competitor set, which is admin-controlled and small
   // in Phase 0. This never replays historical runs or signals.
   const activeCompetitors = (await listCompetitors()).filter(
@@ -344,16 +342,24 @@ export function initWorkers(): {
     if (!job) return;
     const attemptsAllowed = job.opts.attempts ?? 1;
     if (job.attemptsMade < attemptsAllowed) return;
+    const parsed = CompetitorDiscoveryJobDataSchema.safeParse(job.data);
+    if (!parsed.success) {
+      logger.error("Cannot record terminal discovery failure for malformed job data", {
+        job_id: job.id,
+        issues: parsed.error.issues,
+      });
+      return;
+    }
 
     // withRetry: writeDiscoveryFailure's db.transaction can itself fail on a
     // transient Postgres blip — retry a few times before falling back to a
     // logged, silent drop, since this runs inside an event handler with
     // nothing else watching for the loss.
-    void withRetry(() => writeDiscoveryFailure(job.data.competitor_id, err), {
+    void withRetry(() => writeDiscoveryFailure(parsed.data.competitor_id, err), {
       maxAttempts: 3,
     }).catch((writeErr) => {
       logger.error("Failed to record competitor-discovery terminal failure", {
-        competitor_id: job.data.competitor_id,
+        competitor_id: parsed.data.competitor_id,
         error: writeErr,
       });
     });

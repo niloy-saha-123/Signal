@@ -102,6 +102,16 @@ describe("POST /api/competitors", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects an unbounded competitor name", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "POST", "/api/competitors", {
+      name: "x".repeat(201),
+      domain: "acme.com",
+    });
+    expect(res.status).toBe(400);
+    expect(deps.createCompetitor).not.toHaveBeenCalled();
+  });
+
   it("rejects a pricing_url whose host is not public with 400", async () => {
     const deps = makeDeps({ isPublicHostname: vi.fn(async () => false) });
     const res = await call(app(deps), "POST", "/api/competitors", {
@@ -111,6 +121,21 @@ describe("POST /api/competitors", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/public URL/);
+    expect(deps.createCompetitor).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "ftp://example.com/pricing",
+    "https://user:password@example.com/pricing",
+    "https://example.com:8443/pricing",
+  ])("rejects a non-HTTP, credentialed, or non-default override URL: %s", async (pricing_url) => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "POST", "/api/competitors", {
+      name: "Acme",
+      domain: "acme.com",
+      pricing_url,
+    });
+    expect(res.status).toBe(400);
     expect(deps.createCompetitor).not.toHaveBeenCalled();
   });
 

@@ -25,6 +25,7 @@ const PROFILE_CACHE_KEY = "company:profile";
 
 export interface CompanyProfileRouterDeps {
   getCompanyProfile: typeof queries.getCompanyProfile;
+  getCompetitorsByIds: typeof queries.getCompetitorsByIds;
   upsertCompanyProfile: typeof queries.upsertCompanyProfile;
   invalidateProfileCache: () => Promise<unknown>;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
@@ -32,6 +33,7 @@ export interface CompanyProfileRouterDeps {
 
 export const defaultCompanyProfileRouterDeps: CompanyProfileRouterDeps = {
   getCompanyProfile: queries.getCompanyProfile,
+  getCompetitorsByIds: queries.getCompetitorsByIds,
   upsertCompanyProfile: queries.upsertCompanyProfile,
   invalidateProfileCache: () => cacheRedis.del(PROFILE_CACHE_KEY),
   enqueue: (queue, data) => queues[queue].add(queue, data),
@@ -68,7 +70,21 @@ export function createCompanyProfileRouter(
         return;
       }
 
-      const saved = await deps.upsertCompanyProfile(parsed.data);
+      const primaryIds = [...new Set(parsed.data.primary_competitor_ids)];
+      if (primaryIds.length > 0) {
+        const found = await deps.getCompetitorsByIds(primaryIds);
+        const foundIds = new Set(found.map((competitor) => competitor.id));
+        const missing = primaryIds.filter((id) => !foundIds.has(id));
+        if (missing.length > 0) {
+          res.status(400).json({ error: "unknown_primary_competitor", missing });
+          return;
+        }
+      }
+
+      const saved = await deps.upsertCompanyProfile({
+        ...parsed.data,
+        primary_competitor_ids: primaryIds,
+      });
 
       // The write succeeded. A stale cache self-heals on TTL and the update
       // queue is documented no-retry, so neither failure fails the request.

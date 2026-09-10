@@ -86,4 +86,16 @@ describe("standalone worker runtime", () => {
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);
   });
+
+  it("closes workers already constructed when a later worker fails during startup", async () => {
+    mocks.initJobs.mockImplementationOnce(() => {
+      throw new Error("jobs worker misconfigured");
+    });
+
+    const runtime = createWorkerRuntime();
+    await expect(runtime.start()).rejects.toThrow("jobs worker misconfigured");
+
+    // Two registry workers plus Reddit and HN were created before Jobs failed.
+    expect(mocks.workerClose).toHaveBeenCalledTimes(4);
+  });
 });

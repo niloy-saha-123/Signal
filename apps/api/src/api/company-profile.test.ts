@@ -32,10 +32,12 @@ async function call(
 }
 
 const VALID_BODY = { product_description: "A competitive-intel tool" };
+const COMPETITOR_ID = "11111111-1111-4111-8111-111111111111";
 
 function makeDeps(over: Partial<CompanyProfileRouterDeps> = {}): CompanyProfileRouterDeps {
   return {
     getCompanyProfile: vi.fn(async () => null) as any,
+    getCompetitorsByIds: vi.fn(async (ids: string[]) => ids.map((id) => ({ id }))) as any,
     upsertCompanyProfile: vi.fn(async (input: any) => ({ id: "p1", ...input })) as any,
     invalidateProfileCache: vi.fn(async () => 1),
     enqueue: vi.fn(async () => undefined),
@@ -89,6 +91,29 @@ describe("POST /api/company-profile", () => {
   it("400 when required product_description is missing", async () => {
     const res = await call(app(makeDeps()), "POST", "/api/company-profile", { icp_company_size: "SMB" });
     expect(res.status).toBe(400);
+  });
+
+  it("400 when prompt-bearing profile text exceeds its semantic bound", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "POST", "/api/company-profile", {
+      product_description: "x".repeat(10_001),
+    });
+    expect(res.status).toBe(400);
+    expect(deps.upsertCompanyProfile).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown primary competitor ids before persisting", async () => {
+    const deps = makeDeps({ getCompetitorsByIds: vi.fn(async () => []) as any });
+    const res = await call(app(deps), "POST", "/api/company-profile", {
+      ...VALID_BODY,
+      primary_competitor_ids: [COMPETITOR_ID],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "unknown_primary_competitor",
+      missing: [COMPETITOR_ID],
+    });
+    expect(deps.upsertCompanyProfile).not.toHaveBeenCalled();
   });
 
   it("still 200 when the cache invalidation throws", async () => {

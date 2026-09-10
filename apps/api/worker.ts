@@ -34,7 +34,7 @@ type ClosableWorker = Pick<Worker, "close">;
 
 export interface WorkerRuntimeDeps {
   registerSchedules: () => Promise<void>;
-  initAllWorkers: () => ClosableWorker[];
+  initAllWorkers: () => ClosableWorker[] | Promise<ClosableWorker[]>;
   closeQueues: () => Promise<void>;
   closeRedis: () => Promise<void>;
   closeDatabase: () => Promise<void>;
@@ -42,21 +42,35 @@ export interface WorkerRuntimeDeps {
 
 const defaultDeps: WorkerRuntimeDeps = {
   registerSchedules: registerCollectorSchedules,
-  initAllWorkers: () => {
-    const registryWorkers = initWorkers();
-    return [
-      registryWorkers.competitorDiscoveryWorker,
-      registryWorkers.companyProfileUpdateWorker,
-      initRedditWorker(),
-      initHnWorker(),
-      initJobsWorker(),
-      initChangelogWorker(),
-      initPricingWorker(),
-      initEntityExtractorWorker(),
-      initQualityScorerWorker(),
-      initDeduplicatorWorker(),
-      initAnalysisWorker(),
-    ];
+  initAllWorkers: async () => {
+    const initialized: ClosableWorker[] = [];
+    try {
+      const registryWorkers = initWorkers();
+      initialized.push(
+        registryWorkers.competitorDiscoveryWorker,
+        registryWorkers.companyProfileUpdateWorker
+      );
+      for (const initialize of [
+        initRedditWorker,
+        initHnWorker,
+        initJobsWorker,
+        initChangelogWorker,
+        initPricingWorker,
+        initEntityExtractorWorker,
+        initQualityScorerWorker,
+        initDeduplicatorWorker,
+        initAnalysisWorker,
+      ]) {
+        initialized.push(initialize());
+      }
+      return initialized;
+    } catch (error) {
+      // Array literals lose already-created elements if a later constructor
+      // throws. Keep the incremental list and close it here so a startup
+      // failure cannot strand Redis-backed Worker handles.
+      await Promise.allSettled(initialized.map((worker) => worker.close()));
+      throw error;
+    }
   },
   closeQueues: () =>
     Promise.allSettled(Object.values(queues).map((queue) => queue.close())).then(() => undefined),
@@ -72,6 +86,21 @@ async function attemptAll(operations: Array<() => Promise<unknown>>): Promise<vo
   if (failures.length > 0) throw new AggregateError(failures, "Worker resource shutdown failed");
 }
 
+async function closeWorkerWithDeadline(worker: ClosableWorker): Promise<void> {
+  let timedOut = false;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, 30_000);
+    timeoutHandle.unref();
+  });
+  await Promise.race([worker.close(), timeout]);
+  if (timeoutHandle) clearTimeout(timeoutHandle);
+  if (timedOut) await worker.close(true);
+}
+
 export function createWorkerRuntime(deps: WorkerRuntimeDeps = defaultDeps) {
   let workers: ClosableWorker[] = [];
   let started = false;
@@ -82,7 +111,7 @@ export function createWorkerRuntime(deps: WorkerRuntimeDeps = defaultDeps) {
       if (started) throw new Error("Worker runtime already started");
       await deps.registerSchedules();
       try {
-        workers = deps.initAllWorkers();
+        workers = await deps.initAllWorkers();
         started = true;
         logger.info("Signal worker runtime started", { worker_count: workers.length });
       } catch (error) {
@@ -92,12 +121,23 @@ export function createWorkerRuntime(deps: WorkerRuntimeDeps = defaultDeps) {
     },
     close(): Promise<void> {
       if (closePromise) return closePromise;
-      closePromise = attemptAll([
-        ...workers.map((worker) => () => worker.close()),
-        deps.closeQueues,
-        deps.closeRedis,
-        deps.closeDatabase,
-      ]);
+      closePromise = (async () => {
+        const failures: unknown[] = [];
+        for (const phase of [
+          workers.map((worker) => () => closeWorkerWithDeadline(worker)),
+          [deps.closeQueues],
+          [deps.closeRedis, deps.closeDatabase],
+        ]) {
+          try {
+            await attemptAll(phase);
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Worker resource shutdown failed");
+        }
+      })();
       return closePromise;
     },
   };

@@ -61,7 +61,16 @@ async function overrideUrlIsPublic(
   if (url === undefined) return true;
   let host: string;
   try {
-    host = new URL(url).hostname;
+    const parsed = new URL(url);
+    if (
+      (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port
+    ) {
+      return false;
+    }
+    host = parsed.hostname;
   } catch {
     return false;
   }

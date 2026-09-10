@@ -279,7 +279,9 @@ describe("db/queries — signals", () => {
     it("filters by competitor_id, source, and a created_at date window (7-day default)", async () => {
       const rows = [{ id: "s1", competitor_id: "c1", source: "jobs" }];
       fromMock.mockReturnValue({ where: whereMock });
-      whereMock.mockResolvedValue(rows);
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
 
       const result = await getRecentSignalsByCompetitorAndSource("c1", "jobs");
 
@@ -300,12 +302,16 @@ describe("db/queries — signals", () => {
       expect(intervalCall!.at(-1)).toBe(7);
 
       expect(whereMock).toHaveBeenCalled();
+      expect(orderByMock).toHaveBeenCalledWith(desc(signalsTable.created_at));
+      expect(limitMock).toHaveBeenCalledWith(500);
       expect(result).toEqual(rows);
     });
 
     it("honors a custom days window", async () => {
       fromMock.mockReturnValue({ where: whereMock });
-      whereMock.mockResolvedValue([]);
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
 
       await getRecentSignalsByCompetitorAndSource("c1", "reddit", 14);
 
@@ -663,7 +669,8 @@ describe("db/queries — pricing", () => {
       const rows = [{ id: "d1", competitor_id: "c1", significance: "critical" }];
       fromMock.mockReturnValue({ where: whereMock });
       whereMock.mockReturnValue({ orderBy: orderByMock });
-      orderByMock.mockResolvedValue(rows);
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
 
       const result = await getRecentPricingDiffs("c1");
 
@@ -681,13 +688,15 @@ describe("db/queries — pricing", () => {
       expect(intervalCall!.at(-1)).toBe(7);
 
       expect(orderByMock).toHaveBeenCalledWith(desc(pricingDiffsTable.detected_at));
+      expect(limitMock).toHaveBeenCalledWith(500);
       expect(result).toEqual(rows);
     });
 
     it("honors a custom days window", async () => {
       fromMock.mockReturnValue({ where: whereMock });
       whereMock.mockReturnValue({ orderBy: orderByMock });
-      orderByMock.mockResolvedValue([]);
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
 
       await getRecentPricingDiffs("c1", 14);
 
@@ -904,35 +913,20 @@ describe("db/queries — company profile", () => {
   });
 
   describe("upsertCompanyProfile", () => {
-    it("updates the existing row when one is present", async () => {
-      const existing = { id: "p1", product_description: "Old description" };
-      const updated = { id: "p1", ...profileInput };
-      limitMock.mockResolvedValue([existing]);
-      updateReturningMock.mockResolvedValue([updated]);
-
-      const result = await upsertCompanyProfile(profileInput);
-
-      expect(transactionMock).toHaveBeenCalled();
-      expect(updateMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(updateSetMock).toHaveBeenCalledWith(
-        expect.objectContaining({ ...profileInput, updated_at: expect.any(Date) })
-      );
-      expect(eq).toHaveBeenCalledWith(companyProfileTable.id, "p1");
-      expect(insertMock).not.toHaveBeenCalled();
-      expect(result).toEqual(updated);
-    });
-
-    it("inserts a new row when the table is empty", async () => {
+    it("atomically upserts the singleton row", async () => {
       const inserted = { id: "p2", ...profileInput };
-      limitMock.mockResolvedValue([]);
-      insertReturningMock.mockResolvedValue([inserted]);
+      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
+      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
+      onConflictReturningMock.mockResolvedValueOnce([inserted]);
 
       const result = await upsertCompanyProfile(profileInput);
 
-      expect(transactionMock).toHaveBeenCalled();
       expect(insertMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(insertValuesMock).toHaveBeenCalledWith(profileInput);
-      expect(updateMock).not.toHaveBeenCalled();
+      expect(insertValuesMock).toHaveBeenCalledWith({ ...profileInput, singleton: true });
+      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
+        target: companyProfileTable.singleton,
+        set: { ...profileInput, singleton: true, updated_at: expect.any(Date) },
+      });
       expect(result).toEqual(inserted);
     });
   });
@@ -1206,6 +1200,8 @@ describe("db/queries — agent runs", () => {
         completed_at: expect.any(Date),
       });
       expect(eq).toHaveBeenCalledWith(agentRunsTable.id, "run-1");
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.status, "running");
+      expect(and).toHaveBeenCalled();
       expect(updateWhereMock).toHaveBeenCalled();
     });
 

@@ -107,9 +107,10 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
         clientGone = true;
         ac.abort();
       };
-      // `req` close covers a hang-up before the response stream is torn down;
-      // `res` close covers the client dropping the SSE connection mid-stream.
-      req.on("close", onClose);
+      // IncomingMessage `close` also fires after a normally completed request
+      // body on modern Node, so it is not a disconnect signal. `aborted` is
+      // premature-request-only; response `close` covers an SSE hang-up.
+      req.on("aborted", onClose);
       res.on("close", onClose);
 
       let runSettled = false;
@@ -150,7 +151,7 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
         res.write(`event: error\ndata: ${JSON.stringify({ error: "chat_failed" })}\n\n`);
       } finally {
         clearInterval(heartbeat);
-        req.removeListener("close", onClose);
+        req.removeListener("aborted", onClose);
         res.removeListener("close", onClose);
         if (!res.writableEnded) res.end();
       }

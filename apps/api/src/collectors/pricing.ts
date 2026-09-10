@@ -14,9 +14,11 @@ import {
   createSignal,
   type PricingSignificance,
 } from "../db/queries";
+import { assertPublicUrl } from "../lib/safe-fetch";
 
 const SERVICE_NAME = "pricing";
 const SOURCE = "pricing" as const;
+const MAX_PRICING_TEXT_CHARS = 2_000_000;
 
 // Mandatory pattern per .claude/skills/signal-scraping/SKILL.md — pricing
 // pages are JS-rendered/anti-bot, Cheerio can't see the real content.
@@ -34,12 +36,28 @@ async function scrapePricingPage(url: string): Promise<string> {
     await page.setExtraHTTPHeaders({
       "User-Agent": "Mozilla/5.0 (compatible; Signal/1.0; +https://signal.app)",
     });
+    // Validate the main navigation, every redirect and every subresource.
+    // Persisted pricing URLs are user/discovery influenced; Playwright's own
+    // redirect following otherwise turns a public 302 into an internal fetch.
+    await page.route("**/*", async (route) => {
+      try {
+        await assertPublicUrl(route.request().url());
+        await route.continue();
+      } catch (error) {
+        logger.warn("pricing collector blocked a non-public browser request", {
+          url: route.request().url(),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await route.abort("blockedbyclient");
+      }
+    });
     await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
-    return await page.evaluate(() => {
+    const text = await page.evaluate(() => {
       // @ts-expect-error — runs inside the browser page, not Node; `document` is a
       // DOM global this project's Node-only tsconfig lib (ES2022, no "dom") doesn't declare.
       return document.body.innerText;
     });
+    return text.slice(0, MAX_PRICING_TEXT_CHARS);
   } finally {
     await browser.close(); // ALWAYS in finally — non-negotiable
   }

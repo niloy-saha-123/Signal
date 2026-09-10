@@ -117,7 +117,8 @@ export async function getCompetitorDiscoveryLog(
 export async function getRecentSignalsByCompetitorAndSource(
   competitorId: string,
   source: SignalSource,
-  days = 7
+  days = 7,
+  limit = 500
 ): Promise<Signal[]> {
   return db
     .select()
@@ -128,7 +129,9 @@ export async function getRecentSignalsByCompetitorAndSource(
         eq(signalsTable.source, source),
         sql`${signalsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`
       )
-    );
+    )
+    .orderBy(desc(signalsTable.created_at))
+    .limit(analysisInputLimit(limit));
 }
 
 // Retrieval pipeline source — fetch recent signals across multiple competitors
@@ -277,6 +280,11 @@ function feedLimit(value: number): number {
   return Number.isFinite(floored) ? Math.max(1, Math.min(100, floored)) : DEFAULT_FEED_LIMIT;
 }
 
+function analysisInputLimit(value: number): number {
+  const floored = Math.floor(value);
+  return Number.isFinite(floored) ? Math.max(1, Math.min(500, floored)) : 500;
+}
+
 // Returns limit + 1 rows so the HTTP boundary can determine whether a next
 // cursor exists without a separate COUNT query. The cursor includes both sort
 // columns, preventing duplicate/omitted rows when timestamps are equal.
@@ -399,7 +407,8 @@ export async function createPricingDiff(input: CreatePricingDiffInput): Promise<
 // getRecentSignalsByCompetitorAndSource above.
 export async function getRecentPricingDiffs(
   competitorId: string,
-  days = 7
+  days = 7,
+  limit = 500
 ): Promise<PricingDiff[]> {
   return db
     .select()
@@ -410,7 +419,8 @@ export async function getRecentPricingDiffs(
         sql`${pricingDiffsTable.detected_at} >= NOW() - INTERVAL '1 day' * ${days}`
       )
     )
-    .orderBy(desc(pricingDiffsTable.detected_at));
+    .orderBy(desc(pricingDiffsTable.detected_at))
+    .limit(analysisInputLimit(limit));
 }
 
 // SynthesisAgent's exact query — latest N scores for one competitor, backed
@@ -493,27 +503,18 @@ export async function getCompanyProfile(): Promise<CompanyProfile | null> {
   return row ?? null;
 }
 
-// Select-then-write inside a transaction (same pattern as
-// queues/registry.ts's writeDiscoveryFailure): update the existing row if
-// one exists, insert otherwise. Not high-concurrency (single-tenant,
-// admin-configured), so this is simpler than an ON CONFLICT upsert against
-// a fixed known id.
+// One atomic singleton upsert. Two concurrent profile mutations cannot both
+// observe an empty table and make one request fail on the unique constraint.
 export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<CompanyProfile> {
-  return db.transaction(async (tx) => {
-    const [existing] = await tx.select().from(companyProfileTable).limit(1);
-
-    if (existing) {
-      const [row] = await tx
-        .update(companyProfileTable)
-        .set({ ...input, updated_at: new Date() })
-        .where(eq(companyProfileTable.id, existing.id))
-        .returning();
-      return row;
-    }
-
-    const [row] = await tx.insert(companyProfileTable).values(input).returning();
-    return row;
-  });
+  const [row] = await db
+    .insert(companyProfileTable)
+    .values({ ...input, singleton: true })
+    .onConflictDoUpdate({
+      target: companyProfileTable.singleton,
+      set: { ...input, singleton: true, updated_at: new Date() },
+    })
+    .returning();
+  return row;
 }
 
 // ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
@@ -675,7 +676,7 @@ export async function completeAgentRun(
   await db
     .update(agentRunsTable)
     .set({ status, outcome, completed_at: new Date() })
-    .where(eq(agentRunsTable.id, runId));
+    .where(and(eq(agentRunsTable.id, runId), eq(agentRunsTable.status, "running")));
 }
 
 // A worker timeout is a give-up boundary, not a guarantee that all nested LLM

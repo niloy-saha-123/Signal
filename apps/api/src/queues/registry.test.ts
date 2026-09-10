@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const { cacheDeleteMock } = vi.hoisted(() => ({
+  cacheDeleteMock: vi.fn().mockResolvedValue(1),
+}));
 vi.mock("../lib/redis-client", () => ({
   redis: { __fake: "shared-redis-connection" },
+  cacheRedis: { del: cacheDeleteMock },
 }));
 
 const { loggerMock } = vi.hoisted(() => ({
@@ -128,9 +132,11 @@ import {
   queues,
   registerWorker,
   initWorkers,
-  NotImplementedError,
   type QueueName,
 } from "./registry";
+
+const COMP_ID = "11111111-1111-4111-8111-111111111111";
+const COMP_42_ID = "42424242-4242-4242-8242-424242424242";
 
 // Importing the module (above) must not have constructed any Workers — only
 // Queues are import-time side effects. Snapshot before calling initWorkers()
@@ -281,7 +287,7 @@ describe("queues/registry", () => {
 function fakeJob(overrides: { competitor_id?: string; attemptsMade?: number; attempts?: number } = {}) {
   return {
     data: {
-      competitor_id: overrides.competitor_id ?? "comp-1",
+      competitor_id: overrides.competitor_id ?? COMP_ID,
       name: "Acme",
       domain: "acme.com",
     },
@@ -299,7 +305,7 @@ describe("competitor-discovery worker", () => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     getCompetitorByIdMock.mockResolvedValue({
-      id: "comp-1",
+      id: COMP_ID,
       name: "Acme",
       domain: "acme.com",
       subreddits: ["acme"],
@@ -345,6 +351,13 @@ describe("competitor-discovery worker", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed discovery job data before database work", async () => {
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+    await expect(processor(fakeJob({ competitor_id: "not-a-uuid" }))).rejects.toThrow();
+    expect(getCompetitorByIdMock).not.toHaveBeenCalled();
+    expect(discoverCompetitorMock).not.toHaveBeenCalled();
+  });
+
   it("loads current fields, marks discovery in progress, discovers, finalizes, then records success", async () => {
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
     const result = await discoverCompetitorMock();
@@ -352,10 +365,10 @@ describe("competitor-discovery worker", () => {
 
     await expect(processor(fakeJob())).resolves.toBeUndefined();
 
-    expect(getCompetitorByIdMock).toHaveBeenCalledWith("comp-1");
-    expect(updateDiscoveryStatusMock).toHaveBeenCalledWith("comp-1", "in_progress");
+    expect(getCompetitorByIdMock).toHaveBeenCalledWith(COMP_ID);
+    expect(updateDiscoveryStatusMock).toHaveBeenCalledWith(COMP_ID, "in_progress");
     expect(discoverCompetitorMock).toHaveBeenCalledWith({
-      competitor_id: "comp-1",
+      competitor_id: COMP_ID,
       name: "Acme",
       domain: "acme.com",
       existing: {
@@ -366,7 +379,7 @@ describe("competitor-discovery worker", () => {
         changelog_rss: "https://acme.com/feed.xml",
       },
     });
-    expect(finalizeDiscoveryMock).toHaveBeenCalledWith("comp-1", result);
+    expect(finalizeDiscoveryMock).toHaveBeenCalledWith(COMP_ID, result);
     expect(updateDiscoveryStatusMock.mock.invocationCallOrder[0]).toBeLessThan(
       discoverCompetitorMock.mock.invocationCallOrder[0]
     );
@@ -383,7 +396,7 @@ describe("competitor-discovery worker", () => {
     "skips all work when the competitor is already %s",
     async (status) => {
       getCompetitorByIdMock.mockResolvedValueOnce({
-        id: "comp-1",
+        id: COMP_ID,
         subreddits: [],
         greenhouse_token: null,
         lever_token: null,
@@ -434,7 +447,7 @@ describe("competitor-discovery worker", () => {
 
     expect(loggerMock.warn).toHaveBeenCalledWith(
       expect.stringContaining("no fields discovered"),
-      { competitor_id: "comp-1" }
+      { competitor_id: COMP_ID }
     );
   });
 
@@ -460,13 +473,13 @@ describe("competitor-discovery worker", () => {
     getCompetitorByIdMock.mockResolvedValueOnce(undefined);
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
 
-    await expect(processor(fakeJob())).rejects.toThrow("competitor comp-1 not found");
+    await expect(processor(fakeJob())).rejects.toThrow(`competitor ${COMP_ID} not found`);
     expect(updateDiscoveryStatusMock).not.toHaveBeenCalled();
     expect(discoverCompetitorMock).not.toHaveBeenCalled();
     expect(finalizeDiscoveryMock).not.toHaveBeenCalled();
     expect(recordFailure).toHaveBeenCalledWith(
       "competitor-discovery",
-      "competitor comp-1 not found"
+      `competitor ${COMP_ID} not found`
     );
     expect(recordSuccess).not.toHaveBeenCalled();
   });
@@ -492,7 +505,7 @@ describe("competitor-discovery worker", () => {
 
   it("writes exactly one competitor_discovery_log row and flips discovery_status to failed, atomically, once retries are exhausted", async () => {
     const worker = getRegisteredWorker().instance as import("node:events").EventEmitter;
-    const job = fakeJob({ competitor_id: "comp-42", attemptsMade: 2, attempts: 2 });
+    const job = fakeJob({ competitor_id: COMP_42_ID, attemptsMade: 2, attempts: 2 });
 
     worker.emit("failed", job, new Error("nope"), "active");
     await flushAsync();
@@ -505,7 +518,7 @@ describe("competitor-discovery worker", () => {
     expect(insertValuesMock).toHaveBeenCalledTimes(1);
     const row = insertValuesMock.mock.calls[0][0];
     expect(row).toEqual({
-      competitor_id: "comp-42",
+      competitor_id: COMP_42_ID,
       field_name: "subreddits",
       status: "error",
       error_message: expect.stringContaining("nope"),
@@ -519,7 +532,7 @@ describe("competitor-discovery worker", () => {
   it("retries the terminal-failure DB write on a transient failure instead of dropping it", async () => {
     transactionMock.mockRejectedValueOnce(new Error("connection reset"));
     const worker = getRegisteredWorker().instance as import("node:events").EventEmitter;
-    const job = fakeJob({ competitor_id: "comp-7", attemptsMade: 2, attempts: 2 });
+    const job = fakeJob({ competitor_id: "00000000-0000-4000-8000-000000000007", attemptsMade: 2, attempts: 2 });
 
     worker.emit("failed", job, new Error("nope"), "active");
     // withRetry backs off ~500ms-1s between attempts by default — give it room.
@@ -558,6 +571,7 @@ describe("company-profile-update worker", () => {
       .mockResolvedValueOnce([]);
     failRunIfRunningMock.mockResolvedValue(undefined);
     queueAddMock.mockResolvedValue(undefined);
+    cacheDeleteMock.mockResolvedValue(1);
   });
 
   function getRegisteredWorker() {
@@ -577,6 +591,7 @@ describe("company-profile-update worker", () => {
     const job = { data: {} };
 
     await expect(processor(job)).resolves.toBeUndefined();
+    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile");
     expect(createAgentRunMock).toHaveBeenCalledTimes(2);
     expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
       competitor_id: "active-1",
@@ -597,5 +612,21 @@ describe("company-profile-update worker", () => {
       has_pricing_diff: false,
     });
     expect(getRecentPricingDiffsMock).not.toHaveBeenCalledWith("inactive-1", expect.anything());
+  });
+
+  it("does not fan out stale context when cache invalidation fails", async () => {
+    cacheDeleteMock.mockRejectedValueOnce(new Error("redis down"));
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await expect(processor({ data: {} })).rejects.toThrow("redis down");
+    expect(createAgentRunMock).not.toHaveBeenCalled();
+    expect(queueAddMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown company-profile job fields", async () => {
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+    await expect(processor({ data: { unexpected: true } })).rejects.toThrow();
+    expect(cacheDeleteMock).not.toHaveBeenCalled();
+    expect(createAgentRunMock).not.toHaveBeenCalled();
   });
 });

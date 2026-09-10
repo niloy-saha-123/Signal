@@ -104,7 +104,13 @@ describe("competitor-discovery worker — real circuit breaker", () => {
     const { competitorDiscoveryWorker } = initWorkers();
     const processor = (competitorDiscoveryWorker as unknown as { processor: (job: unknown) => Promise<void> })
       .processor;
-    const job = { data: { competitor_id: "comp-1", name: "Acme", domain: "acme.com" } };
+    const job = {
+      data: {
+        competitor_id: "00000000-0000-4000-8000-000000000001",
+        name: "Acme",
+        domain: "acme.com",
+      },
+    };
 
     for (let i = 0; i < 5; i++) {
       await expect(processor(job)).rejects.toThrow("discovery probe failed");

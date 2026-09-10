@@ -461,6 +461,17 @@ describe("agents/chat/chat-agent — final-result cache", () => {
     expect(cacheSetexMock.mock.calls[0][0]).toBe(cacheSetexMock.mock.calls[1][0]);
   });
 
+  it("changes the cache key when company context changes", async () => {
+    getCompanyContextMock
+      .mockResolvedValueOnce("ABOUT THE USER'S COMPANY: Old positioning")
+      .mockResolvedValueOnce("ABOUT THE USER'S COMPANY: New positioning");
+
+    await runChatAgent(input());
+    await runChatAgent(input());
+
+    expect(cacheGetMock.mock.calls[0][0]).not.toBe(cacheGetMock.mock.calls[1][0]);
+  });
+
   it("caches only the citation-enforced final result for four hours", async () => {
     const result = await runChatAgent(input());
 
@@ -586,6 +597,26 @@ describe("agents/chat/chat-agent — cancellation and prompt-injection boundary"
     expect(rerankChunksMock).not.toHaveBeenCalled();
     expect(chatAnthropicMock).not.toHaveBeenCalled();
     expect(cacheSetexMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects promptly when a retrieval dependency remains pending after disconnect", async () => {
+    const controller = new AbortController();
+    let resolveRetrieval!: (chunks: RetrievedChunk[]) => void;
+    hybridRetrieveMock.mockReturnValueOnce(
+      new Promise<RetrievedChunk[]>((resolve) => {
+        resolveRetrieval = resolve;
+      })
+    );
+
+    const pending = runChatAgent(input(), { signal: controller.signal });
+    const rejection = expect(pending).rejects.toThrow();
+    await Promise.resolve();
+    controller.abort();
+
+    await rejection;
+    expect(chatAnthropicMock).not.toHaveBeenCalled();
+    expect(cacheSetexMock).not.toHaveBeenCalled();
+    resolveRetrieval([retrieved()]);
   });
 
   it("passes the request signal into the Anthropic call", async () => {

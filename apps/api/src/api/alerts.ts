@@ -1,7 +1,7 @@
 // Express route for alert history.
 //
 // GET /api/alerts — keyset-paginated (created_at, id desc). Optional filters:
-// competitor_ids (comma-separated), cursor, limit. Returns
+// Required competitor_ids (comma-separated), optional cursor/limit. Returns
 // { data, next_cursor } with next_cursor an opaque string or null.
 import express, { Router } from "express";
 import { z } from "zod";
@@ -24,7 +24,7 @@ const csvUuids = z
 
 const QuerySchema = z
   .object({
-    competitor_ids: csvUuids.optional(),
+    competitor_ids: csvUuids,
     cursor: z.string().optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
   })

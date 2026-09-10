@@ -40,7 +40,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("GET /api/alerts", () => {
   it("short page → null next_cursor", async () => {
     const deps: AlertRouterDeps = { listAlertFeed: vi.fn(async () => rows(2)) as any };
-    const res = await call(app(deps), "/api/alerts?limit=10");
+    const res = await call(app(deps), `/api/alerts?competitor_ids=${UUID}&limit=10`);
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.next_cursor).toBeNull();
@@ -48,7 +48,7 @@ describe("GET /api/alerts", () => {
 
   it("full page → next_cursor set and decodable", async () => {
     const deps: AlertRouterDeps = { listAlertFeed: vi.fn(async () => rows(4)) as any };
-    const res = await call(app(deps), "/api/alerts?limit=3");
+    const res = await call(app(deps), `/api/alerts?competitor_ids=${UUID}&limit=3`);
     expect(res.body.data).toHaveLength(3);
     expect(decodeCursor(res.body.next_cursor).id).toBe(rowId(2));
   });
@@ -73,5 +73,12 @@ describe("GET /api/alerts", () => {
       competitor_ids: [UUID],
       limit: 50,
     });
+  });
+
+  it("400 when competitor_ids is omitted", async () => {
+    const deps: AlertRouterDeps = { listAlertFeed: vi.fn(async () => []) as any };
+    const res = await call(app(deps), "/api/alerts?limit=10");
+    expect(res.status).toBe(400);
+    expect(deps.listAlertFeed).not.toHaveBeenCalled();
   });
 });

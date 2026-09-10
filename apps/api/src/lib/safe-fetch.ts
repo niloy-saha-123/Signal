@@ -121,7 +121,7 @@ export async function isPublicHostname(host: string): Promise<boolean> {
   }
 }
 
-async function assertPublicUrl(input: string): Promise<void> {
+export async function assertPublicUrl(input: string): Promise<void> {
   let parsed: URL;
   try {
     parsed = new URL(input);

@@ -1,7 +1,7 @@
 // Express route for the paginated, filterable signal feed.
 //
 // GET /api/signals — keyset-paginated (created_at, id desc). All filters
-// optional: competitor_ids / sources (comma-separated), min_quality,
+// competitor_ids is required; sources (comma-separated), min_quality,
 // created_after / created_before, cursor, limit. Returns
 // { data, next_cursor } where next_cursor is an opaque string or null.
 import express, { Router } from "express";
@@ -31,7 +31,7 @@ const csvSources = z
 
 const QuerySchema = z
   .object({
-    competitor_ids: csvUuids.optional(),
+    competitor_ids: csvUuids,
     sources: csvSources.optional(),
     min_quality: z.coerce.number().min(0).max(1).optional(),
     created_after: z.coerce.date().optional(),

@@ -74,17 +74,21 @@ export function createAnalysisJobProcessor(timeoutMs = ANALYSIS_TIMEOUT_MS) {
         competitor_id: data.competitor_id,
       });
     } catch (error) {
-      try {
-        await failRunIfRunning(data.run_id);
-      } catch (failureWriteError) {
-        logger.error("Failed to mark analysis run failed", {
-          job_id: job.id,
-          run_id: data.run_id,
-          error:
-            failureWriteError instanceof Error
-              ? failureWriteError.message
-              : String(failureWriteError),
-        });
+      const attemptsAllowed = job.opts.attempts ?? 1;
+      const isFinalAttempt = job.attemptsMade + 1 >= attemptsAllowed;
+      if (isFinalAttempt) {
+        try {
+          await failRunIfRunning(data.run_id);
+        } catch (failureWriteError) {
+          logger.error("Failed to mark analysis run failed", {
+            job_id: job.id,
+            run_id: data.run_id,
+            error:
+              failureWriteError instanceof Error
+                ? failureWriteError.message
+                : String(failureWriteError),
+          });
+        }
       }
       throw error;
     }

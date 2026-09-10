@@ -20,6 +20,12 @@ describe("trackCost", () => {
     expect(db.insert).toHaveBeenCalled();
   });
 
+  it("uses the reviewed GPT-4.1 production price", async () => {
+    const cost = await trackCost("pattern_detector", "gpt-4.1", 1_000_000, 500_000);
+    // $2.00 input + 0.5 * $8.00 output.
+    expect(cost).toBeCloseTo(6, 6);
+  });
+
   it("computes cost for claude-sonnet correctly at a different price point", async () => {
     const cost = await trackCost("synthesis", "claude-sonnet", 2000, 1000);
     // (2000/1_000_000 * 3.00) + (1000/1_000_000 * 15.00) = 0.006 + 0.015 = 0.021

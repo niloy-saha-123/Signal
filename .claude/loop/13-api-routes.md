@@ -160,3 +160,21 @@ Run focused tests after each task, then `npm run typecheck`, `npm test -w @signa
 `npm test -w @signal/shared`, `npm run build`, and `git diff --check`. Commit each task separately.
 Flip Part 13 to ✅ only after the runnable API and worker entry points pass the full verification suite.
 Do not push, open a PR, or apply a live database migration without the user's explicit request.
+
+## Completion — 2026-09-10
+
+**Status: ✅ implemented and branch-reviewed.** Tasks 1–5 are present on
+`discovery-chat-api-impl`; Task 6 is recorded in
+`.claude/loop/PART-13-BRANCH-REVIEW.md` and the Obsidian project documents.
+
+- Task 1: query contracts — `854c70b`
+- Task 2: four non-chat routers — `8bc86cc` plus follow-up `26849ed`
+- Task 3: citation-verified SSE chat — `d455d16`
+- Task 4: validated analysis worker and retry-safe daily score — `e462f61`
+- Task 5: executable API, schedules, worker composition, shutdown — `c23e14e`
+- Task 6: whole-branch fix/review/docs wave — see the review artifact and later commits
+
+Migration `apps/api/drizzle/0004_nervous_kate_bishop.sql` was generated and
+committed but deliberately **not applied** to Supabase. The branch may be reviewed
+as a PR; deployment must sequence the reviewed migration before the new worker
+writes daily scores.

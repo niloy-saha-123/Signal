@@ -63,6 +63,7 @@ export function createApiApp(): Express {
   app.use("/api/alerts", createAlertRouter());
   app.use("/api/chat", createChatRouter());
   app.use("/api/company-profile", createCompanyProfileRouter());
+  app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;
 }
@@ -81,7 +82,14 @@ export interface ApiRuntimeOverrides {
 }
 
 async function closeSocketServer(io: ClosableSocketServer): Promise<void> {
-  await new Promise<void>((resolve) => io.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
+    timeout.unref();
+    io.close(() => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
 }
 
 async function closeHttpServer(server: HttpServer): Promise<void> {

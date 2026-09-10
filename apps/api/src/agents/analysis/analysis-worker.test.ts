@@ -39,7 +39,7 @@ function job(data: unknown = {
   run_id: RUN_ID,
   has_pricing_diff: true,
 }) {
-  return { id: "job-1", data } as any;
+  return { id: "job-1", data, attemptsMade: 0, opts: { attempts: 1 } } as any;
 }
 
 beforeEach(() => {
@@ -90,6 +90,16 @@ describe("analysis job processor", () => {
       expect.stringContaining("mark analysis run failed"),
       expect.objectContaining({ run_id: RUN_ID })
     );
+  });
+
+  it("leaves the run open while BullMQ still has another attempt", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("transient provider failure"));
+    const retryableJob = job();
+    retryableJob.opts.attempts = 3;
+    retryableJob.attemptsMade = 0;
+
+    await expect(analysisJobProcessor(retryableJob)).rejects.toThrow("transient provider failure");
+    expect(failRunIfRunningMock).not.toHaveBeenCalled();
   });
 
   it("gives up at the wall-clock bound and fails the run", async () => {

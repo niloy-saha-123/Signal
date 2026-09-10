@@ -22,7 +22,7 @@ import { getActivePrompt } from "../../llm/prompt-registry";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "pattern_detector" as const;
-const MODEL = "gpt-4o";
+const MODEL = "gpt-4.1";
 
 // Bounded client budget — same reasoning as change-detector.ts/intent-analyzer.ts:
 // LangChain's defaults can hold a call open far longer than this pipeline can tolerate

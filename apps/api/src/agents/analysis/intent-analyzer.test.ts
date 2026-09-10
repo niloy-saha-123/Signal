@@ -33,7 +33,7 @@ vi.mock("../../llm/cost-tracker", () => ({
 }));
 
 const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
-  // gpt-4o has a DOWNGRADE_MAP target, but the budget gate runs first — so with spend < budget
+  // gpt-4.1 has a DOWNGRADE_MAP target, but the budget gate runs first — so with spend < budget
   // selectModel returns the preferred model unchanged. Mirror that.
   selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
   getDailyBudgetMock: vi.fn(() => 100),
@@ -156,13 +156,13 @@ describe("agents/analysis/intent-analyzer", () => {
   });
 
   it("passes selectModel's chosen model to ChatOpenAI", async () => {
-    selectModelMock.mockResolvedValue("gpt-4o-downgraded");
+    selectModelMock.mockResolvedValue("gpt-4.1-downgraded");
 
     await intentAnalyzerNode(state);
 
-    expect(selectModelMock).toHaveBeenCalledWith("gpt-4o", true);
+    expect(selectModelMock).toHaveBeenCalledWith("gpt-4.1", true);
     expect(chatOpenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-4o-downgraded" })
+      expect.objectContaining({ model: "gpt-4.1-downgraded" })
     );
   });
 
@@ -204,11 +204,11 @@ describe("agents/analysis/intent-analyzer", () => {
     expect(systemMessage[1]).toContain("infer their hiring");
   });
 
-  it("calls gpt-4o via ChatOpenAI with structured output over the concatenated postings", async () => {
+  it("calls gpt-4.1 via ChatOpenAI with structured output over the concatenated postings", async () => {
     const result = await intentAnalyzerNode(state);
 
     expect(chatOpenAIMock).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-4o" })
+      expect.objectContaining({ model: "gpt-4.1" })
     );
     expect(withStructuredOutputMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -251,7 +251,7 @@ describe("agents/analysis/intent-analyzer", () => {
 
     expect(trackCostMock).toHaveBeenCalledWith(
       "intent_analyzer",
-      "gpt-4o",
+      "gpt-4.1",
       200,
       40,
       "run1",

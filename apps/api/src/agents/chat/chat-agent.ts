@@ -77,13 +77,25 @@ function noEvidenceRefusal(reason: string): RefusalResult {
   };
 }
 
-function cacheKey(query: string, competitorIds: string[]): string {
+function cacheKey(
+  query: string,
+  competitorIds: string[],
+  activePrompt: string | null,
+  companyContext: string
+): string {
   // JSON, not `${query}|${scope}`: a query containing the separator would
   // otherwise collide with a different query/scope pair. Whitespace and case
   // are normalized so trivially different phrasings share a hit.
   const normalizedQuery = query.trim().toLowerCase().replace(/\s+/g, " ");
   const digest = createHash("sha256")
-    .update(JSON.stringify([normalizedQuery, [...competitorIds].sort()]))
+    .update(
+      JSON.stringify([
+        normalizedQuery,
+        [...competitorIds].sort(),
+        activePrompt ?? DEFAULT_SYSTEM_PROMPT,
+        companyContext,
+      ])
+    )
     .digest("hex");
   return `chat:response:${digest}`;
 }
@@ -134,6 +146,20 @@ function maxOutputTokens(): number {
   const configured = Number(process.env.MAX_TOKENS_PER_CALL ?? DEFAULT_MAX_TOKENS);
   if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_MAX_TOKENS;
   return Math.min(Math.trunc(configured), HARD_MAX_TOKENS);
+}
+
+async function boundedBySignal<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([work, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 // Strips the tokens the model is told to trust as structure, so an evidence body
@@ -197,13 +223,11 @@ async function generateGroundedAnswer(
   evidence: RerankedChunk[],
   runId: string,
   primaryCompetitorId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  activePrompt: string | null,
+  companyContext: string
 ): Promise<ChatAgentResult> {
   const nonce = randomUUID();
-  const [activePrompt, companyContext] = await Promise.all([
-    getActivePrompt("chat_agent"),
-    getCompanyContext(),
-  ]);
   const systemPrompt = [
     activePrompt ?? DEFAULT_SYSTEM_PROMPT,
     evidenceSecurityPrompt(nonce),
@@ -263,8 +287,22 @@ export async function runChatAgent(
     ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
     : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
 
-  return trackLatency("chat_agent", primaryCompetitorId, parsed.run_id, async () => {
-    const key = cacheKey(parsed.query, parsed.competitor_ids);
+  const work = trackLatency("chat_agent", primaryCompetitorId, parsed.run_id, async () => {
+    signal.throwIfAborted();
+    // Prompt and company context influence the answer, so they are part of
+    // the cache identity. A profile or prompt update must never reuse an
+    // answer generated under the previous operating context.
+    const [activePrompt, companyContext] = await Promise.all([
+      getActivePrompt("chat_agent"),
+      getCompanyContext(),
+    ]);
+    signal.throwIfAborted();
+    const key = cacheKey(
+      parsed.query,
+      parsed.competitor_ids,
+      activePrompt,
+      companyContext
+    );
     const cached = await readCachedResult(key);
     if (cached) return cached;
     signal.throwIfAborted();
@@ -289,11 +327,18 @@ export async function runChatAgent(
       evidence,
       parsed.run_id,
       primaryCompetitorId,
-      signal
+      signal,
+      activePrompt,
+      companyContext
     );
     // Never write the cache for a run whose caller is already gone.
     signal.throwIfAborted();
     await writeCachedResult(key, result);
     return result;
   });
+  // Some retrieval/cache dependencies do not expose AbortSignal inputs yet.
+  // This enforces the caller-visible wall clock even if such a dependency is
+  // stuck; the underlying promise may finish later, but post-await abort checks
+  // prevent generation, billing, or cache writes after cancellation.
+  return boundedBySignal(work, signal);
 }

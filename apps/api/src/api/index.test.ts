@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { AddressInfo } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 
@@ -63,6 +64,27 @@ describe("API runtime", () => {
     const app = createApiApp();
     expect(app).toBeDefined();
     expect(app._router.stack.length).toBeGreaterThan(1);
+  });
+
+  it("serves health and enforces the global JSON body limit", async () => {
+    const app = createApiApp();
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ status: "ok" });
+
+      const oversized = await fetch(`http://127.0.0.1:${port}/api/competitors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: "x".repeat(110_000) }),
+      });
+      expect(oversized.status).toBe(413);
+      expect(await oversized.json()).toEqual({ error: "payload_too_large" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("maps parser size and syntax failures without leaking internals", () => {

@@ -42,7 +42,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("GET /api/signals", () => {
   it("returns data + null next_cursor on a short page", async () => {
     const deps: SignalRouterDeps = { listSignalFeed: vi.fn(async () => rows(3)) as any };
-    const res = await call(app(deps), "/api/signals?limit=10");
+    const res = await call(app(deps), `/api/signals?competitor_ids=${UUID}&limit=10`);
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(3);
     expect(res.body.next_cursor).toBeNull();
@@ -50,7 +50,7 @@ describe("GET /api/signals", () => {
 
   it("sets next_cursor on a full page and round-trips it", async () => {
     const deps: SignalRouterDeps = { listSignalFeed: vi.fn(async () => rows(3)) as any };
-    const res = await call(app(deps), "/api/signals?limit=2");
+    const res = await call(app(deps), `/api/signals?competitor_ids=${UUID}&limit=2`);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.next_cursor).toEqual(expect.any(String));
 
@@ -59,7 +59,10 @@ describe("GET /api/signals", () => {
 
     // feeding it back parses cleanly into the feed query
     const deps2: SignalRouterDeps = { listSignalFeed: vi.fn(async () => []) as any };
-    const res2 = await call(app(deps2), `/api/signals?limit=2&cursor=${res.body.next_cursor}`);
+    const res2 = await call(
+      app(deps2),
+      `/api/signals?competitor_ids=${UUID}&limit=2&cursor=${res.body.next_cursor}`
+    );
     expect(res2.status).toBe(200);
     const passedCursor = (deps2.listSignalFeed as any).mock.calls[0][0].cursor;
     expect(passedCursor.id).toBe(rowId(1));
@@ -88,6 +91,13 @@ describe("GET /api/signals", () => {
     const deps: SignalRouterDeps = { listSignalFeed: vi.fn(async () => []) as any };
     const res = await call(app(deps), "/api/signals?competitor_ids=abc,def");
     expect(res.status).toBe(400);
+  });
+
+  it("400 when competitor_ids is omitted", async () => {
+    const deps: SignalRouterDeps = { listSignalFeed: vi.fn(async () => []) as any };
+    const res = await call(app(deps), "/api/signals?limit=10");
+    expect(res.status).toBe(400);
+    expect(deps.listSignalFeed).not.toHaveBeenCalled();
   });
 
   it("parses comma-separated filters and coerced values", async () => {

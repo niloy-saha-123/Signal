@@ -6,7 +6,7 @@ import { llmCostsTable } from "../db/schema";
 import { logger } from "../lib/logger";
 
 const PRICING_PER_MILLION_TOKENS: Record<string, { input: number; output: number }> = {
-  "gpt-4o": { input: 2.5, output: 10.0 },
+  "gpt-4.1": { input: 2.0, output: 8.0 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
   "claude-sonnet": { input: 3.0, output: 15.0 },
   "claude-haiku": { input: 0.8, output: 4.0 },
