@@ -52,8 +52,8 @@ speculative ones). Status legend: ⬜ not started · 🟨 in progress · ✅ don
 | 8 | Retrieval pipeline | `retrieval/{hybrid-retrieval,reranker,citation-enforcer,index}.ts` | `08-retrieval.md` | ✅ |
 | 9 | Graph state + DAG | `graph/{state,analysis-graph}.ts` | `09-graph.md` | ✅ |
 | 10 | Analysis agents | `agents/analysis/{intent-analyzer,sentiment-clusterer,change-detector,pattern-detector,vulnerability-detector,synthesis}.ts` | `10-analysis-agents.md` | ✅ |
-| 11 | Discovery agent | `agents/discovery/competitor-discovery.ts` | `11-discovery-agent.md` | ⬜ |
-| 12 | Chat agent | `agents/chat/chat-agent.ts` | `12-chat-agent.md` | ⬜ |
+| 11 | Discovery agent | `agents/discovery/competitor-discovery.ts` | `11-discovery-agent.md` | ✅ |
+| 12 | Chat agent | `agents/chat/chat-agent.ts` | `12-chat-agent.md` | 🟨 |
 | 13 | API routes | `api/{competitors,signals,alerts,chat,company-profile}.ts` | `13-api-routes.md` | ⬜ |
 | R | Test-file restructure (chore, not a feature part) | move all `*.test.ts` out of `src/` into a top-level `test/` tree | `TEST-RESTRUCTURE.md` | ⬜ |
 
