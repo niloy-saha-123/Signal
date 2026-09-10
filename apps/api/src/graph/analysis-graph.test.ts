@@ -111,23 +111,25 @@ vi.mock("../llm/prompt-registry", () => ({
   getActivePrompt: vi.fn().mockResolvedValue(null),
 }));
 
-const { patternsParsed, vulnerabilityWindowClosedParsed } = vi.hoisted(() => ({
-  patternsParsed: { summary: "Stable signal volume.", trend: "stable" as const },
-  // Drives vulnerabilityDetectorNode's own short-circuit (see vulnerability-detector.ts)
-  // so this DAG test never needs to also mock ChatAnthropic for its second call.
+const { intentParsed, patternsParsed, vulnerabilityWindowClosedParsed } = vi.hoisted(() => ({
+  intentParsed: { summary: "Hiring aggressively for enterprise sales.", intent_level: "high" as const },
+  patternsParsed: { summary: "Signal volume rising.", trend: "increasing" as const },
   vulnerabilityWindowClosedParsed: { window_open: false, reasoning: "No open vulnerability window." },
 }));
 
+// The three GPT-4o(-mini) nodes (intentAnalyzer, patternDetector, vulnerabilityDetector's
+// first call) all use ChatOpenAI with different Zod schemas — this one shared mock can't see
+// the schema, so it branches on the system-prompt text: intent-analyzer's says "job postings"
+// and "hiring", vulnerability-detector's says "vulnerability window", pattern-detector's
+// neither. Most DAG tests here feed every branch empty data so they short-circuit before the
+// LLM; the "exercises a real branch LLM path" test overrides specific query mocks so
+// intentAnalyzer + patternDetector actually invoke through the compiled graph.
 vi.mock("@langchain/openai", () => {
-  // patternDetectorNode and vulnerabilityDetectorNode's first call both use ChatOpenAI
-  // with different Zod schemas — this single shared mock can't inspect the schema, so it
-  // branches on the system prompt text instead (vulnerability-detector.ts's prompt
-  // mentions "vulnerability window", pattern-detector.ts's does not).
   const invoke = vi.fn().mockImplementation((messages: [string, string][]) => {
-    const [systemMessage] = messages;
-    const parsed = systemMessage[1].includes("vulnerability window")
-      ? vulnerabilityWindowClosedParsed
-      : patternsParsed;
+    const promptText = messages[0][1];
+    let parsed: unknown = patternsParsed;
+    if (promptText.includes("hiring")) parsed = intentParsed;
+    else if (promptText.includes("vulnerability window")) parsed = vulnerabilityWindowClosedParsed;
     return Promise.resolve({
       raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } },
       parsed,
@@ -175,6 +177,9 @@ describe("analysisGraph — compiled DAG", () => {
     loggerWarnMock.mockClear();
     createSignalScoreMock.mockClear();
     completeAgentRunMock.mockClear();
+    // Reset the two query mocks that individual tests override with non-empty data.
+    getRecentSignalsByCompetitorAndSourceMock.mockReset().mockResolvedValue([]);
+    getSignalVolumeByDayMock.mockReset().mockResolvedValue([]);
   });
 
   it("runs changeDetector and all other nodes, synthesis exactly once, when has_pricing_diff is true", async () => {
@@ -269,5 +274,38 @@ describe("analysisGraph — compiled DAG", () => {
     expect(completeAgentRunMock).toHaveBeenCalledWith("run-2", "completed", "digest");
     expect(result.signal_score).toMatchObject({ competitor_id: "competitor-2", score: 50 });
     expect(result.vulnerability).not.toBeNull();
+  });
+
+  it("exercises a real branch LLM path end-to-end: intentAnalyzer + patternDetector invoke through the compiled graph", async () => {
+    // Feed jobs signals + volume data so these two branches skip their empty-input
+    // short-circuits and actually run their GPT-4o calls; the rest stay empty/short-circuited.
+    getRecentSignalsByCompetitorAndSourceMock.mockImplementation((_id: string, source: string) =>
+      Promise.resolve(
+        source === "jobs"
+          ? [{ id: "s1", competitor_id: "competitor-3", source: "jobs", title: "Enterprise AE", raw_text: "Hiring 10 enterprise account executives." }]
+          : []
+      )
+    );
+    getSignalVolumeByDayMock.mockResolvedValue([
+      { day: new Date(Date.now() - 3 * 86400000).toISOString(), count: 12, weighted_count: 12 },
+      { day: new Date(Date.now() - 1 * 86400000).toISOString(), count: 20, weighted_count: 20 },
+    ]);
+
+    const result = await analysisGraph.invoke({
+      competitor_id: "competitor-3",
+      run_id: "run-3",
+      has_pricing_diff: false,
+    });
+
+    // intentAnalyzer's real LLM path ran — result is the mocked structured output, not the
+    // "no postings" short-circuit.
+    expect(result.hiring_intent).toEqual(intentParsed);
+    // patternDetector's Phase-1 trend-synthesis LLM path ran (volume data present, Phase 2
+    // still skipped since getFirstSignalCollectedAt is undefined).
+    expect(result.patterns).toEqual(patternsParsed);
+    // synthesis read the real branch outputs post-fan-in: intent_level "high" → hiring_momentum
+    // 1, so the composite score clears the empty-data 50 baseline.
+    expect(result.signal_score!.score).toBeGreaterThan(50);
+    expect(completeAgentRunMock).toHaveBeenCalledWith("run-3", "completed", "digest");
   });
 });
