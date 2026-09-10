@@ -369,3 +369,108 @@ describe("agents/chat/chat-agent — grounded generation", () => {
     expect(messages[1][1]).not.toContain("x".repeat(4_001));
   });
 });
+
+describe("agents/chat/chat-agent — final-result cache", () => {
+  const finalResult = {
+    refused: false,
+    answer: "Acme support response times slowed.",
+    citations: [],
+  } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cacheGetMock.mockResolvedValue(null);
+    cacheSetexMock.mockResolvedValue("OK");
+    getCompanyContextMock.mockResolvedValue("");
+    getActivePromptMock.mockResolvedValue(null);
+    selectModelMock.mockResolvedValue("claude-sonnet");
+    trackCostMock.mockResolvedValue(0);
+    hybridRetrieveMock.mockResolvedValue([retrieved()]);
+    rerankChunksMock.mockResolvedValue([reranked()]);
+    enforceCitationsMock.mockResolvedValue(finalResult);
+    anthropicInvokeMock.mockResolvedValue({
+      content: finalResult.answer,
+      usage_metadata: { input_tokens: 20, output_tokens: 5 },
+    });
+    trackLatencyMock.mockImplementation(
+      (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    );
+  });
+
+  it("returns a schema-valid cache hit without retrieval or generation", async () => {
+    cacheGetMock.mockResolvedValueOnce(JSON.stringify(finalResult));
+
+    const result = await runChatAgent(input());
+
+    expect(result).toEqual(finalResult);
+    expect(cacheGetMock).toHaveBeenCalledWith(expect.stringMatching(/^chat:response:[a-f0-9]{64}$/));
+    expect(hybridRetrieveMock).not.toHaveBeenCalled();
+    expect(chatAnthropicMock).not.toHaveBeenCalled();
+    expect(cacheSetexMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["malformed JSON", "{not-json"],
+    ["wrong result schema", JSON.stringify({ refused: false, answer: 42, citations: [] })],
+  ])("treats %s as a cache miss", async (_label, cached) => {
+    cacheGetMock.mockResolvedValueOnce(cached);
+
+    await expect(runChatAgent(input())).resolves.toEqual(finalResult);
+
+    expect(hybridRetrieveMock).toHaveBeenCalledTimes(1);
+    expect(chatAnthropicMock).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn).toHaveBeenCalled();
+  });
+
+  it("uses a stable cache key regardless of competitor ID ordering", async () => {
+    await runChatAgent({
+      query: "Question",
+      competitor_ids: [COMPETITOR_1, COMPETITOR_2],
+      run_id: RUN_ID,
+    });
+    await runChatAgent({
+      query: "Question",
+      competitor_ids: [COMPETITOR_2, COMPETITOR_1],
+      run_id: RUN_ID,
+    });
+
+    expect(cacheGetMock.mock.calls[0][0]).toBe(cacheGetMock.mock.calls[1][0]);
+    expect(cacheSetexMock.mock.calls[0][0]).toBe(cacheSetexMock.mock.calls[1][0]);
+  });
+
+  it("caches only the citation-enforced final result for four hours", async () => {
+    const result = await runChatAgent(input());
+
+    expect(enforceCitationsMock.mock.invocationCallOrder[0]).toBeLessThan(
+      cacheSetexMock.mock.invocationCallOrder[0]
+    );
+    expect(cacheSetexMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^chat:response:[a-f0-9]{64}$/),
+      14_400,
+      JSON.stringify(result)
+    );
+  });
+
+  it("logs a Redis read failure and continues uncached", async () => {
+    cacheGetMock.mockRejectedValueOnce(new Error("redis read down"));
+
+    await expect(runChatAgent(input())).resolves.toEqual(finalResult);
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("cache read failed"),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+    expect(hybridRetrieveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs a Redis write failure without discarding the valid result", async () => {
+    cacheSetexMock.mockRejectedValueOnce(new Error("redis write down"));
+
+    await expect(runChatAgent(input())).resolves.toEqual(finalResult);
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("cache write failed"),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+});

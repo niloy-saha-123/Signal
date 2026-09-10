@@ -8,13 +8,16 @@
 // returns a RefusalResult rather than a low-quality answer. P50/P95 latency is tracked via
 // latency-tracker.ts on every request.
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessage } from "@langchain/core/messages";
-import type { ChatAgentResult, RefusalResult } from "@signal/shared";
+import { ChatAgentResultSchema, type ChatAgentResult, type RefusalResult } from "@signal/shared";
 import { enforceCitations, hybridRetrieve, rerankChunks } from "../../retrieval";
 import type { RerankedChunk } from "../../retrieval";
 import { getCompanyContext } from "../../lib/company-context";
 import { trackLatency } from "../../lib/latency-tracker";
+import { cacheRedis } from "../../lib/redis-client";
+import { logger } from "../../lib/logger";
 import { ANTHROPIC_MODEL_IDS, selectModel } from "../../llm/adaptive-router";
 import { trackCost } from "../../llm/cost-tracker";
 import { getActivePrompt } from "../../llm/prompt-registry";
@@ -29,6 +32,7 @@ const LLM_MAX_RETRIES = 2;
 const DEFAULT_MAX_TOKENS = 2_000;
 const HARD_MAX_TOKENS = 4_096;
 const PREFERRED_MODEL = "claude-sonnet";
+const CACHE_TTL_SECONDS = 4 * 60 * 60;
 
 const DEFAULT_SYSTEM_PROMPT =
   "You are Signal's competitive-intelligence analyst. Answer only from the supplied evidence. " +
@@ -60,6 +64,50 @@ function noEvidenceRefusal(reason: string): RefusalResult {
     reason,
     suggested_query: "Try asking about a specific competitor, timeframe, or product feature.",
   };
+}
+
+function cacheKey(query: string, competitorIds: string[]): string {
+  const scope = [...competitorIds].sort().join(",");
+  const digest = createHash("sha256").update(`${query}|${scope}`).digest("hex");
+  return `chat:response:${digest}`;
+}
+
+async function readCachedResult(key: string): Promise<ChatAgentResult | null> {
+  try {
+    const cached = await cacheRedis.get(key);
+    if (!cached) return null;
+
+    try {
+      const parsed = ChatAgentResultSchema.safeParse(JSON.parse(cached));
+      if (parsed.success) return parsed.data;
+      logger.warn("chat-agent: cached result failed schema validation — treating as miss", {
+        cache_key: key,
+        issues: parsed.error.issues,
+      });
+    } catch (error) {
+      logger.warn("chat-agent: cached result is invalid JSON — treating as miss", {
+        cache_key: key,
+        error,
+      });
+    }
+  } catch (error) {
+    logger.warn("chat-agent: cache read failed — continuing uncached", {
+      cache_key: key,
+      error,
+    });
+  }
+  return null;
+}
+
+async function writeCachedResult(key: string, result: ChatAgentResult): Promise<void> {
+  try {
+    await cacheRedis.setex(key, CACHE_TTL_SECONDS, JSON.stringify(result));
+  } catch (error) {
+    logger.warn("chat-agent: cache write failed — returning uncached result", {
+      cache_key: key,
+      error,
+    });
+  }
 }
 
 function maxOutputTokens(): number {
@@ -167,21 +215,33 @@ export async function runChatAgent(input: ChatAgentInput): Promise<ChatAgentResu
   const primaryCompetitorId = parsed.competitor_ids[0];
 
   return trackLatency("chat_agent", primaryCompetitorId, parsed.run_id, async () => {
+    const key = cacheKey(parsed.query, parsed.competitor_ids);
+    const cached = await readCachedResult(key);
+    if (cached) return cached;
+
     const candidates = await hybridRetrieve(parsed.query, parsed.competitor_ids);
     if (candidates.length === 0) {
-      return noEvidenceRefusal("No stored signals matched this question.");
+      const result = noEvidenceRefusal("No stored signals matched this question.");
+      await writeCachedResult(key, result);
+      return result;
     }
 
     const evidence = await rerankChunks(parsed.query, candidates);
     if (evidence.length === 0) {
-      return noEvidenceRefusal("The available signals were not relevant enough to answer reliably.");
+      const result = noEvidenceRefusal(
+        "The available signals were not relevant enough to answer reliably."
+      );
+      await writeCachedResult(key, result);
+      return result;
     }
 
-    return generateGroundedAnswer(
+    const result = await generateGroundedAnswer(
       parsed.query,
       evidence,
       parsed.run_id,
       primaryCompetitorId
     );
+    await writeCachedResult(key, result);
+    return result;
   });
 }
