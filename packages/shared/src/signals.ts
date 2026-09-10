@@ -55,6 +55,20 @@ export const DiscoveryLogSchema = z.object({
 });
 export type DiscoveryLog = z.infer<typeof DiscoveryLogSchema>;
 
+// Output of CompetitorDiscoveryAgent (agents/discovery/competitor-discovery.ts) —
+// the discovered field values plus one DiscoveryLog per field it attempted.
+// A field the agent skipped (already pre-filled on the competitors row) or failed
+// to find is null here (subreddits: [] for the array field).
+export const CompetitorDiscoveryResultSchema = z.object({
+  subreddits: z.array(z.string()),
+  greenhouse_token: z.string().nullable(),
+  lever_token: z.string().nullable(),
+  pricing_url: z.string().nullable(),
+  changelog_rss: z.string().nullable(),
+  logs: z.array(DiscoveryLogSchema),
+});
+export type CompetitorDiscoveryResult = z.infer<typeof CompetitorDiscoveryResultSchema>;
+
 // One row of the `signals` table (apps/api/src/db/schema.ts) — a single collected
 // mention/post/comment/pricing-page-diff before or after clustering.
 export const SignalSourceSchema = z.enum(["reddit", "hn", "jobs", "changelog", "pricing"]);
