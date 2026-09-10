@@ -1256,6 +1256,25 @@ describe("db/queries — route feeds", () => {
     expect(limitMock).toHaveBeenCalledWith(11);
   });
 
+  // Math.floor(NaN) is NaN and survives Math.max/Math.min — an unparsed
+  // `?limit=` must not reach the driver as a NaN LIMIT.
+  it.each([
+    ["signals", listSignalFeed],
+    ["alerts", listAlertFeed],
+  ])("clamps a non-finite %s limit to the default instead of passing NaN through", async (
+    _label,
+    listFeed
+  ) => {
+    await listFeed({ limit: Number.NaN });
+    expect(limitMock).toHaveBeenCalledWith(26);
+
+    await listFeed({ limit: 5_000 });
+    expect(limitMock).toHaveBeenCalledWith(101);
+
+    await listFeed({ limit: 0 });
+    expect(limitMock).toHaveBeenCalledWith(2);
+  });
+
   it("creates an alert with the full evidence artifact", async () => {
     const input = {
       competitor_id: "c1",

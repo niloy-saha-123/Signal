@@ -269,6 +269,14 @@ export interface SignalFeedQuery {
   cursor?: FeedCursor;
 }
 
+// Math.floor(NaN) is NaN and NaN survives Math.max/Math.min, so an unparsed
+// `?limit=` from the route layer would reach the driver as a NaN LIMIT.
+const DEFAULT_FEED_LIMIT = 25;
+function feedLimit(value: number): number {
+  const floored = Math.floor(value);
+  return Number.isFinite(floored) ? Math.max(1, Math.min(100, floored)) : DEFAULT_FEED_LIMIT;
+}
+
 // Returns limit + 1 rows so the HTTP boundary can determine whether a next
 // cursor exists without a separate COUNT query. The cursor includes both sort
 // columns, preventing duplicate/omitted rows when timestamps are equal.
@@ -297,7 +305,7 @@ export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> 
     );
   }
 
-  const limit = Math.max(1, Math.min(100, Math.floor(input.limit)));
+  const limit = feedLimit(input.limit);
   return db
     .select()
     .from(signalsTable)
@@ -325,7 +333,7 @@ export async function listAlertFeed(input: AlertFeedQuery): Promise<Alert[]> {
     );
   }
 
-  const limit = Math.max(1, Math.min(100, Math.floor(input.limit)));
+  const limit = feedLimit(input.limit);
   return db
     .select()
     .from(alertsTable)
