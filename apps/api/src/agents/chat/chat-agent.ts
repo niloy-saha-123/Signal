@@ -207,7 +207,8 @@ async function generateGroundedAnswer(
     throw new Error("chat-agent: Claude returned no text content");
   }
 
-  return enforceCitations(draft, boundedEvidence, query);
+  const enforced = await enforceCitations(draft, boundedEvidence, query);
+  return ChatAgentResultSchema.parse(enforced);
 }
 
 export async function runChatAgent(input: ChatAgentInput): Promise<ChatAgentResult> {

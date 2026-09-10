@@ -320,6 +320,18 @@ describe("agents/chat/chat-agent — grounded generation", () => {
     await expect(runChatAgent(input())).resolves.toEqual(refusal);
   });
 
+  it("rejects a malformed citation-enforcement result before it can be cached", async () => {
+    enforceCitationsMock.mockResolvedValueOnce({
+      refused: false,
+      answer: 42,
+      citations: [],
+    });
+
+    await expect(runChatAgent(input())).rejects.toThrow();
+
+    expect(cacheSetexMock).not.toHaveBeenCalled();
+  });
+
   it("extracts text blocks from Anthropic content and ignores non-text blocks", async () => {
     anthropicInvokeMock.mockResolvedValueOnce({
       content: [
