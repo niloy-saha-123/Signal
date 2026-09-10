@@ -1,4 +1,5 @@
-// LangGraph node — conditional pricing-change extraction, fires only when a diff is detected (GPT-4o-mini).
+// LangGraph node — pricing-change extraction (GPT-4o-mini). Runs unconditionally in the DAG,
+// but short-circuits to a no-op (no DB call, no LLM call) unless state.has_pricing_diff is set.
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
 import { z } from "zod";
@@ -80,15 +81,22 @@ function buildDiffText(diff: { added: string[]; removed: string[] }): string {
 export async function changeDetectorNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
+  // This node runs unconditionally in the DAG (so synthesis's 5-way fan-in is always
+  // satisfiable — see analysis-graph.ts). The "only do work when a pricing diff landed"
+  // decision lives here instead of in a graph edge: `has_pricing_diff` is the caller's
+  // cheap upstream signal, so a `false` means there is nothing to extract — return without
+  // even a DB round-trip.
+  if (!state.has_pricing_diff) {
+    return {};
+  }
+
   const diffs = await getRecentPricingDiffs(state.competitor_id, 7);
 
-  // The DAG's conditional router (Part 9) only reaches this node when
-  // has_pricing_diff is true, so an empty result here is a defensive edge case
-  // (e.g. the diff aged out of the 7-day window between the router's check and this
-  // node running), not the expected path.
+  // has_pricing_diff was set but the diff isn't in the 7-day window any more — it aged out
+  // between the caller's check and this node running. Nothing to extract.
   if (diffs.length === 0) {
     logger.warn(
-      "change-detector: no recent pricing diffs found — unexpected since the router only invokes this node when has_pricing_diff is true",
+      "change-detector: has_pricing_diff was set but no recent pricing diffs found — diff may have aged out of the 7-day window",
       { competitor_id: state.competitor_id, run_id: state.run_id }
     );
     return {};

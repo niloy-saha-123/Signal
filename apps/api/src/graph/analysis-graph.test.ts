@@ -148,7 +148,7 @@ vi.mock("@langchain/anthropic", () => {
 import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
-  changeDetector: "change-detector: no recent pricing diffs found — unexpected since the router only invokes this node when has_pricing_diff is true",
+  changeDetector: "change-detector: has_pricing_diff was set but no recent pricing diffs found — diff may have aged out of the 7-day window",
 } as const;
 
 function callCountFor(message: string): number {
@@ -206,7 +206,7 @@ describe("analysisGraph — compiled DAG", () => {
     expect(completeAgentRunMock).toHaveBeenCalledWith("run-1", "completed", "digest");
   });
 
-  it("skips changeDetector and still runs synthesis exactly once when has_pricing_diff is false", async () => {
+  it("no-ops changeDetector and runs synthesis exactly once, after all branches, when has_pricing_diff is false", async () => {
     const result = await analysisGraph.invoke({
       competitor_id: "competitor-2",
       run_id: "run-2",
@@ -234,24 +234,17 @@ describe("analysisGraph — compiled DAG", () => {
       window_open: false,
       positioning_copy: "",
     });
-    // (b) changeDetector is skipped when has_pricing_diff is false
+    // (b) changeDetector runs (unconditionally, since Part 10's wiring fix) but no-ops
+    // immediately on has_pricing_diff=false — no DB call, no LLM call, no warning log.
     expect(callCountFor(LOG_MESSAGES.changeDetector)).toBe(0);
-    // (c) synthesis still runs exactly once — fan-in must not deadlock waiting on the
-    // skipped changeDetector branch, and must not double-fire via the conditional's direct
-    // "synthesis" path plus the fan-in array edge.
+    // (c) synthesis runs exactly once, genuinely AFTER all 5 branches — the 5-way fan-in is
+    // the only trigger now (no direct START->synthesis conditional edge to race it ahead).
+    // So synthesis reads the real branch outputs: vulnerability window "closed" (not null),
+    // all 4 numeric components 0 on the empty mocked data → composite 50.
     expect(createSignalScoreMock).toHaveBeenCalledTimes(1);
     expect(result.decision).toEqual(synthesisDecisionParsed);
     expect(completeAgentRunMock).toHaveBeenCalledWith("run-2", "completed", "digest");
-    //
-    // KNOWN PART-9 WIRING DEFECT (out of Task 7's scope — analysis-graph.ts must not change
-    // here): on the has_pricing_diff=false path the START->synthesis conditional edge fires
-    // synthesis in superstep 1, in parallel with (not after) the 4 branch nodes, so synthesis
-    // reads null for every branch output. It still persists a score, but from empty inputs:
-    // all 4 numeric components are 0 and vulnerability is null -> "none" (-6 modifier) -> 44,
-    // vs. 50 on the true path where the fan-in genuinely waits. This assertion is a sentinel:
-    // when the graph is fixed so synthesis is a true fan-in on BOTH paths, this becomes 50
-    // (window status "closed") and this comment goes away.
-    expect(result.signal_score).toMatchObject({ competitor_id: "competitor-2", score: 44 });
-    expect(result.vulnerability).not.toBeNull(); // branch DID run — synthesis just ran before it
+    expect(result.signal_score).toMatchObject({ competitor_id: "competitor-2", score: 50 });
+    expect(result.vulnerability).not.toBeNull();
   });
 });

@@ -113,6 +113,15 @@ describe("agents/analysis/change-detector", () => {
     );
   });
 
+  it("returns a no-op without even a DB call when has_pricing_diff is false", async () => {
+    const result = await changeDetectorNode({ ...(state as object), has_pricing_diff: false } as never);
+
+    expect(result).toEqual({});
+    expect(getRecentPricingDiffsMock).not.toHaveBeenCalled();
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+  });
+
   it("logs a warning and returns a true no-op (no LLM call) when there are no recent pricing diffs", async () => {
     getRecentPricingDiffsMock.mockResolvedValue([]);
 
