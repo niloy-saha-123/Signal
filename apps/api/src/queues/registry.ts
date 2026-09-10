@@ -32,7 +32,15 @@ import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { withRetry } from "../lib/retry";
-import { finalizeDiscovery, getCompetitorById, updateDiscoveryStatus } from "../db/queries";
+import {
+  createAgentRun,
+  failRunIfRunning,
+  finalizeDiscovery,
+  getCompetitorById,
+  getRecentPricingDiffs,
+  listCompetitors,
+  updateDiscoveryStatus,
+} from "../db/queries";
 import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
 
 // bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
@@ -263,15 +271,48 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
 }
 
 interface CompanyProfileUpdateJobData {
-  // Job data type — no fields needed until Part 10 implements the actual logic
+  // The profile row is loaded by each analysis node through company-context;
+  // no payload snapshot is needed here.
 }
 
 async function companyProfileUpdateProcessor(
   _job: Job<CompanyProfileUpdateJobData>
 ): Promise<void> {
-  throw new NotImplementedError(
-    "Company profile update re-analysis logic is not implemented yet (Part 10)"
+  // Bounded by the active competitor set, which is admin-controlled and small
+  // in Phase 0. This never replays historical runs or signals.
+  const activeCompetitors = (await listCompetitors()).filter(
+    (competitor) => competitor.is_active
   );
+  let failed = 0;
+
+  for (const competitor of activeCompetitors) {
+    const run = await createAgentRun({
+      competitor_id: competitor.id,
+      trigger: "scheduled",
+    });
+    try {
+      const hasPricingDiff = (await getRecentPricingDiffs(competitor.id, 7)).length > 0;
+      await queues.analysis.add("analysis", {
+        competitor_id: competitor.id,
+        run_id: run.id,
+        has_pricing_diff: hasPricingDiff,
+      });
+    } catch (error) {
+      failed += 1;
+      await failRunIfRunning(run.id).catch(() => undefined);
+      logger.error("Failed to enqueue profile-triggered analysis", {
+        competitor_id: competitor.id,
+        run_id: run.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (failed > 0) {
+    throw new Error(
+      `company-profile-update: failed to enqueue ${failed} of ${activeCompetitors.length} analyses`
+    );
+  }
 }
 
 // Constructs the live BullMQ Workers for competitor-discovery and

@@ -32,7 +32,7 @@ export interface CompetitorRouterDeps {
   getLatestSignalScores: typeof queries.getLatestSignalScores;
   getRecentPricingDiffs: typeof queries.getRecentPricingDiffs;
   createAgentRun: typeof queries.createAgentRun;
-  completeAgentRun: typeof queries.completeAgentRun;
+  failRunIfRunning: typeof queries.failRunIfRunning;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
   isPublicHostname: typeof isPublicHostname;
 }
@@ -45,7 +45,7 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   getLatestSignalScores: queries.getLatestSignalScores,
   getRecentPricingDiffs: queries.getRecentPricingDiffs,
   createAgentRun: queries.createAgentRun,
-  completeAgentRun: queries.completeAgentRun,
+  failRunIfRunning: queries.failRunIfRunning,
   enqueue: (queue, data) => queues[queue].add(queue, data),
   isPublicHostname,
 };
@@ -195,18 +195,32 @@ export function createCompetitorRouter(
       }
 
       const run = await deps.createAgentRun({ competitor_id: id, trigger: "manual" });
-      const has_pricing_diff = (await deps.getRecentPricingDiffs(id, 7)).length > 0;
-
+      let enqueueAttempted = false;
       try {
+        const has_pricing_diff = (await deps.getRecentPricingDiffs(id, 7)).length > 0;
+        enqueueAttempted = true;
         await deps.enqueue("analysis", { competitor_id: id, run_id: run.id, has_pricing_diff });
       } catch (err) {
-        logger.error("Failed to enqueue analysis", {
+        logger.error("Failed to prepare or enqueue analysis", {
           competitor_id: id,
           run_id: run.id,
           error: err instanceof Error ? err.message : String(err),
         });
-        await deps.completeAgentRun(run.id, "failed");
-        res.status(500).json({ error: "enqueue_failed", run_id: run.id });
+        // The row committed before any Redis work. Close it conditionally on
+        // every pre-202 failure, without risking a late worker completion.
+        await deps.failRunIfRunning(run.id).catch((failureWriteError) => {
+          logger.error("Failed to close orphaned analysis run", {
+            run_id: run.id,
+            error:
+              failureWriteError instanceof Error
+                ? failureWriteError.message
+                : String(failureWriteError),
+          });
+        });
+        res.status(500).json({
+          error: enqueueAttempted ? "enqueue_failed" : "internal",
+          run_id: run.id,
+        });
         return;
       }
 

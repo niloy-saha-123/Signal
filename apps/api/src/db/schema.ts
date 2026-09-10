@@ -12,6 +12,7 @@ import {
   numeric,
   boolean,
   jsonb,
+  date,
   timestamp,
   index,
   uniqueIndex,
@@ -400,6 +401,12 @@ export const competitorSignalScoresTable = pgTable(
     delta_7d: real("delta_7d"),
     delta_30d: real("delta_30d"),
     computed_at: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+    // UTC is explicit so the idempotency boundary does not change with the
+    // database/session timezone. PostgreSQL stores generated columns, making
+    // this safe to target from ON CONFLICT and a regular unique index.
+    day: date("day").generatedAlwaysAs(
+      sql`("computed_at" AT TIME ZONE 'UTC')::date`
+    ),
   },
   (table) => [
     check("competitor_signal_scores_score_check", sql`${table.score} >= 0 AND ${table.score} <= 100`),
@@ -407,6 +414,10 @@ export const competitorSignalScoresTable = pgTable(
     index("competitor_signal_scores_competitor_computed_idx").on(
       table.competitor_id,
       table.computed_at
+    ),
+    uniqueIndex("competitor_signal_scores_competitor_day_uidx").on(
+      table.competitor_id,
+      table.day
     ),
   ]
 );

@@ -53,7 +53,7 @@ function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDep
     getLatestSignalScores: vi.fn(async () => []) as any,
     getRecentPricingDiffs: vi.fn(async () => []) as any,
     createAgentRun: vi.fn(async () => ({ id: "run-1" })) as any,
-    completeAgentRun: vi.fn(async () => undefined) as any,
+    failRunIfRunning: vi.fn(async () => undefined) as any,
     enqueue: vi.fn(async () => undefined),
     isPublicHostname: vi.fn(async () => true),
     ...over,
@@ -247,6 +247,21 @@ describe("POST /api/competitors/:id/analyze", () => {
     const res = await call(app(deps), "POST", `/api/competitors/${UUID}/analyze`);
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "enqueue_failed", run_id: "run-1" });
-    expect(deps.completeAgentRun).toHaveBeenCalledWith("run-1", "failed");
+    expect(deps.failRunIfRunning).toHaveBeenCalledWith("run-1");
+  });
+
+  it("closes the run when pricing-diff lookup fails after run creation", async () => {
+    const deps = makeDeps({
+      getRecentPricingDiffs: vi.fn(async () => {
+        throw new Error("postgres down");
+      }) as any,
+    });
+
+    const res = await call(app(deps), "POST", `/api/competitors/${UUID}/analyze`);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "internal", run_id: "run-1" });
+    expect(deps.failRunIfRunning).toHaveBeenCalledWith("run-1");
+    expect(deps.enqueue).not.toHaveBeenCalled();
   });
 });

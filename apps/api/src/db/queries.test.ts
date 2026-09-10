@@ -9,6 +9,8 @@ const {
   limitMock,
   insertMock,
   insertValuesMock,
+  onConflictDoUpdateMock,
+  onConflictReturningMock,
   insertReturningMock,
   updateMock,
   updateSetMock,
@@ -24,6 +26,8 @@ const {
   limitMock: vi.fn(),
   insertMock: vi.fn(),
   insertValuesMock: vi.fn(),
+  onConflictDoUpdateMock: vi.fn(),
+  onConflictReturningMock: vi.fn(),
   insertReturningMock: vi.fn(),
   updateMock: vi.fn(),
   updateSetMock: vi.fn(),
@@ -104,6 +108,7 @@ import {
   getSignalClusterById,
   mergeSignalIntoCluster,
   completeAgentRun,
+  failRunIfRunning,
   createAgentRun,
   finalizeDiscovery,
 } from "./queries";
@@ -732,7 +737,7 @@ describe("db/queries — signal scores", () => {
   });
 
   describe("createSignalScore", () => {
-    it("inserts the given fields and returns the created row", async () => {
+    it("upserts the UTC-day row and returns it", async () => {
       const input = {
         competitor_id: "c1",
         score: 72,
@@ -741,12 +746,27 @@ describe("db/queries — signal scores", () => {
         delta_30d: -1.2,
       };
       const row = { id: "s1", ...input, computed_at: new Date() };
-      insertReturningMock.mockResolvedValue([row]);
+      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
+      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
+      onConflictReturningMock.mockResolvedValueOnce([row]);
 
       const result = await createSignalScore(input);
 
       expect(insertMock).toHaveBeenCalledWith(competitorSignalScoresTable);
       expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
+        target: [
+          competitorSignalScoresTable.competitor_id,
+          competitorSignalScoresTable.day,
+        ],
+        set: {
+          score: 72,
+          components: { hiring: 0.4, sentiment: 0.2 },
+          delta_7d: 3.5,
+          delta_30d: -1.2,
+          computed_at: expect.anything(),
+        },
+      });
       expect(result).toEqual(row);
     });
   });
@@ -1197,6 +1217,22 @@ describe("db/queries — agent runs", () => {
         outcome: undefined,
         completed_at: expect.any(Date),
       });
+    });
+  });
+
+  describe("failRunIfRunning", () => {
+    it("marks only a still-running row failed", async () => {
+      await failRunIfRunning("run-1");
+
+      expect(updateMock).toHaveBeenCalledWith(agentRunsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({
+        status: "failed",
+        completed_at: expect.any(Date),
+      });
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.id, "run-1");
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.status, "running");
+      expect(and).toHaveBeenCalled();
+      expect(updateWhereMock).toHaveBeenCalled();
     });
   });
 });

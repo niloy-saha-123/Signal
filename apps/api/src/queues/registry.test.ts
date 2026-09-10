@@ -13,11 +13,19 @@ const {
   updateDiscoveryStatusMock,
   finalizeDiscoveryMock,
   discoverCompetitorMock,
+  listCompetitorsMock,
+  createAgentRunMock,
+  getRecentPricingDiffsMock,
+  failRunIfRunningMock,
 } = vi.hoisted(() => ({
   getCompetitorByIdMock: vi.fn(),
   updateDiscoveryStatusMock: vi.fn(),
   finalizeDiscoveryMock: vi.fn(),
   discoverCompetitorMock: vi.fn(),
+  listCompetitorsMock: vi.fn(),
+  createAgentRunMock: vi.fn(),
+  getRecentPricingDiffsMock: vi.fn(),
+  failRunIfRunningMock: vi.fn(),
 }));
 
 vi.mock("../lib/logger", () => ({ logger: loggerMock }));
@@ -32,6 +40,10 @@ vi.mock("../db/queries", () => ({
   getCompetitorById: getCompetitorByIdMock,
   updateDiscoveryStatus: updateDiscoveryStatusMock,
   finalizeDiscovery: finalizeDiscoveryMock,
+  listCompetitors: listCompetitorsMock,
+  createAgentRun: createAgentRunMock,
+  getRecentPricingDiffs: getRecentPricingDiffsMock,
+  failRunIfRunning: failRunIfRunningMock,
 }));
 
 vi.mock("../agents/discovery/competitor-discovery", () => ({
@@ -47,6 +59,7 @@ const {
   updateSetMock,
   updateWhereMock,
   transactionMock,
+  queueAddMock,
 } = vi.hoisted(() => {
   const insertValuesMock = vi.fn().mockResolvedValue(undefined);
   const insertMock = vi.fn().mockReturnValue({ values: insertValuesMock });
@@ -59,6 +72,7 @@ const {
   const transactionMock = vi.fn().mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
     cb({ insert: insertMock, update: updateMock })
   );
+  const queueAddMock = vi.fn().mockResolvedValue(undefined);
   return {
     queueCtorCalls: [] as Array<{ name: string; opts: unknown }>,
     workerCtorCalls: [] as Array<{ name: string; processor: unknown; opts: unknown; instance: unknown }>,
@@ -68,6 +82,7 @@ const {
     updateSetMock,
     updateWhereMock,
     transactionMock,
+    queueAddMock,
   };
 });
 
@@ -84,6 +99,9 @@ vi.mock("bullmq", async () => {
       this.name = name;
       this.opts = opts;
       queueCtorCalls.push({ name, opts });
+    }
+    add(name: string, data: unknown) {
+      return queueAddMock(name, data);
     }
   }
   class Worker extends EventEmitter {
@@ -521,6 +539,23 @@ describe("competitor-discovery worker", () => {
 });
 
 describe("company-profile-update worker", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listCompetitorsMock.mockResolvedValue([
+      { id: "active-1", is_active: true },
+      { id: "inactive-1", is_active: false },
+      { id: "active-2", is_active: true },
+    ]);
+    createAgentRunMock
+      .mockResolvedValueOnce({ id: "run-1" })
+      .mockResolvedValueOnce({ id: "run-2" });
+    getRecentPricingDiffsMock
+      .mockResolvedValueOnce([{ id: "diff-1" }])
+      .mockResolvedValueOnce([]);
+    failRunIfRunningMock.mockResolvedValue(undefined);
+    queueAddMock.mockResolvedValue(undefined);
+  });
+
   function getRegisteredWorker() {
     const call = workerCtorCalls.find((c) => c.name === "company-profile-update");
     if (!call) throw new Error("company-profile-update worker was never registered");
@@ -533,10 +568,30 @@ describe("company-profile-update worker", () => {
     expect((call.opts as { concurrency: number }).concurrency).toBe(1);
   });
 
-  it("throws NotImplementedError when the processor is called", async () => {
+  it("creates one scheduled run and analysis job per active competitor", async () => {
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
     const job = { data: {} };
 
-    await expect(processor(job)).rejects.toThrow(NotImplementedError);
+    await expect(processor(job)).resolves.toBeUndefined();
+    expect(createAgentRunMock).toHaveBeenCalledTimes(2);
+    expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
+      competitor_id: "active-1",
+      trigger: "scheduled",
+    });
+    expect(createAgentRunMock).toHaveBeenNthCalledWith(2, {
+      competitor_id: "active-2",
+      trigger: "scheduled",
+    });
+    expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
+      competitor_id: "active-1",
+      run_id: "run-1",
+      has_pricing_diff: true,
+    });
+    expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
+      competitor_id: "active-2",
+      run_id: "run-2",
+      has_pricing_diff: false,
+    });
+    expect(getRecentPricingDiffsMock).not.toHaveBeenCalledWith("inactive-1", expect.anything());
   });
 });

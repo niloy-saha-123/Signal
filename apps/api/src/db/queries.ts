@@ -435,9 +435,26 @@ export type CreateSignalScoreInput = {
   delta_30d?: number | null;
 };
 
-// SynthesisAgent's write — one Signal Score row per daily recompute.
+// SynthesisAgent's write — retries replace the same competitor's UTC-day row
+// instead of appending a duplicate score.
 export async function createSignalScore(input: CreateSignalScoreInput): Promise<SignalScore> {
-  const [row] = await db.insert(competitorSignalScoresTable).values(input).returning();
+  const [row] = await db
+    .insert(competitorSignalScoresTable)
+    .values(input)
+    .onConflictDoUpdate({
+      target: [
+        competitorSignalScoresTable.competitor_id,
+        competitorSignalScoresTable.day,
+      ],
+      set: {
+        score: input.score,
+        components: input.components,
+        delta_7d: input.delta_7d ?? null,
+        delta_30d: input.delta_30d ?? null,
+        computed_at: sql`now()`,
+      },
+    })
+    .returning();
   return row;
 }
 
@@ -659,6 +676,16 @@ export async function completeAgentRun(
     .update(agentRunsTable)
     .set({ status, outcome, completed_at: new Date() })
     .where(eq(agentRunsTable.id, runId));
+}
+
+// A worker timeout is a give-up boundary, not a guarantee that all nested LLM
+// calls stopped. Only a still-running row may transition to failed, so late
+// graph completion cannot be overwritten by an older timeout handler.
+export async function failRunIfRunning(runId: string): Promise<void> {
+  await db
+    .update(agentRunsTable)
+    .set({ status: "failed", completed_at: new Date() })
+    .where(and(eq(agentRunsTable.id, runId), eq(agentRunsTable.status, "running")));
 }
 
 // ── competitor discovery write-back (Part 11) ────────────────────────────
