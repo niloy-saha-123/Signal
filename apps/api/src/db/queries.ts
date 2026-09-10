@@ -678,6 +678,19 @@ export async function finalizeDiscovery(
   competitorId: string,
   result: CompetitorDiscoveryResult
 ): Promise<void> {
+  // `failed` is terminal (no auto-rediscovery), so only use it when the agent
+  // actually probed and came back with nothing usable. A competitor created
+  // with every field pre-filled produces `logs: []` — that row is fully usable,
+  // not a failure. And a run where every probe missed but a pre-filled value
+  // survived is still usable.
+  const anyValue =
+    result.subreddits.length > 0 ||
+    result.greenhouse_token != null ||
+    result.lever_token != null ||
+    result.pricing_url != null ||
+    result.changelog_rss != null;
+  const discoveryStatus = result.logs.length === 0 || anyValue ? "complete" : "failed";
+
   await db.transaction(async (tx) => {
     await tx
       .update(competitorsTable)
@@ -687,7 +700,7 @@ export async function finalizeDiscovery(
         lever_token: result.lever_token,
         pricing_url: result.pricing_url,
         changelog_rss: result.changelog_rss,
-        discovery_status: result.logs.some((l) => l.status === "found") ? "complete" : "failed",
+        discovery_status: discoveryStatus,
         discovered_at: new Date(),
         updated_at: new Date(),
       })

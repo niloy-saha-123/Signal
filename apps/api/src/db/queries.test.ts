@@ -1380,9 +1380,13 @@ describe("db/queries — competitor discovery write-back", () => {
     expect(rows[3].error_message).toBe("fetch timed out");
   });
 
-  it("writes discovery_status 'failed' when no field reached 'found'", async () => {
+  it("writes discovery_status 'failed' when the agent probed and found nothing usable", async () => {
     await finalizeDiscovery("c1", {
-      ...mixedResult,
+      subreddits: [],
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
       logs: mixedResult.logs.map((l) => ({
         ...l,
         status: l.status === "found" ? "not_found" : l.status,
@@ -1396,19 +1400,42 @@ describe("db/queries — competitor discovery write-back", () => {
     expect(insertMock).toHaveBeenCalledWith(competitorDiscoveryLogTable);
   });
 
-  it("still updates the competitors row but issues no insert when logs is empty", async () => {
+  it("writes 'complete' when every probe missed but a pre-filled value survived", async () => {
     await finalizeDiscovery("c1", {
-      subreddits: [],
+      subreddits: ["r/acme"],
       greenhouse_token: null,
       lever_token: null,
       pricing_url: null,
+      changelog_rss: null,
+      logs: [
+        {
+          field_name: "greenhouse",
+          attempted_urls: ["https://boards.greenhouse.io/acme"],
+          discovered_value: null,
+          status: "not_found",
+          error_message: null,
+        },
+      ],
+    });
+
+    expect(updateSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ discovery_status: "complete" })
+    );
+  });
+
+  it("writes 'complete' (not 'failed') when logs is empty — all fields were pre-filled", async () => {
+    await finalizeDiscovery("c1", {
+      subreddits: ["r/acme"],
+      greenhouse_token: "acmehq",
+      lever_token: null,
+      pricing_url: "https://acme.com/pricing",
       changelog_rss: null,
       logs: [],
     });
 
     expect(updateMock).toHaveBeenCalledWith(competitorsTable);
     expect(updateSetMock).toHaveBeenCalledWith(
-      expect.objectContaining({ discovery_status: "failed" })
+      expect.objectContaining({ discovery_status: "complete" })
     );
     expect(insertMock).not.toHaveBeenCalled();
   });
