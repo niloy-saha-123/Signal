@@ -59,6 +59,7 @@ export interface QueueConfig {
   concurrency: number;
   attempts: number;
   backoff?: { type: "fixed" | "exponential"; delay: number };
+  lockDuration?: number;
 }
 
 const DEFAULT_CONFIG: QueueConfig = {
@@ -68,7 +69,14 @@ const DEFAULT_CONFIG: QueueConfig = {
 };
 
 export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
-  "competitor-discovery": { concurrency: 3, attempts: 2, backoff: { type: "fixed", delay: 5000 } },
+  "competitor-discovery": {
+    concurrency: 3,
+    attempts: 2,
+    backoff: { type: "fixed", delay: 5000 },
+    // Discovery fans out over multiple bounded HTTP probes. Leave enough time
+    // for one field timeout plus finalization without losing the BullMQ lock.
+    lockDuration: 120_000,
+  },
   "company-profile-update": { concurrency: 1, attempts: 1 },
   "collect-reddit": DEFAULT_CONFIG,
   "collect-hn": DEFAULT_CONFIG,
@@ -121,6 +129,7 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
   const worker = new Worker(queueName, processor, {
     connection,
     concurrency: config.concurrency,
+    ...(config.lockDuration === undefined ? {} : { lockDuration: config.lockDuration }),
   });
 
   // Without this a failed job lands in Redis's failed-job hash and nowhere else,

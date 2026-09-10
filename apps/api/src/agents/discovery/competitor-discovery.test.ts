@@ -287,6 +287,33 @@ describe("agents/discovery/competitor-discovery", () => {
     expect(logFor(result, "rss_url").attempted_urls.at(-1)).toBe(alternate);
   });
 
+  it("starts the fixed RSS path probes together so timeouts do not serialize", async () => {
+    const resolvers: Array<(value: { items: unknown[] }) => void> = [];
+    parseURLMock.mockImplementation(
+      () => new Promise<{ items: unknown[] }>((resolve) => resolvers.push(resolve))
+    );
+
+    const pending = discoverCompetitor({
+      competitor_id: "comp-1",
+      name: "Acme",
+      domain: "acme.com",
+      existing: {
+        ...emptyExisting,
+        subreddits: ["acme"],
+        greenhouse_token: "acme-gh",
+        lever_token: "acme-lever",
+        pricing_url: "https://acme.com/pricing",
+      },
+    });
+
+    await vi.waitFor(() => expect(parseURLMock).toHaveBeenCalledTimes(9));
+    for (const resolve of resolvers) resolve({ items: [] });
+
+    const result = await pending;
+    expect(result.changelog_rss).toBe("https://acme.com/blog/rss");
+    expect(logFor(result, "rss_url").attempted_urls).toHaveLength(9);
+  });
+
   it("does not fetch an RSS alternate link that targets a private host", async () => {
     const privateFeed = "http://127.0.0.1/internal.xml";
     parseURLMock.mockRejectedValue(new Error("not a feed"));

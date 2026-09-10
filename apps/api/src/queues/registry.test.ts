@@ -152,6 +152,7 @@ describe("queues/registry", () => {
       concurrency: 3,
       attempts: 2,
       backoff: { type: "fixed", delay: 5000 },
+      lockDuration: 120_000,
     });
   });
 
@@ -307,6 +308,7 @@ describe("competitor-discovery worker", () => {
     const call = getRegisteredWorker();
     expect(typeof call.processor).toBe("function");
     expect((call.opts as { concurrency: number }).concurrency).toBe(3);
+    expect((call.opts as { lockDuration: number }).lockDuration).toBe(120_000);
   });
 
   it("short-circuits with a throw and does no work when the circuit is already open", async () => {

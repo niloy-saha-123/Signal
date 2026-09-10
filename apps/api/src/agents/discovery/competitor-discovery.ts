@@ -372,11 +372,14 @@ async function discoverRss(domain: string | null): Promise<StrategyOutcome<strin
     },
   });
   try {
-    for (const path of RSS_PATHS) {
-      const url = `https://${domain}${path}`;
-      attempted.push(url);
-      if (await parsesAsFeed(url)) return found(url);
-    }
+    // The candidates have a fixed priority order, but probing them serially
+    // could multiply a 15s network timeout by all nine paths. Start the bounded
+    // set together, then choose the first valid URL in the documented order.
+    const feedUrls = RSS_PATHS.map((path) => `https://${domain}${path}`);
+    attempted.push(...feedUrls);
+    const feedMatches = await Promise.all(feedUrls.map((url) => parsesAsFeed(url)));
+    const firstMatch = feedMatches.findIndex(Boolean);
+    if (firstMatch >= 0) return found(feedUrls[firstMatch]);
 
     // Fallback: scrape the homepage for a declared feed link.
     const homeUrl = `https://${domain}/`;
