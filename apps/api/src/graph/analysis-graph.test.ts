@@ -32,12 +32,28 @@ const {
   getLatestPricingBaselineMock,
   getSignalVolumeByDayMock,
   getFirstSignalCollectedAtMock,
+  getLatestSignalScoresMock,
+  createSignalScoreMock,
+  completeAgentRunMock,
 } = vi.hoisted(() => ({
   getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
   getRecentPricingDiffsMock: vi.fn().mockResolvedValue([]),
   getLatestPricingBaselineMock: vi.fn().mockResolvedValue(undefined),
   getSignalVolumeByDayMock: vi.fn().mockResolvedValue([]),
   getFirstSignalCollectedAtMock: vi.fn().mockResolvedValue(undefined),
+  getLatestSignalScoresMock: vi.fn().mockResolvedValue([]),
+  createSignalScoreMock: vi.fn((input: { competitor_id: string; score: number }) =>
+    Promise.resolve({
+      id: "signal-score-1",
+      competitor_id: input.competitor_id,
+      score: input.score,
+      components: {},
+      delta_7d: null,
+      delta_30d: null,
+      computed_at: new Date(),
+    })
+  ),
+  completeAgentRunMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../db/queries", () => ({
@@ -46,6 +62,9 @@ vi.mock("../db/queries", () => ({
   getLatestPricingBaseline: getLatestPricingBaselineMock,
   getSignalVolumeByDay: getSignalVolumeByDayMock,
   getFirstSignalCollectedAt: getFirstSignalCollectedAtMock,
+  getLatestSignalScores: getLatestSignalScoresMock,
+  createSignalScore: createSignalScoreMock,
+  completeAgentRun: completeAgentRunMock,
 }));
 
 vi.mock("../lib/company-context", () => ({
@@ -69,6 +88,12 @@ vi.mock("../lib/latency-tracker", () => ({
 
 vi.mock("../llm/cost-tracker", () => ({
   trackCost: vi.fn().mockResolvedValue(0),
+}));
+
+// synthesisNode (Task 7) selects Claude Sonnet via the adaptive router before its decision
+// call — mocked to return the preferred alias unchanged so the DAG test stays offline.
+vi.mock("../llm/adaptive-router", () => ({
+  selectModel: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
 }));
 
 const { patternsParsed, vulnerabilityWindowClosedParsed } = vi.hoisted(() => ({
@@ -101,11 +126,29 @@ vi.mock("@langchain/openai", () => {
   return { ChatOpenAI: vi.fn(ChatOpenAIMockClass) };
 });
 
+// synthesisNode (Task 7) is the only node whose ChatAnthropic call actually fires in this
+// DAG test — vulnerabilityDetectorNode short-circuits on window_open: false above. It always
+// resolves to a "digest" decision so the fan-in node has a valid AnalysisDecision to return.
+const { synthesisDecisionParsed } = vi.hoisted(() => ({
+  synthesisDecisionParsed: { action: "digest" as const, reason: "Routine movement." },
+}));
+vi.mock("@langchain/anthropic", () => {
+  const invoke = vi.fn().mockResolvedValue({
+    raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } },
+    parsed: synthesisDecisionParsed,
+  });
+  class ChatAnthropicMockClass {
+    withStructuredOutput() {
+      return { invoke };
+    }
+  }
+  return { ChatAnthropic: vi.fn(ChatAnthropicMockClass) };
+});
+
 import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
   changeDetector: "change-detector: no recent pricing diffs found — unexpected since the router only invokes this node when has_pricing_diff is true",
-  synthesis: "synthesisNode: not yet implemented (Part 10) — returning no-op update",
 } as const;
 
 function callCountFor(message: string): number {
@@ -115,6 +158,8 @@ function callCountFor(message: string): number {
 describe("analysisGraph — compiled DAG", () => {
   beforeEach(() => {
     loggerWarnMock.mockClear();
+    createSignalScoreMock.mockClear();
+    completeAgentRunMock.mockClear();
   });
 
   it("runs changeDetector and all other nodes, synthesis exactly once, when has_pricing_diff is true", async () => {
@@ -152,8 +197,13 @@ describe("analysisGraph — compiled DAG", () => {
     // defensive no-diffs-found short-circuit since getRecentPricingDiffs is mocked to
     // return [] (real behavior since Task 4).
     expect(callCountFor(LOG_MESSAGES.changeDetector)).toBe(1);
-    // (c) synthesis runs exactly once, not once per fan-in source
-    expect(callCountFor(LOG_MESSAGES.synthesis)).toBe(1);
+    // (c) synthesis runs exactly once as the fan-in, not once per source — it persists one
+    // Signal Score (all components 0 on empty mocked data → composite 50) and closes the run
+    // with the mocked "digest" decision.
+    expect(result.signal_score).toMatchObject({ competitor_id: "competitor-1", score: 50 });
+    expect(result.decision).toEqual(synthesisDecisionParsed);
+    expect(createSignalScoreMock).toHaveBeenCalledTimes(1);
+    expect(completeAgentRunMock).toHaveBeenCalledWith("run-1", "completed", "digest");
   });
 
   it("skips changeDetector and still runs synthesis exactly once when has_pricing_diff is false", async () => {
@@ -189,6 +239,19 @@ describe("analysisGraph — compiled DAG", () => {
     // (c) synthesis still runs exactly once — fan-in must not deadlock waiting on the
     // skipped changeDetector branch, and must not double-fire via the conditional's direct
     // "synthesis" path plus the fan-in array edge.
-    expect(callCountFor(LOG_MESSAGES.synthesis)).toBe(1);
+    expect(createSignalScoreMock).toHaveBeenCalledTimes(1);
+    expect(result.decision).toEqual(synthesisDecisionParsed);
+    expect(completeAgentRunMock).toHaveBeenCalledWith("run-2", "completed", "digest");
+    //
+    // KNOWN PART-9 WIRING DEFECT (out of Task 7's scope — analysis-graph.ts must not change
+    // here): on the has_pricing_diff=false path the START->synthesis conditional edge fires
+    // synthesis in superstep 1, in parallel with (not after) the 4 branch nodes, so synthesis
+    // reads null for every branch output. It still persists a score, but from empty inputs:
+    // all 4 numeric components are 0 and vulnerability is null -> "none" (-6 modifier) -> 44,
+    // vs. 50 on the true path where the fan-in genuinely waits. This assertion is a sentinel:
+    // when the graph is fixed so synthesis is a true fan-in on BOTH paths, this becomes 50
+    // (window status "closed") and this comment goes away.
+    expect(result.signal_score).toMatchObject({ competitor_id: "competitor-2", score: 44 });
+    expect(result.vulnerability).not.toBeNull(); // branch DID run — synthesis just ran before it
   });
 });
