@@ -1,6 +1,6 @@
 // Typed Drizzle query functions used by the API routes and agents.
 import { eq, and, asc, desc, inArray, sql } from "drizzle-orm";
-import type { SignalSource } from "@signal/shared";
+import type { SignalSource, CompetitorDiscoveryResult } from "@signal/shared";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -518,4 +518,52 @@ export async function completeAgentRun(
     .update(agentRunsTable)
     .set({ status, outcome, completed_at: new Date() })
     .where(eq(agentRunsTable.id, runId));
+}
+
+// ── competitor discovery write-back (Part 11) ────────────────────────────
+
+// CompetitorDiscoveryAgent's write-back — the discovery BullMQ worker calls
+// this once discovery finishes: it stamps the five discovered field values
+// (+ discovery_status + discovered_at) onto the competitors row and bulk-inserts
+// one competitor_discovery_log row per attempted field, all in one transaction.
+// The caller merges any skipped field's prior value into `result` first, so
+// writing all five back unconditionally is a no-op for those.
+//
+// This deliberately writes discovery_status = 'failed' WITHOUT going through
+// updateDiscoveryStatus's guard (which throws on 'failed'), because it writes
+// the diagnostic competitor_discovery_log rows in the SAME transaction — the
+// same legitimate-exception rationale as queues/registry.ts's writeDiscoveryFailure.
+export async function finalizeDiscovery(
+  competitorId: string,
+  result: CompetitorDiscoveryResult
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(competitorsTable)
+      .set({
+        subreddits: result.subreddits,
+        greenhouse_token: result.greenhouse_token,
+        lever_token: result.lever_token,
+        pricing_url: result.pricing_url,
+        changelog_rss: result.changelog_rss,
+        discovery_status: result.logs.some((l) => l.status === "found") ? "complete" : "failed",
+        discovered_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where(eq(competitorsTable.id, competitorId));
+
+    // Drizzle's .values([]) throws — skip the insert when nothing was attempted.
+    if (result.logs.length > 0) {
+      await tx.insert(competitorDiscoveryLogTable).values(
+        result.logs.map((l) => ({
+          competitor_id: competitorId,
+          field_name: l.field_name,
+          attempted_urls: l.attempted_urls,
+          discovered_value: l.discovered_value,
+          status: l.status,
+          error_message: l.error_message,
+        }))
+      );
+    }
+  });
 }

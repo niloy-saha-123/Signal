@@ -55,6 +55,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   };
 });
 
+import type { CompetitorDiscoveryResult } from "@signal/shared";
 import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
 import {
   competitorsTable,
@@ -98,6 +99,7 @@ import {
   getSignalClusterById,
   mergeSignalIntoCluster,
   completeAgentRun,
+  finalizeDiscovery,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -1127,5 +1129,129 @@ describe("db/queries — agent runs", () => {
         completed_at: expect.any(Date),
       });
     });
+  });
+});
+
+describe("db/queries — competitor discovery write-back", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockResolvedValue(undefined);
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockResolvedValue(undefined);
+    transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb({ update: updateMock, insert: insertMock })
+    );
+  });
+
+  const mixedResult: CompetitorDiscoveryResult = {
+    subreddits: ["r/acme"],
+    greenhouse_token: "acmehq",
+    lever_token: null,
+    pricing_url: "https://acme.com/pricing",
+    changelog_rss: null,
+    logs: [
+      {
+        field_name: "subreddits",
+        attempted_urls: ["https://reddit.com/r/acme"],
+        discovered_value: "r/acme",
+        status: "found",
+        error_message: null,
+      },
+      {
+        field_name: "greenhouse",
+        attempted_urls: ["https://boards.greenhouse.io/acmehq"],
+        discovered_value: "acmehq",
+        status: "found",
+        error_message: null,
+      },
+      {
+        field_name: "lever",
+        attempted_urls: ["https://jobs.lever.co/acme"],
+        discovered_value: null,
+        status: "not_found",
+        error_message: null,
+      },
+      {
+        field_name: "rss_url",
+        attempted_urls: [],
+        discovered_value: null,
+        status: "error",
+        error_message: "fetch timed out",
+      },
+    ],
+  };
+
+  it("updates the row to 'complete' and bulk-inserts one log row per attempt when ≥1 field was found", async () => {
+    await finalizeDiscovery("c1", mixedResult);
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith(competitorsTable);
+    expect(updateSetMock).toHaveBeenCalledWith({
+      subreddits: ["r/acme"],
+      greenhouse_token: "acmehq",
+      lever_token: null,
+      pricing_url: "https://acme.com/pricing",
+      changelog_rss: null,
+      discovery_status: "complete",
+      discovered_at: expect.any(Date),
+      updated_at: expect.any(Date),
+    });
+
+    expect(insertMock).toHaveBeenCalledWith(competitorDiscoveryLogTable);
+    const rows = (insertValuesMock.mock.calls[0][0]) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r.competitor_id === "c1")).toBe(true);
+    expect(rows.map((r) => r.field_name)).toEqual([
+      "subreddits",
+      "greenhouse",
+      "lever",
+      "rss_url",
+    ]);
+    expect(rows.map((r) => r.status)).toEqual(["found", "found", "not_found", "error"]);
+    expect(rows[0].attempted_urls).toEqual(["https://reddit.com/r/acme"]);
+    expect(rows[3].attempted_urls).toEqual([]);
+    expect(rows[3].error_message).toBe("fetch timed out");
+  });
+
+  it("writes discovery_status 'failed' when no field reached 'found'", async () => {
+    await finalizeDiscovery("c1", {
+      ...mixedResult,
+      logs: mixedResult.logs.map((l) => ({
+        ...l,
+        status: l.status === "found" ? "not_found" : l.status,
+        discovered_value: null,
+      })),
+    });
+
+    expect(updateSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ discovery_status: "failed" })
+    );
+    expect(insertMock).toHaveBeenCalledWith(competitorDiscoveryLogTable);
+  });
+
+  it("still updates the competitors row but issues no insert when logs is empty", async () => {
+    await finalizeDiscovery("c1", {
+      subreddits: [],
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: [],
+    });
+
+    expect(updateMock).toHaveBeenCalledWith(competitorsTable);
+    expect(updateSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ discovery_status: "failed" })
+    );
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+
+  it("builds the update's .where from eq(competitorsTable.id, competitorId)", async () => {
+    await finalizeDiscovery("c1", mixedResult);
+
+    expect(eq).toHaveBeenCalledWith(competitorsTable.id, "c1");
+    expect(updateWhereMock).toHaveBeenCalled();
   });
 });
