@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RetrievedChunk, RerankedChunk } from "../../retrieval";
 
 const { hybridRetrieveMock, rerankChunksMock, enforceCitationsMock } = vi.hoisted(() => ({
@@ -89,6 +89,14 @@ function retrieved(overrides: Partial<RetrievedChunk> = {}): RetrievedChunk {
 function reranked(overrides: Partial<RerankedChunk> = {}): RerankedChunk {
   return { ...retrieved(), relevance_score: 0.91, ...overrides };
 }
+
+function input() {
+  return { query: "What changed?", competitor_ids: [COMPETITOR_1], run_id: RUN_ID };
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("agents/chat/chat-agent — input and retrieval boundary", () => {
   beforeEach(() => {
@@ -213,5 +221,151 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     });
 
     expect(rerankChunksMock).toHaveBeenCalledWith("What changed?", [retrieved()]);
+  });
+});
+
+describe("agents/chat/chat-agent — grounded generation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cacheGetMock.mockResolvedValue(null);
+    cacheSetexMock.mockResolvedValue("OK");
+    getCompanyContextMock.mockResolvedValue("");
+    getActivePromptMock.mockResolvedValue(null);
+    selectModelMock.mockResolvedValue("claude-sonnet");
+    trackCostMock.mockResolvedValue(0);
+    hybridRetrieveMock.mockResolvedValue([retrieved()]);
+    rerankChunksMock.mockResolvedValue([reranked()]);
+    enforceCitationsMock.mockResolvedValue({
+      refused: false,
+      answer: "Acme support response times slowed.",
+      citations: [],
+    });
+    anthropicInvokeMock.mockResolvedValue({
+      content: "Acme support response times slowed.",
+      usage_metadata: { input_tokens: 20, output_tokens: 5 },
+    });
+    trackLatencyMock.mockImplementation(
+      (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    );
+  });
+
+  it("uses the active prompt, company context, and an explicit untrusted-evidence boundary", async () => {
+    getActivePromptMock.mockResolvedValueOnce("CUSTOM CHAT PROMPT");
+    getCompanyContextMock.mockResolvedValueOnce("ABOUT THE USER'S COMPANY: Widgets Inc.");
+
+    await runChatAgent(input());
+
+    expect(getActivePromptMock).toHaveBeenCalledWith("chat_agent");
+    expect(getCompanyContextMock).toHaveBeenCalledTimes(1);
+    const messages = anthropicInvokeMock.mock.calls[0][0] as Array<[string, string]>;
+    expect(messages[0][1]).toContain("CUSTOM CHAT PROMPT");
+    expect(messages[0][1]).toContain("ABOUT THE USER'S COMPANY: Widgets Inc.");
+    expect(messages[0][1]).toContain("untrusted source material");
+    expect(messages[1][1]).toContain("EVIDENCE_START");
+    expect(messages[1][1]).toContain("[signal:signal-1]");
+    expect(messages[1][1]).toContain("source: reddit");
+    expect(messages[1][1]).toContain("https://reddit.com/r/saas/1");
+    expect(messages[1][1]).toContain("EVIDENCE_END");
+  });
+
+  it("translates the selected Anthropic alias and configures bounded generation", async () => {
+    selectModelMock.mockResolvedValueOnce("claude-haiku");
+    vi.stubEnv("MAX_TOKENS_PER_CALL", "999999");
+
+    await runChatAgent(input());
+
+    expect(selectModelMock).toHaveBeenCalledWith("claude-sonnet", true);
+    expect(chatAnthropicMock).toHaveBeenCalledWith({
+      model: "claude-haiku-4-5-20251001",
+      clientOptions: { timeout: 30_000 },
+      maxRetries: 2,
+      maxTokens: 4_096,
+    });
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "chat_agent",
+      "claude-haiku",
+      20,
+      5,
+      RUN_ID,
+      COMPETITOR_1
+    );
+  });
+
+  it("passes the draft, exact reranked evidence, and normalized query to citation enforcement", async () => {
+    const evidence = [reranked({ id: "signal-a" }), reranked({ id: "signal-b" })];
+    rerankChunksMock.mockResolvedValueOnce(evidence);
+
+    const result = await runChatAgent({ ...input(), query: "  What changed?  " });
+
+    expect(enforceCitationsMock).toHaveBeenCalledWith(
+      "Acme support response times slowed.",
+      evidence,
+      "What changed?"
+    );
+    expect(result).toEqual({
+      refused: false,
+      answer: "Acme support response times slowed.",
+      citations: [],
+    });
+  });
+
+  it("passes a citation-enforcement refusal through as a normal result", async () => {
+    const refusal = {
+      refused: true,
+      reason: "Most claims were unsupported.",
+      suggested_query: "Ask about Acme pricing in the last month.",
+    } as const;
+    enforceCitationsMock.mockResolvedValueOnce(refusal);
+
+    await expect(runChatAgent(input())).resolves.toEqual(refusal);
+  });
+
+  it("extracts text blocks from Anthropic content and ignores non-text blocks", async () => {
+    anthropicInvokeMock.mockResolvedValueOnce({
+      content: [
+        { type: "text", text: "First grounded paragraph." },
+        { type: "tool_use", id: "ignored", name: "ignored", input: {} },
+        { type: "text", text: "Second grounded paragraph." },
+      ],
+      usage_metadata: { input_tokens: 10, output_tokens: 8 },
+    });
+
+    await runChatAgent(input());
+
+    expect(enforceCitationsMock).toHaveBeenCalledWith(
+      "First grounded paragraph.\nSecond grounded paragraph.",
+      [reranked()],
+      "What changed?"
+    );
+  });
+
+  it("tracks the billed call then throws when Anthropic returns no text", async () => {
+    anthropicInvokeMock.mockResolvedValueOnce({
+      content: [{ type: "tool_use", id: "only-tool", name: "ignored", input: {} }],
+      usage_metadata: { input_tokens: 10, output_tokens: 1 },
+    });
+
+    await expect(runChatAgent(input())).rejects.toThrow("Claude returned no text content");
+
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "chat_agent",
+      "claude-sonnet",
+      10,
+      1,
+      RUN_ID,
+      COMPETITOR_1
+    );
+    expect(enforceCitationsMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds each evidence chunk before placing it in the prompt", async () => {
+    const oversized = "x".repeat(5_000);
+    rerankChunksMock.mockResolvedValueOnce([reranked({ text: oversized })]);
+
+    await runChatAgent(input());
+
+    const messages = anthropicInvokeMock.mock.calls[0][0] as Array<[string, string]>;
+    expect(messages[1][1]).toContain("x".repeat(4_000));
+    expect(messages[1][1]).not.toContain("x".repeat(4_001));
   });
 });
