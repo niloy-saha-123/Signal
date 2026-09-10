@@ -52,10 +52,14 @@ import Parser from "rss-parser";
 import type { CompetitorDiscoveryResult, DiscoveryLog } from "@signal/shared";
 import { withRetry } from "../../lib/retry";
 import { logger } from "../../lib/logger";
+import { safeFetch, type SafeFetchInit, type SafeFetchResult } from "../../lib/safe-fetch";
 
 type FieldName = DiscoveryLog["field_name"];
 
 const TIMEOUT_MS = 15_000;
+// Every probe body is attacker-influenced (the competitor picks the endpoint,
+// and a redirect can move it again) — cap what cheerio/xml2js are handed.
+const MAX_BODY_BYTES = 2_000_000;
 const RETRY = { maxAttempts: 2 } as const;
 const FIELD_ORDER: FieldName[] = ["subreddits", "greenhouse", "lever", "pricing_url", "rss_url"];
 
@@ -100,27 +104,6 @@ export function normalizeDomain(input: string): string {
   }
 }
 
-// SSRF guard — reject anything that could point at a private/internal host
-// before it gets interpolated into a probe URL.
-export function isPublicDomain(d: string): boolean {
-  if (!d || !d.includes(".")) return false;
-  if (d === "localhost" || d.endsWith(".local") || d.endsWith(".internal")) return false;
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(d)) return false; // IPv4 literal
-  if (d.includes(":")) return false; // IPv6 literal / host:port
-  return true;
-}
-
-function isPublicHttpUrl(input: string): boolean {
-  try {
-    const parsed = new URL(input);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    if (parsed.username || parsed.password || parsed.port) return false;
-    return isPublicDomain(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
 function nameSlug(name: string): string {
   return name
     .toLowerCase()
@@ -145,8 +128,18 @@ export function slugVariants(domain: string | null, name: string): string[] {
   return out;
 }
 
-function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
-  return withRetry(() => fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), ...init }), RETRY);
+// Every outbound probe goes through safeFetch: the host is resolved and checked
+// against the private/reserved ranges before connecting, each redirect hop is
+// re-validated, and the body is size-capped.
+function probe(url: string, init: SafeFetchInit = {}): Promise<SafeFetchResult> {
+  return withRetry(
+    () => safeFetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), maxBytes: MAX_BODY_BYTES, ...init }),
+    RETRY
+  );
+}
+
+function isOk(res: SafeFetchResult): boolean {
+  return res.status >= 200 && res.status < 300;
 }
 
 interface StrategyOutcome<T> {
@@ -172,14 +165,9 @@ interface RedditSearch {
 
 async function redditSearch(url: string): Promise<RedditSearch> {
   const ua = process.env.REDDIT_USER_AGENT ?? "Signal/1.0";
-  return withRetry(async () => {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: { "User-Agent": ua },
-    });
-    if (!res.ok) throw new Error(`reddit ${url} returned ${res.status}`);
-    return (await res.json()) as RedditSearch;
-  }, RETRY);
+  const res = await probe(url, { headers: { "User-Agent": ua } });
+  if (!isOk(res)) throw new Error(`reddit ${url} returned ${res.status}`);
+  return (await res.json()) as RedditSearch;
 }
 
 async function discoverSubreddits(name: string): Promise<StrategyOutcome<string[]>> {
@@ -251,7 +239,7 @@ async function discoverAts(
           ? `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs`
           : `https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`;
       attempted.push(url);
-      const res = await fetchWithTimeout(url);
+      const res = await probe(url);
       if (res.status !== 200) continue;
       const body = (await res.json()) as unknown;
       const hit =
@@ -305,12 +293,12 @@ async function discoverPricing(domain: string | null): Promise<StrategyOutcome<s
     for (const path of PRICING_PATHS) {
       const url = `https://${domain}${path}`;
       attempted.push(url);
-      let res = await fetchWithTimeout(url, { method: "HEAD", redirect: "follow" });
+      let res = await probe(url, { method: "HEAD" });
       // Ruling: some servers reject HEAD — fall back to GET on the same path.
-      if (!res.ok && (res.status === 405 || res.status === 501)) {
-        res = await fetchWithTimeout(url, { method: "GET", redirect: "follow" });
+      if (res.status === 405 || res.status === 501) {
+        res = await probe(url, { method: "GET" });
       }
-      if (res.ok) {
+      if (isOk(res)) {
         return {
           value: res.url,
           log: {
@@ -349,9 +337,14 @@ async function discoverPricing(domain: string | null): Promise<StrategyOutcome<s
 
 // --- RSS / CHANGELOG --------------------------------------------------------
 
+// rss-parser's own parseURL follows Location with no host check on any hop and
+// reads an unbounded body — fetch the candidate ourselves and hand the parser
+// text it can only parse.
 async function parsesAsFeed(url: string): Promise<boolean> {
   try {
-    const feed = await withRetry(() => parser.parseURL(url), RETRY);
+    const res = await probe(url);
+    if (!isOk(res)) return false;
+    const feed = await parser.parseString(await res.text());
     return Boolean(feed) && Array.isArray(feed.items);
   } catch {
     return false;
@@ -384,7 +377,7 @@ async function discoverRss(domain: string | null): Promise<StrategyOutcome<strin
     // Fallback: scrape the homepage for a declared feed link.
     const homeUrl = `https://${domain}/`;
     attempted.push(homeUrl);
-    const res = await fetchWithTimeout(homeUrl, { redirect: "follow" });
+    const res = await probe(homeUrl);
     const $ = cheerio.load(await res.text());
     const href = $(
       'link[rel="alternate"][type="application/rss+xml"], link[rel="alternate"][type="application/atom+xml"]'
@@ -392,8 +385,10 @@ async function discoverRss(domain: string | null): Promise<StrategyOutcome<strin
       .first()
       .attr("href");
     if (href) {
-      const resolved = new URL(href, `https://${domain}`).toString();
-      if (isPublicHttpUrl(resolved)) {
+      // parsesAsFeed re-runs the full safeFetch guard on this attacker-supplied
+      // href, so no separate URL check is needed here.
+      const resolved = URL.parse(href, `https://${domain}`)?.toString();
+      if (resolved) {
         attempted.push(resolved);
         if (await parsesAsFeed(resolved)) return found(resolved);
       }
@@ -437,8 +432,9 @@ export async function discoverCompetitor(input: {
     changelog_rss: string | null;
   };
 }): Promise<CompetitorDiscoveryResult> {
-  const norm = normalizeDomain(input.domain);
-  const probeDomain = isPublicDomain(norm) ? norm : null;
+  // Syntactic only — whether the host is actually safe to reach is decided per
+  // call by safeFetch, which resolves it and re-checks every redirect hop.
+  const probeDomain = normalizeDomain(input.domain) || null;
   const ex = input.existing;
   const isSet = (v: string | null): v is string => typeof v === "string" && v.length > 0;
 
