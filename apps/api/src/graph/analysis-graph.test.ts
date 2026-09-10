@@ -18,20 +18,24 @@ vi.mock("../lib/logger", () => ({
 }));
 
 // intentAnalyzerNode (Task 2), sentimentClustererNode (Task 3), changeDetectorNode
-// (Task 4), and patternDetectorNode (Task 5) are now real — all four import db/queries and
-// lib/company-context (which in turn opens real ioredis connections at module load).
-// Mocked here so this DAG-level test stays isolated from Postgres/Redis: an empty result
-// list drives intentAnalyzer/sentimentClusterer/changeDetector down their no-LLM-call
-// short-circuit/defensive paths, and an `undefined` getFirstSignalCollectedAt drives
-// patternDetector down its own <90-day Phase 2 skip.
+// (Task 4), patternDetectorNode (Task 5), and vulnerabilityDetectorNode (Task 6) are now
+// real — all five import db/queries and lib/company-context (which in turn opens real
+// ioredis connections at module load). Mocked here so this DAG-level test stays isolated
+// from Postgres/Redis: an empty result list drives intentAnalyzer/sentimentClusterer/
+// changeDetector down their no-LLM-call short-circuit/defensive paths, an `undefined`
+// getFirstSignalCollectedAt drives patternDetector down its own <90-day Phase 2 skip, and
+// an empty baseline/diffs list feeds vulnerabilityDetector's pricing context (its window
+// call itself is mocked below to always resolve window_open: false).
 const {
   getRecentSignalsByCompetitorAndSourceMock,
   getRecentPricingDiffsMock,
+  getLatestPricingBaselineMock,
   getSignalVolumeByDayMock,
   getFirstSignalCollectedAtMock,
 } = vi.hoisted(() => ({
   getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
   getRecentPricingDiffsMock: vi.fn().mockResolvedValue([]),
+  getLatestPricingBaselineMock: vi.fn().mockResolvedValue(undefined),
   getSignalVolumeByDayMock: vi.fn().mockResolvedValue([]),
   getFirstSignalCollectedAtMock: vi.fn().mockResolvedValue(undefined),
 }));
@@ -39,6 +43,7 @@ const {
 vi.mock("../db/queries", () => ({
   getRecentSignalsByCompetitorAndSource: getRecentSignalsByCompetitorAndSourceMock,
   getRecentPricingDiffs: getRecentPricingDiffsMock,
+  getLatestPricingBaseline: getLatestPricingBaselineMock,
   getSignalVolumeByDay: getSignalVolumeByDayMock,
   getFirstSignalCollectedAt: getFirstSignalCollectedAtMock,
 }));
@@ -66,14 +71,28 @@ vi.mock("../llm/cost-tracker", () => ({
   trackCost: vi.fn().mockResolvedValue(0),
 }));
 
-const { patternsParsed } = vi.hoisted(() => ({
+const { patternsParsed, vulnerabilityWindowClosedParsed } = vi.hoisted(() => ({
   patternsParsed: { summary: "Stable signal volume.", trend: "stable" as const },
+  // Drives vulnerabilityDetectorNode's own short-circuit (see vulnerability-detector.ts)
+  // so this DAG test never needs to also mock ChatAnthropic for its second call.
+  vulnerabilityWindowClosedParsed: { window_open: false, reasoning: "No open vulnerability window." },
 }));
 
 vi.mock("@langchain/openai", () => {
-  const invoke = vi
-    .fn()
-    .mockResolvedValue({ raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } }, parsed: patternsParsed });
+  // patternDetectorNode and vulnerabilityDetectorNode's first call both use ChatOpenAI
+  // with different Zod schemas — this single shared mock can't inspect the schema, so it
+  // branches on the system prompt text instead (vulnerability-detector.ts's prompt
+  // mentions "vulnerability window", pattern-detector.ts's does not).
+  const invoke = vi.fn().mockImplementation((messages: [string, string][]) => {
+    const [systemMessage] = messages;
+    const parsed = systemMessage[1].includes("vulnerability window")
+      ? vulnerabilityWindowClosedParsed
+      : patternsParsed;
+    return Promise.resolve({
+      raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } },
+      parsed,
+    });
+  });
   class ChatOpenAIMockClass {
     withStructuredOutput() {
       return { invoke };
@@ -86,7 +105,6 @@ import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
   changeDetector: "change-detector: no recent pricing diffs found — unexpected since the router only invokes this node when has_pricing_diff is true",
-  vulnerabilityDetector: "vulnerabilityDetectorNode: not yet implemented (Part 10) — returning no-op update",
   synthesis: "synthesisNode: not yet implemented (Part 10) — returning no-op update",
 } as const;
 
@@ -122,7 +140,14 @@ describe("analysisGraph — compiled DAG", () => {
     // since getFirstSignalCollectedAt is mocked to resolve undefined, and produces the
     // mocked ChatOpenAI structured output from Phase 1 data alone.
     expect(result.patterns).toEqual(patternsParsed);
-    expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
+    // vulnerabilityDetectorNode is real now (Task 6) — the shared ChatOpenAI mock above
+    // resolves its window-identification call to window_open: false, so it short-circuits
+    // before ever reaching the Claude Sonnet positioning-copy call.
+    expect(result.vulnerability).toEqual({
+      summary: "No open vulnerability window.",
+      window_open: false,
+      positioning_copy: "",
+    });
     // (b) changeDetector runs when has_pricing_diff is true — it takes its own
     // defensive no-diffs-found short-circuit since getRecentPricingDiffs is mocked to
     // return [] (real behavior since Task 4).
@@ -152,7 +177,13 @@ describe("analysisGraph — compiled DAG", () => {
     // since getFirstSignalCollectedAt is mocked to resolve undefined, and produces the
     // mocked ChatOpenAI structured output from Phase 1 data alone.
     expect(result.patterns).toEqual(patternsParsed);
-    expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
+    // vulnerabilityDetectorNode is real now (Task 6) — see the short-circuit note in the
+    // test above.
+    expect(result.vulnerability).toEqual({
+      summary: "No open vulnerability window.",
+      window_open: false,
+      positioning_copy: "",
+    });
     // (b) changeDetector is skipped when has_pricing_diff is false
     expect(callCountFor(LOG_MESSAGES.changeDetector)).toBe(0);
     // (c) synthesis still runs exactly once — fan-in must not deadlock waiting on the

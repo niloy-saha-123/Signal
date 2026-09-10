@@ -17,13 +17,16 @@ const AGENT_NAME = "sentiment_clusterer" as const;
 // agent in this codebase.
 const PREFERRED_MODEL = "claude-haiku";
 
-// "claude-haiku" is this codebase's internal cost-tracking/routing alias only
-// (llm/cost-tracker.ts's PRICING_PER_MILLION_TOKENS key, llm/adaptive-router.ts's
-// DOWNGRADE_MAP value) — not a valid Anthropic API model string. Translate it here for the
-// actual ChatAnthropic constructor; trackCost still gets the alias below, same as every
-// other model passed to it in this codebase.
-const ANTHROPIC_MODEL_IDS: Record<string, string> = {
+// "claude-haiku"/"claude-sonnet" are this codebase's internal cost-tracking/routing
+// aliases only (llm/cost-tracker.ts's PRICING_PER_MILLION_TOKENS keys,
+// llm/adaptive-router.ts's DOWNGRADE_MAP keys/values) — not valid Anthropic API model
+// strings. Translate them here for the actual ChatAnthropic constructor; trackCost still
+// gets the alias below, same as every other model passed to it in this codebase.
+// Exported and reused by vulnerability-detector.ts (its Claude Sonnet positioning-copy
+// call can downgrade to "claude-haiku" at runtime) rather than duplicating this map.
+export const ANTHROPIC_MODEL_IDS: Record<string, string> = {
   "claude-haiku": "claude-haiku-4-5-20251001",
+  "claude-sonnet": "claude-sonnet-5",
 };
 
 // Bounded client budget — same reasoning as pipeline/entity-extractor.ts and
