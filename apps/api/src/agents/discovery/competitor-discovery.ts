@@ -57,6 +57,10 @@ import { safeFetch, type SafeFetchInit, type SafeFetchResult } from "../../lib/s
 type FieldName = DiscoveryLog["field_name"];
 
 const TIMEOUT_MS = 15_000;
+// Hard wall-clock bound on one discovery run. A domain that DNS-resolves but
+// blackholes connections would otherwise pin a worker slot for minutes across
+// the serial pricing/ATS loops; registry.ts's lockDuration is sized off this.
+const RUN_DEADLINE_MS = 45_000;
 // Every probe body is attacker-influenced (the competitor picks the endpoint,
 // and a redirect can move it again) — cap what cheerio/xml2js are handed.
 const MAX_BODY_BYTES = 2_000_000;
@@ -84,7 +88,13 @@ function truncate(s: string, n = 500): string {
   return s.length > n ? s.slice(0, n) : s;
 }
 
-function errText(err: unknown): string {
+function errText(err: unknown, runSignal?: AbortSignal): string {
+  if (runSignal?.aborted) {
+    const reason: unknown = runSignal.reason;
+    return reason instanceof Error && reason.name === "TimeoutError"
+      ? "run deadline exceeded"
+      : "discovery run cancelled";
+  }
   return truncate(err instanceof Error ? err.message : String(err));
 }
 
@@ -116,8 +126,8 @@ function domainSlug(domain: string): string {
   return (parts.length > 1 ? parts.slice(0, -1) : parts).join("-");
 }
 
-// Ordered, de-duped slug candidates. `domain` is null when it failed the SSRF
-// guard — name-based variants still run (they never touch the domain).
+// Ordered, de-duped slug candidates. `domain` is null when it was not a usable
+// host — name-based variants still run (they never touch the domain).
 export function slugVariants(domain: string | null, name: string): string[] {
   const d = domain ? domainSlug(domain) : "";
   const n = nameSlug(name);
@@ -131,11 +141,19 @@ export function slugVariants(domain: string | null, name: string): string[] {
 // Every outbound probe goes through safeFetch: the host is resolved and checked
 // against the private/reserved ranges before connecting, each redirect hop is
 // re-validated, and the body is size-capped.
-function probe(url: string, init: SafeFetchInit = {}): Promise<SafeFetchResult> {
-  return withRetry(
-    () => safeFetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), maxBytes: MAX_BODY_BYTES, ...init }),
-    RETRY
-  );
+// Single attempt on purpose: a clean 404 or a "not a feed" parse is the expected
+// outcome for most probes, so retrying only doubles outbound volume against the
+// run deadline. Retry is kept where it can actually help — see redditSearch.
+function probe(
+  url: string,
+  runSignal: AbortSignal,
+  init: SafeFetchInit = {}
+): Promise<SafeFetchResult> {
+  return safeFetch(url, {
+    signal: AbortSignal.any([runSignal, AbortSignal.timeout(TIMEOUT_MS)]),
+    maxBytes: MAX_BODY_BYTES,
+    ...init,
+  });
 }
 
 function isOk(res: SafeFetchResult): boolean {
@@ -163,23 +181,32 @@ interface RedditSearch {
   data?: { children?: Array<{ data?: { display_name?: unknown; subreddit?: unknown } }> };
 }
 
-async function redditSearch(url: string): Promise<RedditSearch> {
+async function redditSearch(url: string, runSignal: AbortSignal): Promise<RedditSearch> {
   const ua = process.env.REDDIT_USER_AGENT ?? "Signal/1.0";
-  const res = await probe(url, { headers: { "User-Agent": ua } });
+  // Retry only what a retry can fix: a thrown network error/timeout, or a 5xx.
+  // A resolved 4xx is reddit's answer, not a blip.
+  const res = await withRetry(async () => {
+    const attempt = await probe(url, runSignal, { headers: { "User-Agent": ua } });
+    if (attempt.status >= 500) throw new Error(`reddit ${url} returned ${attempt.status}`);
+    return attempt;
+  }, RETRY);
   if (!isOk(res)) throw new Error(`reddit ${url} returned ${res.status}`);
   return (await res.json()) as RedditSearch;
 }
 
-async function discoverSubreddits(name: string): Promise<StrategyOutcome<string[]>> {
+async function discoverSubreddits(
+  name: string,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string[]>> {
   const q = encodeURIComponent(name);
   const srUrl = `https://www.reddit.com/search.json?q=${q}&type=sr&limit=25`;
   const postsUrl = `https://www.reddit.com/search.json?q=${q}&limit=100`;
   const attempted: string[] = [];
   try {
     attempted.push(srUrl);
-    const byName = await redditSearch(srUrl);
+    const byName = await redditSearch(srUrl, runSignal);
     attempted.push(postsUrl);
-    const byMention = await redditSearch(postsUrl);
+    const byMention = await redditSearch(postsUrl, runSignal);
 
     const score = new Map<string, number>();
     const bump = (v: unknown) => {
@@ -218,7 +245,7 @@ async function discoverSubreddits(name: string): Promise<StrategyOutcome<string[
         attempted_urls: attempted,
         discovered_value: null,
         status: "error",
-        error_message: errText(err),
+        error_message: errText(err, runSignal),
       },
     };
   }
@@ -229,7 +256,8 @@ async function discoverSubreddits(name: string): Promise<StrategyOutcome<string[
 async function discoverAts(
   field: "greenhouse" | "lever",
   domain: string | null,
-  name: string
+  name: string,
+  runSignal: AbortSignal
 ): Promise<StrategyOutcome<string | null>> {
   const attempted: string[] = [];
   try {
@@ -239,7 +267,7 @@ async function discoverAts(
           ? `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs`
           : `https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`;
       attempted.push(url);
-      const res = await probe(url);
+      const res = await probe(url, runSignal);
       if (res.status !== 200) continue;
       const body = (await res.json()) as unknown;
       const hit =
@@ -278,7 +306,7 @@ async function discoverAts(
         attempted_urls: attempted,
         discovered_value: null,
         status: "error",
-        error_message: errText(err),
+        error_message: errText(err, runSignal),
       },
     };
   }
@@ -286,17 +314,20 @@ async function discoverAts(
 
 // --- PRICING URL -----------------------------------------------------------
 
-async function discoverPricing(domain: string | null): Promise<StrategyOutcome<string | null>> {
+async function discoverPricing(
+  domain: string | null,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string | null>> {
   if (!domain) return { value: null, log: invalidDomainLog("pricing_url") };
   const attempted: string[] = [];
   try {
     for (const path of PRICING_PATHS) {
       const url = `https://${domain}${path}`;
       attempted.push(url);
-      let res = await probe(url, { method: "HEAD" });
+      let res = await probe(url, runSignal, { method: "HEAD" });
       // Ruling: some servers reject HEAD — fall back to GET on the same path.
       if (res.status === 405 || res.status === 501) {
-        res = await probe(url, { method: "GET" });
+        res = await probe(url, runSignal, { method: "GET" });
       }
       if (isOk(res)) {
         return {
@@ -329,7 +360,7 @@ async function discoverPricing(domain: string | null): Promise<StrategyOutcome<s
         attempted_urls: attempted,
         discovered_value: null,
         status: "error",
-        error_message: errText(err),
+        error_message: errText(err, runSignal),
       },
     };
   }
@@ -340,9 +371,9 @@ async function discoverPricing(domain: string | null): Promise<StrategyOutcome<s
 // rss-parser's own parseURL follows Location with no host check on any hop and
 // reads an unbounded body — fetch the candidate ourselves and hand the parser
 // text it can only parse.
-async function parsesAsFeed(url: string): Promise<boolean> {
+async function parsesAsFeed(url: string, runSignal: AbortSignal): Promise<boolean> {
   try {
-    const res = await probe(url);
+    const res = await probe(url, runSignal);
     if (!isOk(res)) return false;
     const feed = await parser.parseString(await res.text());
     return Boolean(feed) && Array.isArray(feed.items);
@@ -351,7 +382,10 @@ async function parsesAsFeed(url: string): Promise<boolean> {
   }
 }
 
-async function discoverRss(domain: string | null): Promise<StrategyOutcome<string | null>> {
+async function discoverRss(
+  domain: string | null,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string | null>> {
   if (!domain) return { value: null, log: invalidDomainLog("rss_url") };
   const attempted: string[] = [];
   const found = (url: string): StrategyOutcome<string | null> => ({
@@ -370,14 +404,14 @@ async function discoverRss(domain: string | null): Promise<StrategyOutcome<strin
     // set together, then choose the first valid URL in the documented order.
     const feedUrls = RSS_PATHS.map((path) => `https://${domain}${path}`);
     attempted.push(...feedUrls);
-    const feedMatches = await Promise.all(feedUrls.map((url) => parsesAsFeed(url)));
+    const feedMatches = await Promise.all(feedUrls.map((url) => parsesAsFeed(url, runSignal)));
     const firstMatch = feedMatches.findIndex(Boolean);
     if (firstMatch >= 0) return found(feedUrls[firstMatch]);
 
     // Fallback: scrape the homepage for a declared feed link.
     const homeUrl = `https://${domain}/`;
     attempted.push(homeUrl);
-    const res = await probe(homeUrl);
+    const res = await probe(homeUrl, runSignal);
     const $ = cheerio.load(await res.text());
     const href = $(
       'link[rel="alternate"][type="application/rss+xml"], link[rel="alternate"][type="application/atom+xml"]'
@@ -390,7 +424,7 @@ async function discoverRss(domain: string | null): Promise<StrategyOutcome<strin
       const resolved = URL.parse(href, `https://${domain}`)?.toString();
       if (resolved) {
         attempted.push(resolved);
-        if (await parsesAsFeed(resolved)) return found(resolved);
+        if (await parsesAsFeed(resolved, runSignal)) return found(resolved);
       }
     }
 
@@ -412,7 +446,7 @@ async function discoverRss(domain: string | null): Promise<StrategyOutcome<strin
         attempted_urls: attempted,
         discovered_value: null,
         status: "error",
-        error_message: errText(err),
+        error_message: errText(err, runSignal),
       },
     };
   }
@@ -431,7 +465,13 @@ export async function discoverCompetitor(input: {
     pricing_url: string | null;
     changelog_rss: string | null;
   };
-}): Promise<CompetitorDiscoveryResult> {
+}, opts: { signal?: AbortSignal } = {}): Promise<CompetitorDiscoveryResult> {
+  // One deadline for the whole run, threaded into every probe. A strategy still
+  // in flight when it fires resolves to an `error` log and the rest of the
+  // result still finalizes.
+  const runSignal = opts.signal
+    ? AbortSignal.any([opts.signal, AbortSignal.timeout(RUN_DEADLINE_MS)])
+    : AbortSignal.timeout(RUN_DEADLINE_MS);
   // Syntactic only — whether the host is actually safe to reach is decided per
   // call by safeFetch, which resolves it and re-checks every redirect hop.
   const probeDomain = normalizeDomain(input.domain) || null;
@@ -462,27 +502,37 @@ export async function discoverCompetitor(input: {
   // Skip rule (plan deviation 4): a pre-filled field is passed straight through
   // with no probe and no log entry.
   if (ex.subreddits.length === 0) {
-    tasks.push(discoverSubreddits(input.name).then(record<string[]>((v) => (result.subreddits = v))));
+    tasks.push(
+      discoverSubreddits(input.name, runSignal).then(record<string[]>((v) => (result.subreddits = v)))
+    );
   }
   if (!isSet(ex.greenhouse_token)) {
     tasks.push(
-      discoverAts("greenhouse", probeDomain, input.name).then(
+      discoverAts("greenhouse", probeDomain, input.name, runSignal).then(
         record<string | null>((v) => (result.greenhouse_token = v))
       )
     );
   }
   if (!isSet(ex.lever_token)) {
     tasks.push(
-      discoverAts("lever", probeDomain, input.name).then(
+      discoverAts("lever", probeDomain, input.name, runSignal).then(
         record<string | null>((v) => (result.lever_token = v))
       )
     );
   }
   if (!isSet(ex.pricing_url)) {
-    tasks.push(discoverPricing(probeDomain).then(record<string | null>((v) => (result.pricing_url = v))));
+    tasks.push(
+      discoverPricing(probeDomain, runSignal).then(
+        record<string | null>((v) => (result.pricing_url = v))
+      )
+    );
   }
   if (!isSet(ex.changelog_rss)) {
-    tasks.push(discoverRss(probeDomain).then(record<string | null>((v) => (result.changelog_rss = v))));
+    tasks.push(
+      discoverRss(probeDomain, runSignal).then(
+        record<string | null>((v) => (result.changelog_rss = v))
+      )
+    );
   }
 
   try {
@@ -493,7 +543,7 @@ export async function discoverCompetitor(input: {
     // write to reject).
     logger.error("competitor discovery: unexpected orchestration error", {
       competitor_id: input.competitor_id,
-      error: errText(err),
+      error: errText(err, runSignal),
     });
   }
 

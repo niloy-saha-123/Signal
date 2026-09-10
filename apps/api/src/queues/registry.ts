@@ -73,9 +73,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
     concurrency: 3,
     attempts: 2,
     backoff: { type: "fixed", delay: 5000 },
-    // Discovery fans out over multiple bounded HTTP probes. Leave enough time
-    // for one field timeout plus finalization without losing the BullMQ lock.
-    lockDuration: 120_000,
+    // discoverCompetitor enforces a 45s run deadline on all its probes, so the
+    // lock only has to cover that plus finalization — keep the two in step.
+    lockDuration: 60_000,
   },
   "company-profile-update": { concurrency: 1, attempts: 1 },
   "collect-reddit": DEFAULT_CONFIG,

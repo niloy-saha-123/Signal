@@ -3,7 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { loggerMock, parseStringMock, withRetryMock, lookupMock } = vi.hoisted(() => ({
   loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   parseStringMock: vi.fn(),
-  withRetryMock: vi.fn(async (fn: () => Promise<unknown>) => fn()),
+  // Real retry semantics minus the backoff sleep, so "this probe is not
+  // retried" is an assertion the mock can't accidentally satisfy.
+  withRetryMock: vi.fn(async (fn: () => Promise<unknown>, opts?: { maxAttempts?: number }) => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < (opts?.maxAttempts ?? 3); attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }),
   lookupMock: vi.fn(),
 }));
 
@@ -376,6 +388,131 @@ describe("agents/discovery/competitor-discovery", () => {
     expect(logFor(result, "pricing_url").status).toBe("error");
     expect(logFor(result, "rss_url").status).toBe("error");
     expect(fetchMock.mock.calls.every(([url]) => !String(url).includes("127.0.0.1"))).toBe(true);
+  });
+});
+
+// H-4/H-5: one run has to stay inside the BullMQ lock, and a probe whose miss is
+// the expected outcome must not be retried into double the outbound volume.
+describe("agents/discovery/competitor-discovery — runtime bounds", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lookupMock.mockResolvedValue(PUBLIC_ANSWER);
+    parseStringMock.mockRejectedValue(new Error("not a feed"));
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("abandons a strategy still in flight at the run deadline and finalizes the rest", async () => {
+    const controller = new AbortController();
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("reddit.com")) return response({ json: { data: { children: [] } } });
+      if (url.startsWith("https://acme.com/pricing")) {
+        return new Promise<Response>((_resolve, reject) => {
+          controller.signal.addEventListener("abort", () => reject(controller.signal.reason));
+        });
+      }
+      return response({ status: 404 });
+    });
+
+    const pending = discoverCompetitor(
+      { competitor_id: "comp-1", name: "Acme", domain: "acme.com", existing: emptyExisting },
+      { signal: controller.signal }
+    );
+
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/pricing"))).toBe(true)
+    );
+    controller.abort(Object.assign(new Error("deadline"), { name: "TimeoutError" }));
+
+    const result = await pending;
+    expect(logFor(result, "pricing_url")).toMatchObject({
+      status: "error",
+      error_message: "run deadline exceeded",
+    });
+    expect(logFor(result, "subreddits").status).toBe("found");
+    expect(logFor(result, "greenhouse").status).toBe("not_found");
+  });
+
+  it("passes the run deadline into every probe so nothing outlives it", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("reddit.com")) return response({ json: { data: { children: [] } } });
+      return response({ status: 404 });
+    });
+
+    await discoverCompetitor({
+      competitor_id: "comp-1",
+      name: "Acme",
+      domain: "acme.com",
+      existing: emptyExisting,
+    });
+
+    expect(fetchMock).toHaveBeenCalled();
+    for (const [, init] of fetchMock.mock.calls) {
+      expect((init as RequestInit).signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("does not retry a candidate that simply is not a feed", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("reddit.com")) return response({ json: { data: { children: [] } } });
+      return response({ text: "<html>not a feed</html>" });
+    });
+
+    await discoverCompetitor({
+      competitor_id: "comp-1",
+      name: "Acme",
+      domain: "acme.com",
+      existing: emptyExisting,
+    });
+
+    const feedCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "https://acme.com/blog/rss"
+    );
+    expect(feedCalls).toHaveLength(1);
+  });
+
+  it("does not retry a 404 pricing probe", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("reddit.com")) return response({ json: { data: { children: [] } } });
+      return response({ status: 404 });
+    });
+
+    await discoverCompetitor({
+      competitor_id: "comp-1",
+      name: "Acme",
+      domain: "acme.com",
+      existing: emptyExisting,
+    });
+
+    const pricingCalls = fetchMock.mock.calls.filter(
+      ([url]) => String(url) === "https://acme.com/pricing"
+    );
+    expect(pricingCalls).toHaveLength(1);
+  });
+
+  it("retries reddit on a 5xx but takes a 4xx as the answer", async () => {
+    const calls = new Map<string, number>();
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!url.includes("reddit.com")) return response({ status: 404 });
+      calls.set(url, (calls.get(url) ?? 0) + 1);
+      return response({ status: url.includes("type=sr") ? 503 : 429 });
+    });
+
+    const result = await discoverCompetitor({
+      competitor_id: "comp-1",
+      name: "Acme",
+      domain: "acme.com",
+      existing: emptyExisting,
+    });
+
+    expect(logFor(result, "subreddits").status).toBe("error");
+    expect([...calls.values()]).toEqual([2]);
   });
 });
 
