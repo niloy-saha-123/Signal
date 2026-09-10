@@ -131,8 +131,19 @@ async function assertPublicUrl(input: string): Promise<void> {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`unsupported probe URL scheme: ${parsed.protocol}`);
   }
-  if (parsed.username || parsed.password || parsed.port) {
-    throw new Error("probe URL must not carry credentials or an explicit port");
+  if (parsed.username || parsed.password) {
+    throw new Error("probe URL must not carry credentials");
+  }
+  // Allow an explicit port when it equals the scheme default so a legit CDN
+  // redirect (`Location: https://host:443/...`) is not refused; reject every
+  // other explicit port. WHATWG URL already folds a default `:443`/`:80` to "",
+  // so in practice only a genuinely non-default port trips this.
+  const defaultPort =
+    (parsed.protocol === "https:" && parsed.port === "443") ||
+    (parsed.protocol === "http:" && parsed.port === "80") ||
+    parsed.port === "";
+  if (!defaultPort) {
+    throw new Error("probe URL must not carry a non-default explicit port");
   }
   if (!(await isPublicHostname(parsed.hostname))) {
     throw new Error(NON_PUBLIC_ADDRESS_MESSAGE);

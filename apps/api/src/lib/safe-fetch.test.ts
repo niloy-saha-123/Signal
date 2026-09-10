@@ -140,6 +140,13 @@ describe("lib/safe-fetch — safeFetch", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("allows an explicit port that equals the scheme default", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("plans"));
+    const res = await safeFetch("https://acme.com:443/pricing");
+    expect(res.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses to fetch a host that resolves to a private address", async () => {
     lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
     await expect(safeFetch("https://probe.attacker.com/")).rejects.toThrow(
