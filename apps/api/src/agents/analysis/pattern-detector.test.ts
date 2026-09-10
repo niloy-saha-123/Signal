@@ -33,12 +33,32 @@ const { loggerMock } = vi.hoisted(() => ({
 
 vi.mock("../../lib/logger", () => ({ logger: loggerMock }));
 
-const { trackCostMock } = vi.hoisted(() => ({
+const { trackCostMock, getDailySpendMock } = vi.hoisted(() => ({
   trackCostMock: vi.fn().mockResolvedValue(0),
+  getDailySpendMock: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../../llm/cost-tracker", () => ({
   trackCost: trackCostMock,
+  getDailySpend: getDailySpendMock,
+}));
+
+const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
+  selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+  getDailyBudgetMock: vi.fn(() => 100),
+}));
+
+vi.mock("../../llm/adaptive-router", () => ({
+  selectModel: selectModelMock,
+  getDailyBudget: getDailyBudgetMock,
+}));
+
+const { getActivePromptMock } = vi.hoisted(() => ({
+  getActivePromptMock: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../../llm/prompt-registry", () => ({
+  getActivePrompt: getActivePromptMock,
 }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
@@ -143,6 +163,10 @@ describe("agents/analysis/pattern-detector", () => {
     });
     getCompanyContextMock.mockResolvedValue("");
     trackCostMock.mockResolvedValue(0);
+    getDailySpendMock.mockResolvedValue(0);
+    getDailyBudgetMock.mockReturnValue(100);
+    getActivePromptMock.mockResolvedValue(null);
+    selectModelMock.mockImplementation((preferredModel: string) => Promise.resolve(preferredModel));
     invokeMock.mockImplementation(async () => {
       callOrder.push("invoke");
       return invokeResult();
@@ -211,24 +235,83 @@ describe("agents/analysis/pattern-detector", () => {
     });
   });
 
-  it("throws when structured output parsing fails, and never returns patterns", async () => {
+  it("degrades to {} when structured output parsing fails, and never returns patterns", async () => {
     invokeMock.mockImplementation(async () => {
       callOrder.push("invoke");
       return invokeResult({ parsed: null });
     });
 
-    await expect(patternDetectorNode(state)).rejects.toThrow(
-      "pattern-detector: structured output failed schema validation for competitor c1"
-    );
+    const result = await patternDetectorNode(state);
+
+    expect(result).toEqual({});
     expect(loggerMock.error).toHaveBeenCalled();
   });
 
   it("still tracks cost using the raw usage_metadata even when the call is billed but unparsed", async () => {
     invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
 
-    await expect(patternDetectorNode(state)).rejects.toThrow();
+    await patternDetectorNode(state);
 
     expect(trackCostMock).toHaveBeenCalledWith("pattern_detector", "gpt-4o", 80, 20, "run1", "c1");
+  });
+
+  it("short-circuits to a real stable-trend result (no LLM call) when there's no volume and no retrieved history", async () => {
+    getSignalVolumeByDayMock.mockResolvedValue([]);
+    getFirstSignalCollectedAtMock.mockResolvedValue(undefined);
+
+    const result = await patternDetectorNode(state);
+
+    expect(result).toEqual({
+      patterns: { summary: "No recent signal activity to analyze.", trend: "stable" },
+    });
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the LLM call and returns {} when the daily budget is exhausted", async () => {
+    getDailySpendMock.mockResolvedValue(500);
+
+    const result = await patternDetectorNode(state);
+
+    expect(result).toEqual({});
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+  });
+
+  it("degrades to {} (no rethrow) and logs error context when the body throws", async () => {
+    getSignalVolumeByDayMock.mockRejectedValue(new Error("db down"));
+
+    const result = await patternDetectorNode(state);
+
+    expect(result).toEqual({});
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("degrading"),
+      expect.objectContaining({ agent_name: "pattern_detector", competitor_id: "c1", run_id: "run1" })
+    );
+  });
+
+  it("passes selectModel's chosen model to ChatOpenAI", async () => {
+    selectModelMock.mockResolvedValue("gpt-4o-alt");
+
+    await patternDetectorNode(state);
+
+    expect(selectModelMock).toHaveBeenCalledWith("gpt-4o", true);
+    expect(chatOpenAIMock).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o-alt" }));
+  });
+
+  it("uses the active registry prompt when one exists, else SYSTEM_PROMPT_BASE", async () => {
+    getActivePromptMock.mockResolvedValue("CUSTOM REGISTRY PROMPT");
+    await patternDetectorNode(state);
+    let systemMessage = invokeMock.mock.calls[0][0][0];
+    expect(systemMessage[1]).toContain("CUSTOM REGISTRY PROMPT");
+
+    invokeMock.mockClear();
+    getActivePromptMock.mockResolvedValue(null);
+    await patternDetectorNode(state);
+    systemMessage = invokeMock.mock.calls[0][0][0];
+    expect(systemMessage[1]).toContain("signal volume trend");
   });
 
   describe("trackLatency spans the whole node, not just the LLM call", () => {

@@ -17,6 +17,9 @@ import { getSignalVolumeByDay, getFirstSignalCollectedAt, type SignalVolumeByDay
 import { hybridRetrieve, type RetrievedChunk } from "../../retrieval";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
+import { selectModel } from "../../llm/adaptive-router";
+import { getActivePrompt } from "../../llm/prompt-registry";
+import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "pattern_detector" as const;
 const MODEL = "gpt-4o";
@@ -98,67 +101,106 @@ function buildContextText(volumeByDay: SignalVolumeByDay[], chunks: RetrievedChu
 export async function patternDetectorNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
-  // trackLatency wraps the whole node (Phase 1 SQL + the Phase 2 gate/retrieval fan-out +
-  // the LLM call) as one span — unlike Tasks 2-4, which only wrapped the LLM call, because
-  // the SQL/retrieval cost here is a real, variable part of this node's latency budget.
-  const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, async () => {
-    const volumeByDay = await getSignalVolumeByDay(state.competitor_id, 30);
+  return runBranchNode(AGENT_NAME, state, async () => {
+    // trackLatency wraps the whole node (Phase 1 SQL + the Phase 2 gate/retrieval fan-out +
+    // the LLM call) as one span — unlike Tasks 2-4, which only wrapped the LLM call, because
+    // the SQL/retrieval cost here is a real, variable part of this node's latency budget.
+    // The callback returns a discriminated outcome so the empty-input and budget-exhausted
+    // paths can skip the LLM call while keeping Phase 1/2 inside the measured span.
+    const outcome = await trackLatency(
+      AGENT_NAME,
+      state.competitor_id,
+      state.run_id,
+      async (): Promise<
+        | { kind: "empty" }
+        | { kind: "budget" }
+        | { kind: "llm"; model: string; raw: unknown; parsed: PatternsResult | null }
+      > => {
+        const volumeByDay = await getSignalVolumeByDay(state.competitor_id, 30);
 
-    const firstCollectedAt = await getFirstSignalCollectedAt(state.competitor_id);
-    const hasNinetyDaysHistory =
-      firstCollectedAt !== undefined &&
-      firstCollectedAt.getTime() <= Date.now() - PHASE_2_MIN_HISTORY_MS;
+        const firstCollectedAt = await getFirstSignalCollectedAt(state.competitor_id);
+        const hasNinetyDaysHistory =
+          firstCollectedAt !== undefined &&
+          firstCollectedAt.getTime() <= Date.now() - PHASE_2_MIN_HISTORY_MS;
 
-    const chunks = hasNinetyDaysHistory
-      ? await hybridRetrieve(buildPhase2Query(volumeByDay), [state.competitor_id], PHASE_2_RETRIEVAL_TOP_K)
-      : [];
+        const chunks = hasNinetyDaysHistory
+          ? await hybridRetrieve(
+              buildPhase2Query(volumeByDay),
+              [state.competitor_id],
+              PHASE_2_RETRIEVAL_TOP_K
+            )
+          : [];
 
-    const companyContext = await getCompanyContext();
-    const systemPrompt = companyContext
-      ? `${SYSTEM_PROMPT_BASE}\n\n${companyContext}`
-      : SYSTEM_PROMPT_BASE;
+        // ts-review M3: nothing to analyze — no volume data and no retrieved history.
+        // Return a real "we looked, there's nothing" result, no LLM call (same as the other
+        // four nodes' empty-input short-circuits).
+        if (volumeByDay.length === 0 && chunks.length === 0) {
+          return { kind: "empty" };
+        }
 
-    const chatModel = new ChatOpenAI({
-      model: MODEL,
-      timeout: LLM_TIMEOUT_MS,
-      maxRetries: LLM_MAX_RETRIES,
-    });
-    const structuredModel = chatModel.withStructuredOutput(PatternsSchema, {
-      includeRaw: true,
-    });
+        // H3: hard budget stop, immediately before the LLM call.
+        if (await isLlmBudgetExhausted(AGENT_NAME, state)) {
+          return { kind: "budget" };
+        }
 
-    return structuredModel.invoke([
-      ["system", systemPrompt],
-      ["human", buildContextText(volumeByDay, chunks)],
-    ]);
-  });
+        const model = await selectModel(MODEL, true);
+        const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
 
-  // The call was made and billed whether or not the response parsed — track it first.
-  const usage = (raw as AIMessage).usage_metadata;
-  await trackCost(
-    AGENT_NAME,
-    MODEL,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    state.run_id,
-    state.competitor_id
-  );
+        const companyContext = await getCompanyContext();
+        const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
 
-  // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
-  // failure — it hands back parsed: null while the TS type still claims PatternsResult.
-  // Returning that straight through would silently write a null patterns and report
-  // success.
-  if (!parsed) {
-    logger.error("pattern-detector: structured output failed schema validation", {
-      competitor_id: state.competitor_id,
-      run_id: state.run_id,
-      raw_content: (raw as AIMessage)?.content,
-    });
-    throw new Error(
-      `pattern-detector: structured output failed schema validation for competitor ${state.competitor_id}`
+        const chatModel = new ChatOpenAI({
+          model,
+          timeout: LLM_TIMEOUT_MS,
+          maxRetries: LLM_MAX_RETRIES,
+        });
+        const structuredModel = chatModel.withStructuredOutput(PatternsSchema, {
+          includeRaw: true,
+        });
+
+        const { raw, parsed } = await structuredModel.invoke([
+          ["system", systemPrompt],
+          ["human", buildContextText(volumeByDay, chunks)],
+        ]);
+        return { kind: "llm", model, raw, parsed: parsed as PatternsResult | null };
+      }
     );
-  }
 
-  const patterns: PatternsResult = parsed;
-  return { patterns };
+    if (outcome.kind === "empty") {
+      return { patterns: { summary: "No recent signal activity to analyze.", trend: "stable" } };
+    }
+    if (outcome.kind === "budget") {
+      return {};
+    }
+
+    // The call was made and billed whether or not the response parsed — track it first.
+    const usage = (outcome.raw as AIMessage).usage_metadata;
+    await trackCost(
+      AGENT_NAME,
+      outcome.model,
+      usage?.input_tokens ?? 0,
+      usage?.output_tokens ?? 0,
+      state.run_id,
+      state.competitor_id
+    );
+
+    // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
+    // failure — it hands back parsed: null while the TS type still claims PatternsResult.
+    // Returning that straight through would silently write a null patterns and report
+    // success. runBranchNode catches this throw and degrades the branch to `{}` so the
+    // synthesis fan-in still completes.
+    if (!outcome.parsed) {
+      logger.error("pattern-detector: structured output failed schema validation", {
+        competitor_id: state.competitor_id,
+        run_id: state.run_id,
+        raw_content: (outcome.raw as AIMessage)?.content,
+      });
+      throw new Error(
+        `pattern-detector: structured output failed schema validation for competitor ${state.competitor_id}`
+      );
+    }
+
+    const patterns: PatternsResult = outcome.parsed;
+    return { patterns };
+  });
 }

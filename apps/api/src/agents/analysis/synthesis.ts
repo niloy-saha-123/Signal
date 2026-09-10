@@ -32,8 +32,9 @@ import {
 } from "../../db/queries";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
-import { selectModel } from "../../llm/adaptive-router";
-import { ANTHROPIC_MODEL_IDS } from "./sentiment-clusterer";
+import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
+import { getActivePrompt } from "../../llm/prompt-registry";
+import { isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "synthesis" as const;
 // "claude-sonnet" IS a DOWNGRADE_MAP key — selectModel can hand back either "claude-sonnet"
@@ -286,7 +287,75 @@ export async function synthesisNode(
   const delta7d = baseline7d ? score - baseline7d.score : null;
   const delta30d = baseline30d ? score - baseline30d.score : null;
 
-  // 5. Persist.
+  // 5. Decision. The deterministic score above is the valuable part and must always be
+  // persisted — but the INSERT is deferred until AFTER a successful decision (H2 step 1): a
+  // decision-call failure between the INSERT and completeAgentRun would otherwise leave an
+  // orphan score row that a job retry then duplicates. (The full fix — a unique index +
+  // upsert — is a deferred follow-up needing a migration.)
+  const companyContext = await getCompanyContext();
+  const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
+  const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
+
+  const contextText = buildContextText({ score, components, state, delta7d, delta30d });
+
+  let decision: AnalysisDecision;
+
+  // H3: synthesis can't be skipped (it must always emit a score + decision), so on
+  // budget-exhaustion it skips only the ChatAnthropic call and defaults the decision to
+  // "digest". The deterministic score is still persisted below.
+  if (await isLlmBudgetExhausted(AGENT_NAME, state)) {
+    decision = {
+      action: "digest",
+      reason:
+        "LLM budget exhausted for today — Signal Score persisted from deterministic components; defaulting to digest.",
+    };
+  } else {
+    const modelAlias = await selectModel(PREFERRED_MODEL, true);
+    const chatModel = new ChatAnthropic({
+      model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
+      // ChatAnthropic has no top-level `timeout` — the underlying SDK client takes it via
+      // clientOptions instead (the form Task 3 established).
+      clientOptions: { timeout: LLM_TIMEOUT_MS },
+      maxRetries: LLM_MAX_RETRIES,
+    });
+    const structuredModel = chatModel.withStructuredOutput(DecisionSchema, { includeRaw: true });
+
+    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+      structuredModel.invoke([
+        ["system", systemPrompt],
+        ["human", contextText],
+      ])
+    );
+
+    // The call was made and billed whether or not the response parsed — track it first.
+    const usage = (raw as AIMessage).usage_metadata;
+    await trackCost(
+      AGENT_NAME,
+      modelAlias,
+      usage?.input_tokens ?? 0,
+      usage?.output_tokens ?? 0,
+      state.run_id,
+      state.competitor_id
+    );
+
+    // withStructuredOutput({ includeRaw: true }) hands back parsed: null on a Zod validation
+    // failure rather than throwing — returning that straight through would write a null
+    // decision and report success. Thrown BEFORE the score INSERT (H2 step 1).
+    if (!parsed) {
+      logger.error("synthesis: decision structured output failed schema validation", {
+        competitor_id: state.competitor_id,
+        run_id: state.run_id,
+        raw_content: (raw as AIMessage)?.content,
+      });
+      throw new Error(
+        `synthesis: decision structured output failed schema validation for competitor ${state.competitor_id}`
+      );
+    }
+
+    decision = parsed;
+  }
+
+  // 6. Persist — only now that a decision is in hand.
   const created = await createSignalScore({
     competitor_id: state.competitor_id,
     score,
@@ -294,58 +363,6 @@ export async function synthesisNode(
     delta_7d: delta7d,
     delta_30d: delta30d,
   });
-
-  // 6. Decision LLM call.
-  const companyContext = await getCompanyContext();
-  const systemPrompt = companyContext
-    ? `${SYSTEM_PROMPT_BASE}\n\n${companyContext}`
-    : SYSTEM_PROMPT_BASE;
-
-  const modelAlias = await selectModel(PREFERRED_MODEL, true);
-  const chatModel = new ChatAnthropic({
-    model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
-    // ChatAnthropic has no top-level `timeout` — the underlying SDK client takes it via
-    // clientOptions instead (the form Task 3 established).
-    clientOptions: { timeout: LLM_TIMEOUT_MS },
-    maxRetries: LLM_MAX_RETRIES,
-  });
-  const structuredModel = chatModel.withStructuredOutput(DecisionSchema, { includeRaw: true });
-
-  const contextText = buildContextText({ score, components, state, delta7d, delta30d });
-
-  const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
-    structuredModel.invoke([
-      ["system", systemPrompt],
-      ["human", contextText],
-    ])
-  );
-
-  // The call was made and billed whether or not the response parsed — track it first.
-  const usage = (raw as AIMessage).usage_metadata;
-  await trackCost(
-    AGENT_NAME,
-    modelAlias,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    state.run_id,
-    state.competitor_id
-  );
-
-  // withStructuredOutput({ includeRaw: true }) hands back parsed: null on a Zod validation
-  // failure rather than throwing — returning that straight through would write a null
-  // decision and report success.
-  if (!parsed) {
-    logger.error("synthesis: decision structured output failed schema validation", {
-      competitor_id: state.competitor_id,
-      run_id: state.run_id,
-      raw_content: (raw as AIMessage)?.content,
-    });
-    throw new Error(
-      `synthesis: decision structured output failed schema validation for competitor ${state.competitor_id}`
-    );
-  }
-
-  const decision: AnalysisDecision = parsed;
 
   // 7. Close out the run. NOT wrapped in a try/catch that marks it "failed" on error — the
   // agent_runs row's lifecycle belongs to this node's (not-yet-built) caller, the analysis

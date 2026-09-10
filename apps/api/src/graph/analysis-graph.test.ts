@@ -88,12 +88,27 @@ vi.mock("../lib/latency-tracker", () => ({
 
 vi.mock("../llm/cost-tracker", () => ({
   trackCost: vi.fn().mockResolvedValue(0),
+  // branch-node.ts's isLlmBudgetExhausted reads this — 0 spend keeps every branch on its
+  // normal path in this DAG test.
+  getDailySpend: vi.fn().mockResolvedValue(0),
 }));
 
 // synthesisNode (Task 7) selects Claude Sonnet via the adaptive router before its decision
 // call — mocked to return the preferred alias unchanged so the DAG test stays offline.
+// getDailyBudget feeds branch-node.ts's isLlmBudgetExhausted alongside getDailySpend above.
 vi.mock("../llm/adaptive-router", () => ({
   selectModel: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+  getDailyBudget: vi.fn(() => 100),
+  ANTHROPIC_MODEL_IDS: {
+    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-sonnet": "claude-sonnet-5",
+  },
+}));
+
+// All 6 nodes now consult the prompt registry (prod-review M1) — mocked to return null so
+// each falls back to its hardcoded SYSTEM_PROMPT_BASE, keeping this DAG test off Postgres.
+vi.mock("../llm/prompt-registry", () => ({
+  getActivePrompt: vi.fn().mockResolvedValue(null),
 }));
 
 const { patternsParsed, vulnerabilityWindowClosedParsed } = vi.hoisted(() => ({
@@ -182,14 +197,18 @@ describe("analysisGraph — compiled DAG", () => {
       chronic_complaints: [],
     });
     // patternDetectorNode is real now (Task 5) — it takes its own <90-day Phase 2 skip
-    // since getFirstSignalCollectedAt is mocked to resolve undefined, and produces the
-    // mocked ChatOpenAI structured output from Phase 1 data alone.
-    expect(result.patterns).toEqual(patternsParsed);
-    // vulnerabilityDetectorNode is real now (Task 6) — the shared ChatOpenAI mock above
-    // resolves its window-identification call to window_open: false, so it short-circuits
-    // before ever reaching the Claude Sonnet positioning-copy call.
+    // since getFirstSignalCollectedAt is mocked to resolve undefined, and then hits its
+    // ts-review-M3 empty-input short-circuit (getSignalVolumeByDay mocked to [], no
+    // retrieved chunks) — a real "nothing to analyze" result, no LLM call.
+    expect(result.patterns).toEqual({
+      summary: "No recent signal activity to analyze.",
+      trend: "stable",
+    });
+    // vulnerabilityDetectorNode is real now (Task 6) — with every signal source, the
+    // pricing baseline and diffs all mocked empty it hits its ts-review-M3 empty-input
+    // short-circuit (a real "nothing to assess" result, neither LLM call fires).
     expect(result.vulnerability).toEqual({
-      summary: "No open vulnerability window.",
+      summary: "No recent competitor activity to assess.",
       window_open: false,
       positioning_copy: "",
     });
@@ -224,13 +243,17 @@ describe("analysisGraph — compiled DAG", () => {
       chronic_complaints: [],
     });
     // patternDetectorNode is real now (Task 5) — it takes its own <90-day Phase 2 skip
-    // since getFirstSignalCollectedAt is mocked to resolve undefined, and produces the
-    // mocked ChatOpenAI structured output from Phase 1 data alone.
-    expect(result.patterns).toEqual(patternsParsed);
+    // since getFirstSignalCollectedAt is mocked to resolve undefined, and then hits its
+    // ts-review-M3 empty-input short-circuit (getSignalVolumeByDay mocked to [], no
+    // retrieved chunks) — a real "nothing to analyze" result, no LLM call.
+    expect(result.patterns).toEqual({
+      summary: "No recent signal activity to analyze.",
+      trend: "stable",
+    });
     // vulnerabilityDetectorNode is real now (Task 6) — see the short-circuit note in the
     // test above.
     expect(result.vulnerability).toEqual({
-      summary: "No open vulnerability window.",
+      summary: "No recent competitor activity to assess.",
       window_open: false,
       positioning_copy: "",
     });

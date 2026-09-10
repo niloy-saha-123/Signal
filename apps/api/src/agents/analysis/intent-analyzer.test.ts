@@ -22,12 +22,34 @@ const { loggerMock } = vi.hoisted(() => ({
 
 vi.mock("../../lib/logger", () => ({ logger: loggerMock }));
 
-const { trackCostMock } = vi.hoisted(() => ({
+const { trackCostMock, getDailySpendMock } = vi.hoisted(() => ({
   trackCostMock: vi.fn().mockResolvedValue(0),
+  getDailySpendMock: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../../llm/cost-tracker", () => ({
   trackCost: trackCostMock,
+  getDailySpend: getDailySpendMock,
+}));
+
+const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
+  // gpt-4o has a DOWNGRADE_MAP target, but the budget gate runs first — so with spend < budget
+  // selectModel returns the preferred model unchanged. Mirror that.
+  selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+  getDailyBudgetMock: vi.fn(() => 100),
+}));
+
+vi.mock("../../llm/adaptive-router", () => ({
+  selectModel: selectModelMock,
+  getDailyBudget: getDailyBudgetMock,
+}));
+
+const { getActivePromptMock } = vi.hoisted(() => ({
+  getActivePromptMock: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../../llm/prompt-registry", () => ({
+  getActivePrompt: getActivePromptMock,
 }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
@@ -104,6 +126,10 @@ describe("agents/analysis/intent-analyzer", () => {
     getRecentSignalsByCompetitorAndSourceMock.mockResolvedValue([jobSignal]);
     getCompanyContextMock.mockResolvedValue("");
     trackCostMock.mockResolvedValue(0);
+    getDailySpendMock.mockResolvedValue(0);
+    getDailyBudgetMock.mockReturnValue(100);
+    selectModelMock.mockImplementation((preferredModel: string) => Promise.resolve(preferredModel));
+    getActivePromptMock.mockResolvedValue(null);
     invokeMock.mockResolvedValue(invokeResult());
     trackLatencyMock.mockImplementation(
       (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
@@ -127,6 +153,55 @@ describe("agents/analysis/intent-analyzer", () => {
     await intentAnalyzerNode(state);
 
     expect(getRecentSignalsByCompetitorAndSourceMock).toHaveBeenCalledWith("c1", "jobs", 7);
+  });
+
+  it("passes selectModel's chosen model to ChatOpenAI", async () => {
+    selectModelMock.mockResolvedValue("gpt-4o-downgraded");
+
+    await intentAnalyzerNode(state);
+
+    expect(selectModelMock).toHaveBeenCalledWith("gpt-4o", true);
+    expect(chatOpenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-4o-downgraded" })
+    );
+  });
+
+  it("skips the LLM call and returns {} when the daily budget is exhausted", async () => {
+    getDailySpendMock.mockResolvedValue(500);
+
+    const result = await intentAnalyzerNode(state);
+
+    expect(result).toEqual({});
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+  });
+
+  it("degrades to {} (no rethrow) and logs error context when the body throws", async () => {
+    getRecentSignalsByCompetitorAndSourceMock.mockRejectedValue(new Error("db down"));
+
+    const result = await intentAnalyzerNode(state);
+
+    expect(result).toEqual({});
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("degrading"),
+      expect.objectContaining({ agent_name: "intent_analyzer", competitor_id: "c1", run_id: "run1" })
+    );
+  });
+
+  it("uses the active prompt from the registry when one exists, else SYSTEM_PROMPT_BASE", async () => {
+    getActivePromptMock.mockResolvedValue("CUSTOM REGISTRY PROMPT");
+    await intentAnalyzerNode(state);
+    let [messages] = invokeMock.mock.calls[0];
+    let [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("CUSTOM REGISTRY PROMPT");
+
+    invokeMock.mockClear();
+    getActivePromptMock.mockResolvedValue(null);
+    await intentAnalyzerNode(state);
+    [messages] = invokeMock.mock.calls[0];
+    [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("infer their hiring");
   });
 
   it("calls gpt-4o via ChatOpenAI with structured output over the concatenated postings", async () => {
@@ -184,11 +259,12 @@ describe("agents/analysis/intent-analyzer", () => {
     );
   });
 
-  it("throws when structured output fails schema validation (parsed is null)", async () => {
+  it("degrades to {} when structured output fails schema validation (parsed is null), not rethrown", async () => {
     invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
 
-    await expect(intentAnalyzerNode(state)).rejects.toThrow(/schema validation/);
+    const result = await intentAnalyzerNode(state);
 
+    expect(result).toEqual({});
     expect(loggerMock.error).toHaveBeenCalledWith(
       expect.stringContaining("schema validation"),
       expect.objectContaining({ competitor_id: "c1", run_id: "run1" })

@@ -8,6 +8,9 @@ import { getCompanyContext } from "../../lib/company-context";
 import { getRecentSignalsByCompetitorAndSource, type Signal } from "../../db/queries";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
+import { selectModel } from "../../llm/adaptive-router";
+import { getActivePrompt } from "../../llm/prompt-registry";
+import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "intent_analyzer" as const;
 const MODEL = "gpt-4o";
@@ -43,61 +46,69 @@ function buildPostingsText(signals: Signal[]): string {
 export async function intentAnalyzerNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
-  const postings = await getRecentSignalsByCompetitorAndSource(state.competitor_id, "jobs", 7);
+  return runBranchNode(AGENT_NAME, state, async () => {
+    const postings = await getRecentSignalsByCompetitorAndSource(state.competitor_id, "jobs", 7);
 
-  if (postings.length === 0) {
-    return {
-      hiring_intent: { summary: "No recent job postings found.", intent_level: "low" },
-    };
-  }
+    if (postings.length === 0) {
+      return {
+        hiring_intent: { summary: "No recent job postings found.", intent_level: "low" },
+      };
+    }
 
-  const companyContext = await getCompanyContext();
-  const systemPrompt = companyContext
-    ? `${SYSTEM_PROMPT_BASE}\n\n${companyContext}`
-    : SYSTEM_PROMPT_BASE;
+    // H3: hard budget stop, immediately before the LLM call and after the genuine
+    // empty-input short-circuit. A `{}` here means "budget exhausted, couldn't determine".
+    if (await isLlmBudgetExhausted(AGENT_NAME, state)) return {};
 
-  const chatModel = new ChatOpenAI({
-    model: MODEL,
-    timeout: LLM_TIMEOUT_MS,
-    maxRetries: LLM_MAX_RETRIES,
-  });
-  const structuredModel = chatModel.withStructuredOutput(HiringIntentSchema, {
-    includeRaw: true,
-  });
+    const model = await selectModel(MODEL, true);
+    const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
 
-  const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
-    structuredModel.invoke([
-      ["system", systemPrompt],
-      ["human", buildPostingsText(postings)],
-    ])
-  );
+    const companyContext = await getCompanyContext();
+    const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
 
-  // The call was made and billed whether or not the response parsed — track it first.
-  const usage = (raw as AIMessage).usage_metadata;
-  await trackCost(
-    AGENT_NAME,
-    MODEL,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    state.run_id,
-    state.competitor_id
-  );
-
-  // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
-  // failure — it hands back parsed: null while the TS type still claims
-  // HiringIntentResult. Returning that straight through would silently write a null
-  // hiring_intent and report success.
-  if (!parsed) {
-    logger.error("intent-analyzer: structured output failed schema validation", {
-      competitor_id: state.competitor_id,
-      run_id: state.run_id,
-      raw_content: (raw as AIMessage)?.content,
+    const chatModel = new ChatOpenAI({
+      model,
+      timeout: LLM_TIMEOUT_MS,
+      maxRetries: LLM_MAX_RETRIES,
     });
-    throw new Error(
-      `intent-analyzer: structured output failed schema validation for competitor ${state.competitor_id}`
-    );
-  }
+    const structuredModel = chatModel.withStructuredOutput(HiringIntentSchema, {
+      includeRaw: true,
+    });
 
-  const hiring_intent: HiringIntentResult = parsed;
-  return { hiring_intent };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+      structuredModel.invoke([
+        ["system", systemPrompt],
+        ["human", buildPostingsText(postings)],
+      ])
+    );
+
+    // The call was made and billed whether or not the response parsed — track it first.
+    const usage = (raw as AIMessage).usage_metadata;
+    await trackCost(
+      AGENT_NAME,
+      model,
+      usage?.input_tokens ?? 0,
+      usage?.output_tokens ?? 0,
+      state.run_id,
+      state.competitor_id
+    );
+
+    // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
+    // failure — it hands back parsed: null while the TS type still claims
+    // HiringIntentResult. Returning that straight through would silently write a null
+    // hiring_intent and report success. runBranchNode catches this throw and degrades the
+    // branch to `{}` so the synthesis fan-in still completes.
+    if (!parsed) {
+      logger.error("intent-analyzer: structured output failed schema validation", {
+        competitor_id: state.competitor_id,
+        run_id: state.run_id,
+        raw_content: (raw as AIMessage)?.content,
+      });
+      throw new Error(
+        `intent-analyzer: structured output failed schema validation for competitor ${state.competitor_id}`
+      );
+    }
+
+    const hiring_intent: HiringIntentResult = parsed;
+    return { hiring_intent };
+  });
 }

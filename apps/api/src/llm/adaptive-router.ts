@@ -7,6 +7,17 @@ const DOWNGRADE_MAP: Record<string, string> = {
   "claude-sonnet": "claude-haiku",
 };
 
+// "claude-haiku"/"claude-sonnet" are this codebase's internal cost-tracking/routing aliases
+// only (cost-tracker.ts's PRICING_PER_MILLION_TOKENS keys, DOWNGRADE_MAP keys/values above)
+// — NOT valid Anthropic API model strings. The ChatAnthropic-constructing nodes
+// (sentiment-clusterer, vulnerability-detector, synthesis) translate the alias selectModel
+// hands back through this map for the constructor, and pass the untranslated alias to
+// trackCost. Lives here alongside DOWNGRADE_MAP, which owns the same alias vocabulary.
+export const ANTHROPIC_MODEL_IDS: Record<string, string> = {
+  "claude-haiku": "claude-haiku-4-5-20251001",
+  "claude-sonnet": "claude-sonnet-5",
+};
+
 const DEFAULT_DAILY_BUDGET_USD = 2.0;
 
 let warnedBadBudgetEnv = false;

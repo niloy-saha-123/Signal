@@ -22,22 +22,38 @@ const { loggerMock } = vi.hoisted(() => ({
 
 vi.mock("../../lib/logger", () => ({ logger: loggerMock }));
 
-const { trackCostMock } = vi.hoisted(() => ({
+const { trackCostMock, getDailySpendMock } = vi.hoisted(() => ({
   trackCostMock: vi.fn().mockResolvedValue(0),
+  getDailySpendMock: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../../llm/cost-tracker", () => ({
   trackCost: trackCostMock,
+  getDailySpend: getDailySpendMock,
 }));
 
-const { selectModelMock } = vi.hoisted(() => ({
+const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
   // "claude-haiku" has no downgrade target in adaptive-router's real DOWNGRADE_MAP, so
   // selectModel always returns the preferred model unchanged — mirror that here.
   selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+  getDailyBudgetMock: vi.fn(() => 100),
 }));
 
 vi.mock("../../llm/adaptive-router", () => ({
   selectModel: selectModelMock,
+  getDailyBudget: getDailyBudgetMock,
+  ANTHROPIC_MODEL_IDS: {
+    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-sonnet": "claude-sonnet-5",
+  },
+}));
+
+const { getActivePromptMock } = vi.hoisted(() => ({
+  getActivePromptMock: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../../llm/prompt-registry", () => ({
+  getActivePrompt: getActivePromptMock,
 }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
@@ -128,6 +144,9 @@ describe("agents/analysis/sentiment-clusterer", () => {
     );
     getCompanyContextMock.mockResolvedValue("");
     trackCostMock.mockResolvedValue(0);
+    getDailySpendMock.mockResolvedValue(0);
+    getDailyBudgetMock.mockReturnValue(100);
+    getActivePromptMock.mockResolvedValue(null);
     selectModelMock.mockImplementation((preferredModel: string) => Promise.resolve(preferredModel));
     invokeMock.mockResolvedValue(invokeResult());
     trackLatencyMock.mockImplementation(
@@ -217,14 +236,57 @@ describe("agents/analysis/sentiment-clusterer", () => {
     );
   });
 
-  it("throws when structured output fails schema validation (parsed is null)", async () => {
+  it("degrades to {} when structured output fails schema validation (parsed is null), not rethrown", async () => {
     invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
 
-    await expect(sentimentClustererNode(state)).rejects.toThrow(/schema validation/);
+    const result = await sentimentClustererNode(state);
 
+    expect(result).toEqual({});
     expect(loggerMock.error).toHaveBeenCalledWith(
       expect.stringContaining("schema validation"),
       expect.objectContaining({ competitor_id: "c1", run_id: "run1" })
     );
+  });
+
+  it("skips the LLM call and returns {} when the daily budget is exhausted", async () => {
+    getDailySpendMock.mockResolvedValue(500);
+
+    const result = await sentimentClustererNode(state);
+
+    expect(result).toEqual({});
+    expect(chatAnthropicMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+  });
+
+  it("degrades to {} (no rethrow) and logs error context when the body throws", async () => {
+    getRecentSignalsByCompetitorAndSourceMock.mockRejectedValue(new Error("db down"));
+
+    const result = await sentimentClustererNode(state);
+
+    expect(result).toEqual({});
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("degrading"),
+      expect.objectContaining({
+        agent_name: "sentiment_clusterer",
+        competitor_id: "c1",
+        run_id: "run1",
+      })
+    );
+  });
+
+  it("uses the active registry prompt when one exists, else SYSTEM_PROMPT_BASE", async () => {
+    getActivePromptMock.mockResolvedValue("CUSTOM REGISTRY PROMPT");
+    await sentimentClustererNode(state);
+    let [messages] = invokeMock.mock.calls[0];
+    let [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("CUSTOM REGISTRY PROMPT");
+
+    invokeMock.mockClear();
+    getActivePromptMock.mockResolvedValue(null);
+    await sentimentClustererNode(state);
+    [messages] = invokeMock.mock.calls[0];
+    [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("Cluster the sentiment");
   });
 });

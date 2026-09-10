@@ -22,12 +22,33 @@ const { loggerMock } = vi.hoisted(() => ({
 
 vi.mock("../../lib/logger", () => ({ logger: loggerMock }));
 
-const { trackCostMock } = vi.hoisted(() => ({
+const { trackCostMock, getDailySpendMock } = vi.hoisted(() => ({
   trackCostMock: vi.fn().mockResolvedValue(0),
+  getDailySpendMock: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("../../llm/cost-tracker", () => ({
   trackCost: trackCostMock,
+  getDailySpend: getDailySpendMock,
+}));
+
+const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
+  // gpt-4o-mini has no DOWNGRADE_MAP target — selectModel always returns it unchanged.
+  selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+  getDailyBudgetMock: vi.fn(() => 100),
+}));
+
+vi.mock("../../llm/adaptive-router", () => ({
+  selectModel: selectModelMock,
+  getDailyBudget: getDailyBudgetMock,
+}));
+
+const { getActivePromptMock } = vi.hoisted(() => ({
+  getActivePromptMock: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../../llm/prompt-registry", () => ({
+  getActivePrompt: getActivePromptMock,
 }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
@@ -107,6 +128,10 @@ describe("agents/analysis/change-detector", () => {
     getRecentPricingDiffsMock.mockResolvedValue([makeDiff()]);
     getCompanyContextMock.mockResolvedValue("");
     trackCostMock.mockResolvedValue(0);
+    getDailySpendMock.mockResolvedValue(0);
+    getDailyBudgetMock.mockReturnValue(100);
+    getActivePromptMock.mockResolvedValue(null);
+    selectModelMock.mockImplementation((preferredModel: string) => Promise.resolve(preferredModel));
     invokeMock.mockResolvedValue(invokeResult());
     trackLatencyMock.mockImplementation(
       (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
@@ -250,14 +275,64 @@ describe("agents/analysis/change-detector", () => {
     expect(trackCostMock).toHaveBeenCalledWith("change_detector", "gpt-4o-mini", 200, 40, "run1", "c1");
   });
 
-  it("throws when structured output fails schema validation (parsed is null)", async () => {
+  it("degrades to {} when structured output fails schema validation (parsed is null), not rethrown", async () => {
     invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
 
-    await expect(changeDetectorNode(state)).rejects.toThrow(/schema validation/);
+    const result = await changeDetectorNode(state);
 
+    expect(result).toEqual({});
     expect(loggerMock.error).toHaveBeenCalledWith(
       expect.stringContaining("schema validation"),
       expect.objectContaining({ competitor_id: "c1", run_id: "run1" })
     );
+  });
+
+  it("passes selectModel's chosen model to ChatOpenAI", async () => {
+    selectModelMock.mockResolvedValue("gpt-4o-mini-alt");
+
+    await changeDetectorNode(state);
+
+    expect(selectModelMock).toHaveBeenCalledWith("gpt-4o-mini", true);
+    expect(chatOpenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-4o-mini-alt" })
+    );
+  });
+
+  it("skips the LLM call and returns {} when the daily budget is exhausted", async () => {
+    getDailySpendMock.mockResolvedValue(500);
+
+    const result = await changeDetectorNode(state);
+
+    expect(result).toEqual({});
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+  });
+
+  it("degrades to {} (no rethrow) and logs error context when the body throws", async () => {
+    getRecentPricingDiffsMock.mockRejectedValue(new Error("db down"));
+
+    const result = await changeDetectorNode(state);
+
+    expect(result).toEqual({});
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("degrading"),
+      expect.objectContaining({ agent_name: "change_detector", competitor_id: "c1", run_id: "run1" })
+    );
+  });
+
+  it("uses the active registry prompt when one exists, else SYSTEM_PROMPT_BASE", async () => {
+    getActivePromptMock.mockResolvedValue("CUSTOM REGISTRY PROMPT");
+    await changeDetectorNode(state);
+    let [messages] = invokeMock.mock.calls[0];
+    let [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("CUSTOM REGISTRY PROMPT");
+
+    invokeMock.mockClear();
+    getActivePromptMock.mockResolvedValue(null);
+    await changeDetectorNode(state);
+    [messages] = invokeMock.mock.calls[0];
+    [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("pricing page diff");
   });
 });

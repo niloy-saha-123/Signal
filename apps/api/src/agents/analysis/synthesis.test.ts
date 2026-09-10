@@ -34,15 +34,35 @@ const { loggerMock } = vi.hoisted(() => ({
 
 vi.mock("../../lib/logger", () => ({ logger: loggerMock }));
 
-const { trackCostMock } = vi.hoisted(() => ({ trackCostMock: vi.fn().mockResolvedValue(0) }));
-
-vi.mock("../../llm/cost-tracker", () => ({ trackCost: trackCostMock }));
-
-const { selectModelMock } = vi.hoisted(() => ({
-  selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+const { trackCostMock, getDailySpendMock } = vi.hoisted(() => ({
+  trackCostMock: vi.fn().mockResolvedValue(0),
+  getDailySpendMock: vi.fn().mockResolvedValue(0),
 }));
 
-vi.mock("../../llm/adaptive-router", () => ({ selectModel: selectModelMock }));
+vi.mock("../../llm/cost-tracker", () => ({
+  trackCost: trackCostMock,
+  getDailySpend: getDailySpendMock,
+}));
+
+const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
+  selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
+  getDailyBudgetMock: vi.fn(() => 100),
+}));
+
+vi.mock("../../llm/adaptive-router", () => ({
+  selectModel: selectModelMock,
+  getDailyBudget: getDailyBudgetMock,
+  ANTHROPIC_MODEL_IDS: {
+    "claude-haiku": "claude-haiku-4-5-20251001",
+    "claude-sonnet": "claude-sonnet-5",
+  },
+}));
+
+const { getActivePromptMock } = vi.hoisted(() => ({
+  getActivePromptMock: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../../llm/prompt-registry", () => ({ getActivePrompt: getActivePromptMock }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
   trackLatencyMock: vi.fn(
@@ -111,7 +131,7 @@ describe("agents/analysis/synthesis", () => {
       { day: daysAgoISO(1), count: 10, weighted_count: 10 },
     ]);
     getRecentPricingDiffsMock.mockResolvedValue([
-      { id: "d1", competitor_id: "c1", detected_at: new Date(NOW - 1 * DAY), diff: {}, significance: "major" },
+      { id: "d1", competitor_id: "c1", detected_at: new Date(NOW - 1 * DAY), diff: {}, significance: "moderate" },
     ]);
     getLatestSignalScoresMock.mockResolvedValue([]);
     createSignalScoreMock.mockImplementation((input) =>
@@ -129,6 +149,9 @@ describe("agents/analysis/synthesis", () => {
     getCompanyContextMock.mockResolvedValue("");
     selectModelMock.mockImplementation((m: string) => Promise.resolve(m));
     trackCostMock.mockResolvedValue(0);
+    getDailySpendMock.mockResolvedValue(0);
+    getDailyBudgetMock.mockReturnValue(100);
+    getActivePromptMock.mockResolvedValue(null);
     anthropicInvokeMock.mockResolvedValue(anthropicResult());
     trackLatencyMock.mockImplementation((_a: string, _c: string, _r: string, fn: () => unknown) => fn());
   });
@@ -249,7 +272,7 @@ describe("agents/analysis/synthesis", () => {
     expect(createSignalScoreMock.mock.calls[0][0].components.vulnerability_window_status).toBe("none");
   });
 
-  it("throws when the decision structured output fails schema validation, before closing the run", async () => {
+  it("throws when the decision structured output fails schema validation, before persisting or closing the run", async () => {
     anthropicInvokeMock.mockResolvedValue(anthropicResult({ parsed: null }));
 
     await expect(synthesisNode(fullState())).rejects.toThrow(/schema validation/);
@@ -258,9 +281,38 @@ describe("agents/analysis/synthesis", () => {
       expect.stringContaining("decision structured output"),
       expect.objectContaining({ competitor_id: "c1", run_id: "run1" })
     );
+    // H2 step 1: the score INSERT must not happen until the decision call succeeds — a
+    // failure here leaves no orphan score row for a job retry to duplicate.
+    expect(createSignalScoreMock).not.toHaveBeenCalled();
     expect(completeAgentRunMock).not.toHaveBeenCalled();
     // The call was still billed.
     expect(trackCostMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("budget exhausted: skips the ChatAnthropic call, still persists the score, closes the run as digest", async () => {
+    getDailySpendMock.mockResolvedValue(500);
+
+    const result = await synthesisNode(fullState());
+
+    expect(chatAnthropicMock).not.toHaveBeenCalled();
+    expect(anthropicInvokeMock).not.toHaveBeenCalled();
+    expect(trackCostMock).not.toHaveBeenCalled();
+
+    expect(createSignalScoreMock).toHaveBeenCalledTimes(1);
+    expect(completeAgentRunMock).toHaveBeenCalledWith("run1", "completed", "digest");
+    expect(result.decision?.action).toBe("digest");
+    expect(result.decision?.reason).toMatch(/budget/i);
+    expect(result.signal_score).toMatchObject({ competitor_id: "c1" });
+  });
+
+  it("wires the active registry prompt into the decision system message when one exists", async () => {
+    getActivePromptMock.mockResolvedValue("CUSTOM REGISTRY PROMPT");
+
+    await synthesisNode(fullState());
+
+    const [messages] = anthropicInvokeMock.mock.calls[0];
+    const [systemMessage] = messages as [string, string][];
+    expect(systemMessage[1]).toContain("CUSTOM REGISTRY PROMPT");
   });
 
   it("translates a runtime downgrade to claude-haiku for the constructor, alias for trackCost", async () => {

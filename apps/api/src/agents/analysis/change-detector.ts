@@ -9,6 +9,9 @@ import { getCompanyContext } from "../../lib/company-context";
 import { getRecentPricingDiffs, type PricingDiff, type PricingSignificance } from "../../db/queries";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
+import { selectModel } from "../../llm/adaptive-router";
+import { getActivePrompt } from "../../llm/prompt-registry";
+import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "change_detector" as const;
 const MODEL = "gpt-4o-mini";
@@ -81,77 +84,86 @@ function buildDiffText(diff: { added: string[]; removed: string[] }): string {
 export async function changeDetectorNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
-  // This node runs unconditionally in the DAG (so synthesis's 5-way fan-in is always
-  // satisfiable — see analysis-graph.ts). The "only do work when a pricing diff landed"
-  // decision lives here instead of in a graph edge: `has_pricing_diff` is the caller's
-  // cheap upstream signal, so a `false` means there is nothing to extract — return without
-  // even a DB round-trip.
-  if (!state.has_pricing_diff) {
-    return {};
-  }
+  return runBranchNode(AGENT_NAME, state, async () => {
+    // This node runs unconditionally in the DAG (so synthesis's 5-way fan-in is always
+    // satisfiable — see analysis-graph.ts). The "only do work when a pricing diff landed"
+    // decision lives here instead of in a graph edge: `has_pricing_diff` is the caller's
+    // cheap upstream signal, so a `false` means there is nothing to extract — return without
+    // even a DB round-trip.
+    if (!state.has_pricing_diff) {
+      return {};
+    }
 
-  const diffs = await getRecentPricingDiffs(state.competitor_id, 7);
+    const diffs = await getRecentPricingDiffs(state.competitor_id, 7);
 
-  // has_pricing_diff was set but the diff isn't in the 7-day window any more — it aged out
-  // between the caller's check and this node running. Nothing to extract.
-  if (diffs.length === 0) {
-    logger.warn(
-      "change-detector: has_pricing_diff was set but no recent pricing diffs found — diff may have aged out of the 7-day window",
-      { competitor_id: state.competitor_id, run_id: state.run_id }
-    );
-    return {};
-  }
+    // has_pricing_diff was set but the diff isn't in the 7-day window any more — it aged out
+    // between the caller's check and this node running. Nothing to extract.
+    if (diffs.length === 0) {
+      logger.warn(
+        "change-detector: has_pricing_diff was set but no recent pricing diffs found — diff may have aged out of the 7-day window",
+        { competitor_id: state.competitor_id, run_id: state.run_id }
+      );
+      return {};
+    }
 
-  const selectedDiff = selectDiffToExtract(diffs);
-  const diffPayload = narrowDiffPayload(selectedDiff.diff);
+    // H3: hard budget stop, immediately before the LLM call and after the no-diffs check.
+    if (await isLlmBudgetExhausted(AGENT_NAME, state)) return {};
 
-  const companyContext = await getCompanyContext();
-  const systemPrompt = companyContext
-    ? `${SYSTEM_PROMPT_BASE}\n\n${companyContext}`
-    : SYSTEM_PROMPT_BASE;
+    const selectedDiff = selectDiffToExtract(diffs);
+    const diffPayload = narrowDiffPayload(selectedDiff.diff);
 
-  const chatModel = new ChatOpenAI({
-    model: MODEL,
-    timeout: LLM_TIMEOUT_MS,
-    maxRetries: LLM_MAX_RETRIES,
-  });
-  const structuredModel = chatModel.withStructuredOutput(PricingChangeSchema, {
-    includeRaw: true,
-  });
+    // selectModel is a no-op for gpt-4o-mini (no DOWNGRADE_MAP target) — kept for uniformity
+    // with the other five LLM-calling analysis nodes.
+    const model = await selectModel(MODEL, true);
+    const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
 
-  const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
-    structuredModel.invoke([
-      ["system", systemPrompt],
-      ["human", buildDiffText(diffPayload)],
-    ])
-  );
+    const companyContext = await getCompanyContext();
+    const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
 
-  // The call was made and billed whether or not the response parsed — track it first.
-  const usage = (raw as AIMessage).usage_metadata;
-  await trackCost(
-    AGENT_NAME,
-    MODEL,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    state.run_id,
-    state.competitor_id
-  );
-
-  // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
-  // failure — it hands back parsed: null while the TS type still claims
-  // PricingChangeResult. Returning that straight through would silently write a null
-  // pricing_change and report success.
-  if (!parsed) {
-    logger.error("change-detector: structured output failed schema validation", {
-      competitor_id: state.competitor_id,
-      run_id: state.run_id,
-      raw_content: (raw as AIMessage)?.content,
+    const chatModel = new ChatOpenAI({
+      model,
+      timeout: LLM_TIMEOUT_MS,
+      maxRetries: LLM_MAX_RETRIES,
     });
-    throw new Error(
-      `change-detector: structured output failed schema validation for competitor ${state.competitor_id}`
-    );
-  }
+    const structuredModel = chatModel.withStructuredOutput(PricingChangeSchema, {
+      includeRaw: true,
+    });
 
-  const pricing_change: PricingChangeResult = parsed;
-  return { pricing_change };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+      structuredModel.invoke([
+        ["system", systemPrompt],
+        ["human", buildDiffText(diffPayload)],
+      ])
+    );
+
+    // The call was made and billed whether or not the response parsed — track it first.
+    const usage = (raw as AIMessage).usage_metadata;
+    await trackCost(
+      AGENT_NAME,
+      model,
+      usage?.input_tokens ?? 0,
+      usage?.output_tokens ?? 0,
+      state.run_id,
+      state.competitor_id
+    );
+
+    // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
+    // failure — it hands back parsed: null while the TS type still claims
+    // PricingChangeResult. Returning that straight through would silently write a null
+    // pricing_change and report success. runBranchNode catches this throw and degrades the
+    // branch to `{}` so the synthesis fan-in still completes.
+    if (!parsed) {
+      logger.error("change-detector: structured output failed schema validation", {
+        competitor_id: state.competitor_id,
+        run_id: state.run_id,
+        raw_content: (raw as AIMessage)?.content,
+      });
+      throw new Error(
+        `change-detector: structured output failed schema validation for competitor ${state.competitor_id}`
+      );
+    }
+
+    const pricing_change: PricingChangeResult = parsed;
+    return { pricing_change };
+  });
 }

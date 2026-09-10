@@ -8,7 +8,9 @@ import { getCompanyContext } from "../../lib/company-context";
 import { getRecentSignalsByCompetitorAndSource, type Signal } from "../../db/queries";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
-import { selectModel } from "../../llm/adaptive-router";
+import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
+import { getActivePrompt } from "../../llm/prompt-registry";
+import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "sentiment_clusterer" as const;
 // Same reasoning as pipeline/entity-extractor.ts calling selectModel(PREFERRED_MODEL, true) —
@@ -16,18 +18,6 @@ const AGENT_NAME = "sentiment_clusterer" as const;
 // this always returns unchanged, but the call stays for consistency with every LLM-calling
 // agent in this codebase.
 const PREFERRED_MODEL = "claude-haiku";
-
-// "claude-haiku"/"claude-sonnet" are this codebase's internal cost-tracking/routing
-// aliases only (llm/cost-tracker.ts's PRICING_PER_MILLION_TOKENS keys,
-// llm/adaptive-router.ts's DOWNGRADE_MAP keys/values) — not valid Anthropic API model
-// strings. Translate them here for the actual ChatAnthropic constructor; trackCost still
-// gets the alias below, same as every other model passed to it in this codebase.
-// Exported and reused by vulnerability-detector.ts (its Claude Sonnet positioning-copy
-// call can downgrade to "claude-haiku" at runtime) rather than duplicating this map.
-export const ANTHROPIC_MODEL_IDS: Record<string, string> = {
-  "claude-haiku": "claude-haiku-4-5-20251001",
-  "claude-sonnet": "claude-sonnet-5",
-};
 
 // Bounded client budget — same reasoning as pipeline/entity-extractor.ts and
 // intent-analyzer.ts: LangChain's defaults can hold a call open far longer than this
@@ -60,73 +50,79 @@ function buildSignalsText(signals: Signal[]): string {
 export async function sentimentClustererNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
-  const [redditSignals, hnSignals] = await Promise.all([
-    getRecentSignalsByCompetitorAndSource(state.competitor_id, "reddit", 7),
-    getRecentSignalsByCompetitorAndSource(state.competitor_id, "hn", 7),
-  ]);
-  const signals = [...redditSignals, ...hnSignals];
+  return runBranchNode(AGENT_NAME, state, async () => {
+    const [redditSignals, hnSignals] = await Promise.all([
+      getRecentSignalsByCompetitorAndSource(state.competitor_id, "reddit", 7),
+      getRecentSignalsByCompetitorAndSource(state.competitor_id, "hn", 7),
+    ]);
+    const signals = [...redditSignals, ...hnSignals];
 
-  if (signals.length === 0) {
-    return {
-      sentiment_clusters: {
-        summary: "No recent community discussion found.",
-        new_complaints: [],
-        chronic_complaints: [],
-      },
-    };
-  }
+    if (signals.length === 0) {
+      return {
+        sentiment_clusters: {
+          summary: "No recent community discussion found.",
+          new_complaints: [],
+          chronic_complaints: [],
+        },
+      };
+    }
 
-  const companyContext = await getCompanyContext();
-  const systemPrompt = companyContext
-    ? `${SYSTEM_PROMPT_BASE}\n\n${companyContext}`
-    : SYSTEM_PROMPT_BASE;
+    // H3: hard budget stop, immediately before the LLM call and after the empty-input
+    // short-circuit.
+    if (await isLlmBudgetExhausted(AGENT_NAME, state)) return {};
 
-  const model = await selectModel(PREFERRED_MODEL, true);
+    const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
+    const companyContext = await getCompanyContext();
+    const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
 
-  const chatModel = new ChatAnthropic({
-    model: ANTHROPIC_MODEL_IDS[model] ?? model,
-    // Unlike ChatOpenAI, ChatAnthropic's own input type has no top-level `timeout` —
-    // the underlying Anthropic SDK client takes it via `clientOptions` instead.
-    clientOptions: { timeout: LLM_TIMEOUT_MS },
-    maxRetries: LLM_MAX_RETRIES,
-  });
-  const structuredModel = chatModel.withStructuredOutput(SentimentClustersSchema, {
-    includeRaw: true,
-  });
+    const model = await selectModel(PREFERRED_MODEL, true);
 
-  const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
-    structuredModel.invoke([
-      ["system", systemPrompt],
-      ["human", buildSignalsText(signals)],
-    ])
-  );
-
-  // The call was made and billed whether or not the response parsed — track it first.
-  const usage = (raw as AIMessage).usage_metadata;
-  await trackCost(
-    AGENT_NAME,
-    model,
-    usage?.input_tokens ?? 0,
-    usage?.output_tokens ?? 0,
-    state.run_id,
-    state.competitor_id
-  );
-
-  // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
-  // failure — it hands back parsed: null while the TS type still claims
-  // SentimentClustersResult. Returning that straight through would silently write a
-  // null sentiment_clusters and report success.
-  if (!parsed) {
-    logger.error("sentiment-clusterer: structured output failed schema validation", {
-      competitor_id: state.competitor_id,
-      run_id: state.run_id,
-      raw_content: (raw as AIMessage)?.content,
+    const chatModel = new ChatAnthropic({
+      model: ANTHROPIC_MODEL_IDS[model] ?? model,
+      // Unlike ChatOpenAI, ChatAnthropic's own input type has no top-level `timeout` —
+      // the underlying Anthropic SDK client takes it via `clientOptions` instead.
+      clientOptions: { timeout: LLM_TIMEOUT_MS },
+      maxRetries: LLM_MAX_RETRIES,
     });
-    throw new Error(
-      `sentiment-clusterer: structured output failed schema validation for competitor ${state.competitor_id}`
-    );
-  }
+    const structuredModel = chatModel.withStructuredOutput(SentimentClustersSchema, {
+      includeRaw: true,
+    });
 
-  const sentiment_clusters: SentimentClustersResult = parsed;
-  return { sentiment_clusters };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+      structuredModel.invoke([
+        ["system", systemPrompt],
+        ["human", buildSignalsText(signals)],
+      ])
+    );
+
+    // The call was made and billed whether or not the response parsed — track it first.
+    const usage = (raw as AIMessage).usage_metadata;
+    await trackCost(
+      AGENT_NAME,
+      model,
+      usage?.input_tokens ?? 0,
+      usage?.output_tokens ?? 0,
+      state.run_id,
+      state.competitor_id
+    );
+
+    // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
+    // failure — it hands back parsed: null while the TS type still claims
+    // SentimentClustersResult. Returning that straight through would silently write a
+    // null sentiment_clusters and report success. runBranchNode catches this throw and
+    // degrades the branch to `{}` so the synthesis fan-in still completes.
+    if (!parsed) {
+      logger.error("sentiment-clusterer: structured output failed schema validation", {
+        competitor_id: state.competitor_id,
+        run_id: state.run_id,
+        raw_content: (raw as AIMessage)?.content,
+      });
+      throw new Error(
+        `sentiment-clusterer: structured output failed schema validation for competitor ${state.competitor_id}`
+      );
+    }
+
+    const sentiment_clusters: SentimentClustersResult = parsed;
+    return { sentiment_clusters };
+  });
 }
