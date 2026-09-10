@@ -9,6 +9,7 @@ import {
   signalClustersTable,
   competitorSignalScoresTable,
   agentLatenciesTable,
+  agentRunsTable,
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
@@ -184,6 +185,19 @@ export async function getLatestSignalCollectedAt(
   return row?.collected_at;
 }
 
+// PatternDetector's historical-pattern phase — how long this competitor has
+// been accumulating signals at all, across every source. Mirrors
+// getLatestSignalCollectedAt above but asc (earliest) and no source filter.
+export async function getFirstSignalCollectedAt(competitorId: string): Promise<Date | undefined> {
+  const [row] = await db
+    .select({ collected_at: signalsTable.collected_at })
+    .from(signalsTable)
+    .where(eq(signalsTable.competitor_id, competitorId))
+    .orderBy(asc(signalsTable.collected_at))
+    .limit(1);
+  return row?.collected_at;
+}
+
 // Dedup check collectors run before inserting — real schema has no
 // source_id column, so this keys on source_url instead (per CLAUDE.md).
 export async function signalExistsBySourceUrl(
@@ -260,6 +274,25 @@ export async function createPricingDiff(input: CreatePricingDiffInput): Promise<
   return row;
 }
 
+// ChangeDetector's exact query — a competitor's pricing diffs within a rolling
+// day window, most recent first. Same date-window `sql` fragment shape as
+// getRecentSignalsByCompetitorAndSource above.
+export async function getRecentPricingDiffs(
+  competitorId: string,
+  days = 7
+): Promise<PricingDiff[]> {
+  return db
+    .select()
+    .from(pricingDiffsTable)
+    .where(
+      and(
+        eq(pricingDiffsTable.competitor_id, competitorId),
+        sql`${pricingDiffsTable.detected_at} >= NOW() - INTERVAL '1 day' * ${days}`
+      )
+    )
+    .orderBy(desc(pricingDiffsTable.detected_at));
+}
+
 // SynthesisAgent's exact query — latest N scores for one competitor, backed
 // by competitor_signal_scores_competitor_computed_idx.
 export async function getLatestSignalScores(
@@ -272,6 +305,20 @@ export async function getLatestSignalScores(
     .where(eq(competitorSignalScoresTable.competitor_id, competitorId))
     .orderBy(desc(competitorSignalScoresTable.computed_at))
     .limit(limit);
+}
+
+export type CreateSignalScoreInput = {
+  competitor_id: string;
+  score: number;
+  components: Record<string, unknown>;
+  delta_7d?: number | null;
+  delta_30d?: number | null;
+};
+
+// SynthesisAgent's write — one Signal Score row per daily recompute.
+export async function createSignalScore(input: CreateSignalScoreInput): Promise<SignalScore> {
+  const [row] = await db.insert(competitorSignalScoresTable).values(input).returning();
+  return row;
 }
 
 // scripts/latency-report.ts's exact query — P50/P95 duration per agent over
@@ -455,4 +502,20 @@ export async function mergeSignalIntoCluster(
 
     return row;
   });
+}
+
+// ── agent_runs ───────────────────────────────────────────────────────────
+
+// Closes out the analysis-graph DAG's run record — every node that reaches
+// SynthesisAgent (or fails before it) finishes here, per agent_runs_status_check
+// / agent_runs_outcome_check in schema.ts.
+export async function completeAgentRun(
+  runId: string,
+  status: "completed" | "failed",
+  outcome?: "alert" | "digest" | "suppress"
+): Promise<void> {
+  await db
+    .update(agentRunsTable)
+    .set({ status, outcome, completed_at: new Date() })
+    .where(eq(agentRunsTable.id, runId));
 }

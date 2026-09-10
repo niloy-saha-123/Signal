@@ -148,3 +148,6 @@ vite.config.ts.timestamp-*
 
 # macOS
 .DS_Store
+
+# Local-only project instructions, not pushed to origin
+CLAUDE.md
