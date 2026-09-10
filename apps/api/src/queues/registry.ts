@@ -178,6 +178,17 @@ async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void>
     throw new Error(`competitor ${competitor_id} not found`);
   }
 
+  // A retry after finalizeDiscovery already committed (Redis blip on the
+  // circuit-breaker write, SIGKILL before BullMQ's completed-state write) must
+  // not re-probe, append a second set of log rows, or flip a terminal status.
+  if (competitor.discovery_status === "complete" || competitor.discovery_status === "failed") {
+    logger.info("competitor-discovery: already finalized, skipping", {
+      competitor_id,
+      discovery_status: competitor.discovery_status,
+    });
+    return;
+  }
+
   await updateDiscoveryStatus(competitor_id, "in_progress");
   const result = await discoverCompetitor({
     competitor_id,
@@ -192,6 +203,12 @@ async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void>
     },
   });
   await finalizeDiscovery(competitor_id, result);
+
+  if (result.logs.length > 0 && result.logs.every((log) => log.status !== "found")) {
+    logger.warn("competitor-discovery: no fields discovered — see competitor_discovery_log", {
+      competitor_id,
+    });
+  }
 }
 
 async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
@@ -200,7 +217,15 @@ async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>
   }
   try {
     await runDiscovery(job);
-    await recordSuccess("competitor-discovery");
+    try {
+      await recordSuccess("competitor-discovery");
+    } catch (recordErr) {
+      // Same unguarded Redis calls as recordFailure — bookkeeping must never
+      // fail a job whose real work already committed (that retry is C-1).
+      logger.error("Failed to record circuit-breaker success for competitor-discovery", {
+        error: recordErr,
+      });
+    }
   } catch (err) {
     try {
       await recordFailure("competitor-discovery", err instanceof Error ? err.message : String(err));

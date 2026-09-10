@@ -285,6 +285,7 @@ describe("competitor-discovery worker", () => {
       lever_token: null,
       pricing_url: null,
       changelog_rss: "https://acme.com/feed.xml",
+      discovery_status: "pending",
     });
     updateDiscoveryStatusMock.mockResolvedValue(undefined);
     discoverCompetitorMock.mockResolvedValue({
@@ -352,6 +353,85 @@ describe("competitor-discovery worker", () => {
     );
     expect(recordSuccess).toHaveBeenCalledWith("competitor-discovery");
     expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  // A retry that reaches a row finalizeDiscovery already committed must not
+  // re-probe or append a second set of discovery log rows (review C-1).
+  it.each(["complete", "failed"])(
+    "skips all work when the competitor is already %s",
+    async (status) => {
+      getCompetitorByIdMock.mockResolvedValueOnce({
+        id: "comp-1",
+        subreddits: [],
+        greenhouse_token: null,
+        lever_token: null,
+        pricing_url: null,
+        changelog_rss: null,
+        discovery_status: status,
+      });
+      const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+      await expect(processor(fakeJob())).resolves.toBeUndefined();
+
+      expect(updateDiscoveryStatusMock).not.toHaveBeenCalled();
+      expect(discoverCompetitorMock).not.toHaveBeenCalled();
+      expect(finalizeDiscoveryMock).not.toHaveBeenCalled();
+      expect(recordSuccess).toHaveBeenCalledWith("competitor-discovery");
+    }
+  );
+
+  it("does not fail a job whose work committed when recordSuccess itself rejects", async () => {
+    (recordSuccess as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("redis blip"));
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await expect(processor(fakeJob())).resolves.toBeUndefined();
+
+    expect(finalizeDiscoveryMock).toHaveBeenCalledTimes(1);
+    expect(recordFailure).not.toHaveBeenCalled();
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("circuit-breaker success"),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
+  it("warns when a finalized discovery found no field at all", async () => {
+    discoverCompetitorMock.mockResolvedValueOnce({
+      subreddits: [],
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: [
+        { field_name: "greenhouse", attempted_urls: [], discovered_value: null, status: "not_found", error_message: null },
+        { field_name: "pricing_url", attempted_urls: [], discovered_value: null, status: "error", error_message: "boom" },
+      ],
+    });
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await processor(fakeJob());
+
+    expect(loggerMock.warn).toHaveBeenCalledWith(
+      expect.stringContaining("no fields discovered"),
+      { competitor_id: "comp-1" }
+    );
+  });
+
+  it("does not warn when at least one field was found", async () => {
+    discoverCompetitorMock.mockResolvedValueOnce({
+      subreddits: ["acme"],
+      greenhouse_token: "acme-gh",
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: [
+        { field_name: "greenhouse", attempted_urls: [], discovered_value: "acme-gh", status: "found", error_message: null },
+      ],
+    });
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await processor(fakeJob());
+
+    expect(loggerMock.warn).not.toHaveBeenCalled();
   });
 
   it("rejects a missing competitor so BullMQ can retry and records the failure", async () => {
