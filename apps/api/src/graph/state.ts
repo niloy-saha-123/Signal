@@ -9,8 +9,9 @@
 //
 // Caller-seeded fields: `competitor_id`, `run_id`, and `has_pricing_diff` are set by the
 // CALLER before `.invoke()`, not computed by any node in this graph. `run_id` is the future
-// analysis-queue worker's BullMQ job id; `has_pricing_diff` is read by changeDetector's future
-// conditional router. As of this task, no part of this codebase owns that caller — the
+// analysis-queue worker's BullMQ job id; `has_pricing_diff` is read directly by
+// changeDetectorNode to decide whether it has any pricing work to do. As of this task, no
+// part of this codebase owns that caller — the
 // analysis-queue worker that will construct and seed this initial state does not exist yet.
 // This is a known, disclosed open gap for whichever future part builds it, not something
 // silently assumed solved here.

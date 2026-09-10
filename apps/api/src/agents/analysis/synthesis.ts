@@ -259,8 +259,18 @@ export async function synthesisNode(
   // 3. Composite score.
   const score = computeCompositeScore(components);
 
-  // 4. Deltas against prior scores.
-  const priorScores = await getLatestSignalScores(state.competitor_id, 40);
+  // Every component formula clamps and guards its own divisors, so this should never fire —
+  // but the plan requires a hard "no NaN reaches the DB" guarantee, and a NaN would otherwise
+  // surface as an opaque Postgres integer-column rejection rather than a clear error here.
+  if (!Number.isFinite(score)) {
+    throw new Error(
+      `synthesis: computed a non-finite composite score for competitor ${state.competitor_id}`
+    );
+  }
+
+  // 4. Deltas against prior scores. 80 rows comfortably spans the 30-day (+5d tolerance)
+  // baseline window even if a daily recompute occasionally writes more than one row per day.
+  const priorScores = await getLatestSignalScores(state.competitor_id, 80);
   const baseline7d = pickBaselineScore(
     priorScores,
     DELTA_7D_TARGET_DAYS,
@@ -342,9 +352,18 @@ export async function synthesisNode(
   // queue worker, not to the node. A throw above propagates to that caller unhandled by design.
   await completeAgentRun(state.run_id, "completed", decision.action);
 
-  // 8. `created` is the drizzle row — its computed_at is a Date and components is
-  // Record<string, unknown>, whereas @signal/shared's SignalScore Zod type models them as an
-  // ISO string / the typed components object. The row is written correctly; only the static
-  // shape differs at this boundary.
-  return { signal_score: created as unknown as SignalScore, decision };
+  // 8. Map the drizzle row to @signal/shared's SignalScore shape: the row's `computed_at` is
+  // a Date and its `components` is Record<string, unknown>, whereas the shared Zod type models
+  // them as an ISO string and the typed components object. `components` (built above) already
+  // has the exact shape; only `computed_at` needs normalising.
+  const signalScore: SignalScore = {
+    id: created.id,
+    competitor_id: created.competitor_id,
+    score: created.score,
+    components,
+    delta_7d: created.delta_7d,
+    delta_30d: created.delta_30d,
+    computed_at: created.computed_at.toISOString(),
+  };
+  return { signal_score: signalScore, decision };
 }

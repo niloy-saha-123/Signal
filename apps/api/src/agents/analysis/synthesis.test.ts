@@ -210,6 +210,19 @@ describe("agents/analysis/synthesis", () => {
     expect(payload.delta_30d).toBeNull();
   });
 
+  it("delta selection: only rows younger than the 7d tolerance → delta_7d null (not a spurious too-fresh baseline)", async () => {
+    getLatestSignalScoresMock.mockResolvedValue([
+      { id: "d1", competitor_id: "c1", score: 30, components: {}, delta_7d: null, delta_30d: null, computed_at: new Date(NOW - 1 * DAY) },
+      { id: "d2", competitor_id: "c1", score: 32, components: {}, delta_7d: null, delta_30d: null, computed_at: new Date(NOW - 3 * DAY) },
+    ]);
+
+    await synthesisNode(fullState());
+
+    const payload = createSignalScoreMock.mock.calls[0][0];
+    expect(payload.delta_7d).toBeNull();
+    expect(payload.delta_30d).toBeNull();
+  });
+
   it("null components stay finite numbers and do not throw", async () => {
     const state = fullState() as unknown as Record<string, unknown>;
     state.sentiment_clusters = null;
