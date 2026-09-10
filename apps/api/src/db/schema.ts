@@ -192,8 +192,9 @@ export const pricingDiffsTable = pgTable(
 );
 
 // ── agent_runs ───────────────────────────────────────────────────────────
-// One row per LangGraph analysis-graph execution (not ChatAgent — that's
-// real-time and doesn't run as a batch graph).
+// One row per analysis or ChatAgent execution. Batch graph jobs use scheduled,
+// manual, or backfill triggers; real-time ChatAgent requests use manual so
+// latency/cost rows retain a real foreign-keyed lifecycle record.
 export const agentRunsTable = pgTable(
   "agent_runs",
   {

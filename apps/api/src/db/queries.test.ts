@@ -65,12 +65,14 @@ import {
   competitorSignalScoresTable,
   agentLatenciesTable,
   agentRunsTable,
+  alertsTable,
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
 } from "./schema";
 import {
   createCompetitor,
+  getCompetitorsByIds,
   getCompetitorById,
   listCompetitors,
   updateDiscoveryStatus,
@@ -88,6 +90,9 @@ import {
   getFirstSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
+  listSignalFeed,
+  listAlertFeed,
+  createAlert,
   createPricingBaseline,
   getLatestPricingBaseline,
   createPricingDiff,
@@ -99,6 +104,7 @@ import {
   getSignalClusterById,
   mergeSignalIntoCluster,
   completeAgentRun,
+  createAgentRun,
   finalizeDiscovery,
 } from "./queries";
 
@@ -134,6 +140,49 @@ describe("db/queries — competitors", () => {
         discovery_status: "pending",
       });
       expect(result).toEqual(row);
+    });
+
+    it("persists caller-supplied discovery overrides using schema column names", async () => {
+      insertReturningMock.mockResolvedValue([{ id: "c1" }]);
+
+      await createCompetitor({
+        name: "Acme",
+        domain: "acme.com",
+        subreddits: ["acme"],
+        greenhouse_token: "acmehq",
+        lever_token: "acme",
+        pricing_url: "https://acme.com/pricing",
+        rss_url: "https://acme.com/changelog.xml",
+      });
+
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        name: "Acme",
+        domain: "acme.com",
+        subreddits: ["acme"],
+        greenhouse_token: "acmehq",
+        lever_token: "acme",
+        pricing_url: "https://acme.com/pricing",
+        changelog_rss: "https://acme.com/changelog.xml",
+        discovery_status: "pending",
+      });
+    });
+  });
+
+  describe("getCompetitorsByIds", () => {
+    it("loads all requested competitors in one set-based query", async () => {
+      const rows = [{ id: "c1" }, { id: "c2" }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue(rows);
+
+      await expect(getCompetitorsByIds(["c1", "c2"])).resolves.toEqual(rows);
+
+      expect(inArray).toHaveBeenCalledWith(competitorsTable.id, ["c1", "c2"]);
+      expect(selectMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("short-circuits an empty id array", async () => {
+      await expect(getCompetitorsByIds([])).resolves.toEqual([]);
+      expect(selectMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1101,9 +1150,29 @@ describe("db/queries — signal pipeline", () => {
 describe("db/queries — agent runs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
     updateMock.mockReturnValue({ set: updateSetMock });
     updateSetMock.mockReturnValue({ where: updateWhereMock });
     updateWhereMock.mockResolvedValue(undefined);
+  });
+
+  describe("createAgentRun", () => {
+    it("creates a running lifecycle row and returns it", async () => {
+      const row = { id: "run-1", competitor_id: "c1", trigger: "manual", status: "running" };
+      insertReturningMock.mockResolvedValue([row]);
+
+      await expect(createAgentRun({ competitor_id: "c1", trigger: "manual" })).resolves.toEqual(
+        row
+      );
+
+      expect(insertMock).toHaveBeenCalledWith(agentRunsTable);
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        competitor_id: "c1",
+        trigger: "manual",
+        status: "running",
+      });
+    });
   });
 
   describe("completeAgentRun", () => {
@@ -1129,6 +1198,83 @@ describe("db/queries — agent runs", () => {
         completed_at: expect.any(Date),
       });
     });
+  });
+});
+
+describe("db/queries — route feeds", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ orderBy: orderByMock });
+    orderByMock.mockReturnValue({ limit: limitMock });
+    limitMock.mockResolvedValue([]);
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+  });
+
+  it("reads one extra signal with deterministic descending keyset pagination", async () => {
+    await listSignalFeed({
+      limit: 20,
+      competitor_ids: ["c1", "c2"],
+      sources: ["reddit", "jobs"],
+      min_quality: 0.6,
+      created_after: new Date("2026-09-01T00:00:00.000Z"),
+      created_before: new Date("2026-09-10T00:00:00.000Z"),
+      cursor: { created_at: new Date("2026-09-09T12:00:00.000Z"), id: "s1" },
+    });
+
+    expect(fromMock).toHaveBeenCalledWith(signalsTable);
+    expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, ["c1", "c2"]);
+    expect(inArray).toHaveBeenCalledWith(signalsTable.source, ["reddit", "jobs"]);
+    expect(orderByMock).toHaveBeenCalledWith(desc(signalsTable.created_at), desc(signalsTable.id));
+    expect(limitMock).toHaveBeenCalledWith(21);
+    const sqlText = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(rawSqlText)
+      .join(" ");
+    expect((sql as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(4);
+    expect(sqlText).toContain(">= ?");
+    expect(sqlText).toContain("<= ?");
+    expect(sqlText).toContain("< (?, ?::uuid)");
+  });
+
+  it("short-circuits empty signal filter arrays instead of calling inArray([])", async () => {
+    await expect(listSignalFeed({ limit: 20, competitor_ids: [] })).resolves.toEqual([]);
+    expect(selectMock).not.toHaveBeenCalled();
+  });
+
+  it("reads alerts with the same stable cursor ordering and a bounded lookahead", async () => {
+    await listAlertFeed({
+      limit: 10,
+      competitor_ids: ["c1"],
+      cursor: { created_at: new Date("2026-09-09T12:00:00.000Z"), id: "a1" },
+    });
+
+    expect(fromMock).toHaveBeenCalledWith(alertsTable);
+    expect(inArray).toHaveBeenCalledWith(alertsTable.competitor_id, ["c1"]);
+    expect(orderByMock).toHaveBeenCalledWith(desc(alertsTable.created_at), desc(alertsTable.id));
+    expect(limitMock).toHaveBeenCalledWith(11);
+  });
+
+  it("creates an alert with the full evidence artifact", async () => {
+    const input = {
+      competitor_id: "c1",
+      run_id: "run-1",
+      pattern: "pricing change",
+      confidence: 0.9,
+      evidence: [{ signal_id: "s1" }],
+      interpretation: "The enterprise plan increased.",
+      vulnerability_window_days: 14,
+      recommended_actions: [{ action: "Update battlecard" }],
+      supporting_cluster_ids: ["cluster-1"],
+    };
+    insertReturningMock.mockResolvedValue([{ id: "a1", ...input, delivered: false }]);
+
+    const result = await createAlert(input);
+
+    expect(insertMock).toHaveBeenCalledWith(alertsTable);
+    expect(insertValuesMock).toHaveBeenCalledWith(input);
+    expect(result.id).toBe("a1");
   });
 });
 

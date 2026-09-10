@@ -1,6 +1,10 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, sql } from "drizzle-orm";
-import type { SignalSource, CompetitorDiscoveryResult } from "@signal/shared";
+import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
+import type {
+  SignalSource,
+  CompetitorDiscoveryResult,
+  CompetitorCreateInput,
+} from "@signal/shared";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -13,6 +17,7 @@ import {
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
+  alertsTable,
 } from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
@@ -23,6 +28,8 @@ export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
 export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
 export type CompanyProfile = typeof companyProfileTable.$inferSelect;
+export type AgentRun = typeof agentRunsTable.$inferSelect;
+export type Alert = typeof alertsTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
@@ -47,13 +54,21 @@ export type LatencyPercentiles = {
 type DiscoveryStatus = "pending" | "in_progress" | "complete" | "failed";
 
 
-export async function createCompetitor(input: {
-  name: string;
-  domain: string;
-}): Promise<Competitor> {
+export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
   const [row] = await db
     .insert(competitorsTable)
-    .values({ name: input.name, domain: input.domain, discovery_status: "pending" })
+    .values({
+      name: input.name,
+      domain: input.domain,
+      ...(input.subreddits === undefined ? {} : { subreddits: input.subreddits }),
+      ...(input.greenhouse_token === undefined
+        ? {}
+        : { greenhouse_token: input.greenhouse_token }),
+      ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
+      ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
+      ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
+      discovery_status: "pending",
+    })
     .returning();
   return row;
 }
@@ -61,6 +76,13 @@ export async function createCompetitor(input: {
 export async function getCompetitorById(id: string): Promise<Competitor | undefined> {
   const [row] = await db.select().from(competitorsTable).where(eq(competitorsTable.id, id));
   return row;
+}
+
+// Chat scope validation and other multi-competitor callers must load in one
+// set-based query rather than issuing one SELECT per id.
+export async function getCompetitorsByIds(ids: string[]): Promise<Competitor[]> {
+  if (ids.length === 0) return [];
+  return db.select().from(competitorsTable).where(inArray(competitorsTable.id, ids));
 }
 
 export async function listCompetitors(): Promise<Competitor[]> {
@@ -229,6 +251,96 @@ export type CreateSignalInput = {
 
 export async function createSignal(input: CreateSignalInput): Promise<Signal> {
   const [row] = await db.insert(signalsTable).values(input).returning();
+  return row;
+}
+
+export interface FeedCursor {
+  created_at: Date;
+  id: string;
+}
+
+export interface SignalFeedQuery {
+  limit: number;
+  competitor_ids?: string[];
+  sources?: SignalSource[];
+  min_quality?: number;
+  created_after?: Date;
+  created_before?: Date;
+  cursor?: FeedCursor;
+}
+
+// Returns limit + 1 rows so the HTTP boundary can determine whether a next
+// cursor exists without a separate COUNT query. The cursor includes both sort
+// columns, preventing duplicate/omitted rows when timestamps are equal.
+export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> {
+  if (input.competitor_ids?.length === 0 || input.sources?.length === 0) return [];
+
+  const predicates: SQL[] = [];
+  if (input.competitor_ids) {
+    predicates.push(inArray(signalsTable.competitor_id, input.competitor_ids));
+  }
+  if (input.sources) {
+    predicates.push(inArray(signalsTable.source, input.sources));
+  }
+  if (input.min_quality !== undefined) {
+    predicates.push(sql`${signalsTable.quality_score} >= ${input.min_quality}`);
+  }
+  if (input.created_after) {
+    predicates.push(sql`${signalsTable.created_at} >= ${input.created_after}`);
+  }
+  if (input.created_before) {
+    predicates.push(sql`${signalsTable.created_at} <= ${input.created_before}`);
+  }
+  if (input.cursor) {
+    predicates.push(
+      sql`(${signalsTable.created_at}, ${signalsTable.id}) < (${input.cursor.created_at}, ${input.cursor.id}::uuid)`
+    );
+  }
+
+  const limit = Math.max(1, Math.min(100, Math.floor(input.limit)));
+  return db
+    .select()
+    .from(signalsTable)
+    .where(and(...predicates))
+    .orderBy(desc(signalsTable.created_at), desc(signalsTable.id))
+    .limit(limit + 1);
+}
+
+export interface AlertFeedQuery {
+  limit: number;
+  competitor_ids?: string[];
+  cursor?: FeedCursor;
+}
+
+export async function listAlertFeed(input: AlertFeedQuery): Promise<Alert[]> {
+  if (input.competitor_ids?.length === 0) return [];
+
+  const predicates: SQL[] = [];
+  if (input.competitor_ids) {
+    predicates.push(inArray(alertsTable.competitor_id, input.competitor_ids));
+  }
+  if (input.cursor) {
+    predicates.push(
+      sql`(${alertsTable.created_at}, ${alertsTable.id}) < (${input.cursor.created_at}, ${input.cursor.id}::uuid)`
+    );
+  }
+
+  const limit = Math.max(1, Math.min(100, Math.floor(input.limit)));
+  return db
+    .select()
+    .from(alertsTable)
+    .where(and(...predicates))
+    .orderBy(desc(alertsTable.created_at), desc(alertsTable.id))
+    .limit(limit + 1);
+}
+
+export type CreateAlertInput = Omit<
+  typeof alertsTable.$inferInsert,
+  "id" | "created_at" | "delivered"
+>;
+
+export async function createAlert(input: CreateAlertInput): Promise<Alert> {
+  const [row] = await db.insert(alertsTable).values(input).returning();
   return row;
 }
 
@@ -505,6 +617,27 @@ export async function mergeSignalIntoCluster(
 }
 
 // ── agent_runs ───────────────────────────────────────────────────────────
+
+export type AgentRunTrigger = "scheduled" | "manual" | "backfill";
+
+export async function createAgentRun(input: {
+  competitor_id: string;
+  trigger: AgentRunTrigger;
+  prompt_version_id?: string | null;
+}): Promise<AgentRun> {
+  const [row] = await db
+    .insert(agentRunsTable)
+    .values({
+      competitor_id: input.competitor_id,
+      trigger: input.trigger,
+      ...(input.prompt_version_id === undefined
+        ? {}
+        : { prompt_version_id: input.prompt_version_id }),
+      status: "running",
+    })
+    .returning();
+  return row;
+}
 
 // Closes out the analysis-graph DAG's run record — every node that reaches
 // SynthesisAgent (or fails before it) finishes here, per agent_runs_status_check
