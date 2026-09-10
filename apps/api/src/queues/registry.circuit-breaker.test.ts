@@ -52,6 +52,25 @@ vi.mock("../db/client", () => ({
   db: { insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }) },
 }));
 
+vi.mock("../db/queries", () => ({
+  getCompetitorById: vi.fn().mockResolvedValue({
+    id: "comp-1",
+    name: "Acme",
+    domain: "acme.com",
+    subreddits: [],
+    greenhouse_token: null,
+    lever_token: null,
+    pricing_url: null,
+    changelog_rss: null,
+  }),
+  updateDiscoveryStatus: vi.fn().mockResolvedValue(undefined),
+  finalizeDiscovery: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../agents/discovery/competitor-discovery", () => ({
+  discoverCompetitor: vi.fn().mockRejectedValue(new Error("discovery probe failed")),
+}));
+
 vi.mock("bullmq", () => {
   class Queue {
     constructor(
@@ -76,7 +95,7 @@ vi.mock("bullmq", () => {
 });
 
 import { isCircuitOpen } from "../reliability/circuit-breaker";
-import { initWorkers, NotImplementedError } from "./registry";
+import { initWorkers } from "./registry";
 
 describe("competitor-discovery worker — real circuit breaker", () => {
   it("opens after 5 consecutive processor throws and short-circuits the next job", async () => {
@@ -88,14 +107,15 @@ describe("competitor-discovery worker — real circuit breaker", () => {
     const job = { data: { competitor_id: "comp-1", name: "Acme", domain: "acme.com" } };
 
     for (let i = 0; i < 5; i++) {
-      await expect(processor(job)).rejects.toThrow(NotImplementedError);
+      await expect(processor(job)).rejects.toThrow("discovery probe failed");
     }
 
     expect(await isCircuitOpen("competitor-discovery")).toBe(true);
 
     // 6th call short-circuits on the open check instead of reaching
-    // runDiscovery — proven by the rejection no longer being NotImplementedError.
+    // runDiscovery — proven by the rejection changing from the probe error to
+    // the circuit-open error.
     const err = await processor(job).catch((e) => e);
-    expect(err).not.toBeInstanceOf(NotImplementedError);
+    expect(err).toEqual(new Error("competitor-discovery circuit is open — skipping job"));
   });
 });

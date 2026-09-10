@@ -32,6 +32,8 @@ import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { withRetry } from "../lib/retry";
+import { finalizeDiscovery, getCompetitorById, updateDiscoveryStatus } from "../db/queries";
+import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
 
 // bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
 // npm hoists two separate copies — same runtime API (bullmq duck-types via
@@ -142,9 +144,9 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
   return worker;
 }
 
-// Reusable across queues whose real processing logic hasn't landed yet
-// (Task 3 also throws this) — distinct from a transient failure so the
-// circuit breaker / logs read "not built" rather than "broken".
+// Reusable across queue processors whose real processing logic has not landed
+// yet — distinct from a transient failure so logs read "not built" rather
+// than "broken".
 export class NotImplementedError extends Error {
   constructor(message: string) {
     super(message);
@@ -158,10 +160,29 @@ interface CompetitorDiscoveryJobData {
   domain: string;
 }
 
-// CompetitorDiscoveryAgent doesn't exist yet — swap this body out once Part 11 lands,
-// the circuit-breaker/failure-logging wrapper below doesn't need to change.
-async function runDiscovery(_job: Job<CompetitorDiscoveryJobData>): Promise<void> {
-  throw new NotImplementedError("CompetitorDiscoveryAgent is not implemented yet (Part 11)");
+// Keep discovery orchestration here, inside the standalone worker boundary:
+// Express only enqueues the immutable job payload and never performs probes.
+async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
+  const { competitor_id, name, domain } = job.data;
+  const competitor = await getCompetitorById(competitor_id);
+  if (!competitor) {
+    throw new Error(`competitor ${competitor_id} not found`);
+  }
+
+  await updateDiscoveryStatus(competitor_id, "in_progress");
+  const result = await discoverCompetitor({
+    competitor_id,
+    name,
+    domain,
+    existing: {
+      subreddits: competitor.subreddits,
+      greenhouse_token: competitor.greenhouse_token,
+      lever_token: competitor.lever_token,
+      pricing_url: competitor.pricing_url,
+      changelog_rss: competitor.changelog_rss,
+    },
+  });
+  await finalizeDiscovery(competitor_id, result);
 }
 
 async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
