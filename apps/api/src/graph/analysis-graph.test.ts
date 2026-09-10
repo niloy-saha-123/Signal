@@ -17,30 +17,75 @@ vi.mock("../lib/logger", () => ({
   },
 }));
 
-// intentAnalyzerNode (Task 2), sentimentClustererNode (Task 3), and changeDetectorNode
-// (Task 4) are now real — all three import db/queries and lib/company-context (which in
-// turn opens real ioredis connections at module load). Mocked here so this DAG-level test
-// stays isolated from Postgres/Redis: an empty result list drives all three nodes down
-// their no-LLM-call short-circuit/defensive paths.
-const { getRecentSignalsByCompetitorAndSourceMock, getRecentPricingDiffsMock } = vi.hoisted(() => ({
+// intentAnalyzerNode (Task 2), sentimentClustererNode (Task 3), changeDetectorNode
+// (Task 4), and patternDetectorNode (Task 5) are now real — all four import db/queries and
+// lib/company-context (which in turn opens real ioredis connections at module load).
+// Mocked here so this DAG-level test stays isolated from Postgres/Redis: an empty result
+// list drives intentAnalyzer/sentimentClusterer/changeDetector down their no-LLM-call
+// short-circuit/defensive paths, and an `undefined` getFirstSignalCollectedAt drives
+// patternDetector down its own <90-day Phase 2 skip.
+const {
+  getRecentSignalsByCompetitorAndSourceMock,
+  getRecentPricingDiffsMock,
+  getSignalVolumeByDayMock,
+  getFirstSignalCollectedAtMock,
+} = vi.hoisted(() => ({
   getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
   getRecentPricingDiffsMock: vi.fn().mockResolvedValue([]),
+  getSignalVolumeByDayMock: vi.fn().mockResolvedValue([]),
+  getFirstSignalCollectedAtMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../db/queries", () => ({
   getRecentSignalsByCompetitorAndSource: getRecentSignalsByCompetitorAndSourceMock,
   getRecentPricingDiffs: getRecentPricingDiffsMock,
+  getSignalVolumeByDay: getSignalVolumeByDayMock,
+  getFirstSignalCollectedAt: getFirstSignalCollectedAtMock,
 }));
 
 vi.mock("../lib/company-context", () => ({
   getCompanyContext: vi.fn().mockResolvedValue(""),
 }));
 
+// patternDetectorNode (Task 5) is unconditional about calling hybridRetrieve's module and
+// the LLM — mocked here for the same Postgres/Redis/Pinecone/network isolation reasons as
+// db/queries and company-context above. getFirstSignalCollectedAtMock resolving undefined
+// means hybridRetrieve is never actually invoked by this DAG test, but the module (and its
+// own Pinecone/embeddings imports) would still load without this mock.
+vi.mock("../retrieval", () => ({
+  hybridRetrieve: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../lib/latency-tracker", () => ({
+  trackLatency: vi.fn((_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) =>
+    fn()
+  ),
+}));
+
+vi.mock("../llm/cost-tracker", () => ({
+  trackCost: vi.fn().mockResolvedValue(0),
+}));
+
+const { patternsParsed } = vi.hoisted(() => ({
+  patternsParsed: { summary: "Stable signal volume.", trend: "stable" as const },
+}));
+
+vi.mock("@langchain/openai", () => {
+  const invoke = vi
+    .fn()
+    .mockResolvedValue({ raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } }, parsed: patternsParsed });
+  class ChatOpenAIMockClass {
+    withStructuredOutput() {
+      return { invoke };
+    }
+  }
+  return { ChatOpenAI: vi.fn(ChatOpenAIMockClass) };
+});
+
 import { analysisGraph } from "./analysis-graph";
 
 const LOG_MESSAGES = {
   changeDetector: "change-detector: no recent pricing diffs found — unexpected since the router only invokes this node when has_pricing_diff is true",
-  patternDetector: "patternDetectorNode: not yet implemented (Part 10) — returning no-op update",
   vulnerabilityDetector: "vulnerabilityDetectorNode: not yet implemented (Part 10) — returning no-op update",
   synthesis: "synthesisNode: not yet implemented (Part 10) — returning no-op update",
 } as const;
@@ -73,7 +118,10 @@ describe("analysisGraph — compiled DAG", () => {
       new_complaints: [],
       chronic_complaints: [],
     });
-    expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
+    // patternDetectorNode is real now (Task 5) — it takes its own <90-day Phase 2 skip
+    // since getFirstSignalCollectedAt is mocked to resolve undefined, and produces the
+    // mocked ChatOpenAI structured output from Phase 1 data alone.
+    expect(result.patterns).toEqual(patternsParsed);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
     // (b) changeDetector runs when has_pricing_diff is true — it takes its own
     // defensive no-diffs-found short-circuit since getRecentPricingDiffs is mocked to
@@ -100,7 +148,10 @@ describe("analysisGraph — compiled DAG", () => {
       new_complaints: [],
       chronic_complaints: [],
     });
-    expect(callCountFor(LOG_MESSAGES.patternDetector)).toBe(1);
+    // patternDetectorNode is real now (Task 5) — it takes its own <90-day Phase 2 skip
+    // since getFirstSignalCollectedAt is mocked to resolve undefined, and produces the
+    // mocked ChatOpenAI structured output from Phase 1 data alone.
+    expect(result.patterns).toEqual(patternsParsed);
     expect(callCountFor(LOG_MESSAGES.vulnerabilityDetector)).toBe(1);
     // (b) changeDetector is skipped when has_pricing_diff is false
     expect(callCountFor(LOG_MESSAGES.changeDetector)).toBe(0);
