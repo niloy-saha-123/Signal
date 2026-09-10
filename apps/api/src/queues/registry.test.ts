@@ -187,6 +187,9 @@ describe("queues/registry", () => {
         concurrency: 2,
         attempts: 3,
         backoff: { type: "exponential", delay: 5000 },
+        ...(name.startsWith("collect-")
+          ? { limiter: { max: 10, duration: 60_000 } }
+          : {}),
       });
     }
   });
@@ -224,6 +227,7 @@ describe("queues/registry", () => {
     expect(call?.processor).toBe(processor);
     expect((call?.opts as { concurrency: number }).concurrency).toBe(2);
     expect((call?.opts as { connection: unknown }).connection).toBe(redis);
+    expect((call?.opts as { limiter: unknown }).limiter).toEqual({ max: 10, duration: 60_000 });
   });
 
   it("throws on a second registerWorker call for the same queue name", () => {

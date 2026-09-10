@@ -68,12 +68,19 @@ export interface QueueConfig {
   attempts: number;
   backoff?: { type: "fixed" | "exponential"; delay: number };
   lockDuration?: number;
+  limiter?: { max: number; duration: number };
 }
 
 const DEFAULT_CONFIG: QueueConfig = {
   concurrency: 2,
   attempts: 3,
   backoff: { type: "exponential", delay: 5000 },
+};
+
+export const COLLECTOR_RATE_LIMITER = { max: 10, duration: 60_000 } as const;
+const COLLECTOR_CONFIG: QueueConfig = {
+  ...DEFAULT_CONFIG,
+  limiter: COLLECTOR_RATE_LIMITER,
 };
 
 export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
@@ -86,11 +93,11 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
     lockDuration: 60_000,
   },
   "company-profile-update": { concurrency: 1, attempts: 1 },
-  "collect-reddit": DEFAULT_CONFIG,
-  "collect-hn": DEFAULT_CONFIG,
-  "collect-jobs": DEFAULT_CONFIG,
-  "collect-changelog": DEFAULT_CONFIG,
-  "collect-pricing": DEFAULT_CONFIG,
+  "collect-reddit": COLLECTOR_CONFIG,
+  "collect-hn": COLLECTOR_CONFIG,
+  "collect-jobs": COLLECTOR_CONFIG,
+  "collect-changelog": COLLECTOR_CONFIG,
+  "collect-pricing": COLLECTOR_CONFIG,
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,
@@ -138,6 +145,7 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
     connection,
     concurrency: config.concurrency,
     ...(config.lockDuration === undefined ? {} : { lockDuration: config.lockDuration }),
+    ...(config.limiter === undefined ? {} : { limiter: config.limiter }),
   });
 
   // Without this a failed job lands in Redis's failed-job hash and nowhere else,

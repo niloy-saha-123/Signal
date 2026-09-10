@@ -5,13 +5,9 @@
 // cron'd (see registry.ts's queue doc comments). Collector queue names are
 // derived from registry.ts's QUEUE_CONFIG keys rather than re-declared
 // here, so the two modules can't drift.
-import { QUEUE_CONFIG, type QueueName } from "./registry";
+import { COLLECTOR_RATE_LIMITER, QUEUE_CONFIG, queues, type QueueName } from "./registry";
 
 const DEFAULT_COLLECT_INTERVAL_HOURS = 24;
-
-// Inferred, not stub-sourced — no per-collector rate-limit spec exists yet.
-const RATE_LIMIT_MAX_JOBS_PER_MINUTE = 10;
-const RATE_LIMIT_DURATION_MS = 60_000;
 
 // Sourced from each collector's own header-comment spec (collectors/*.ts) —
 // not uniform. Falls back to DEFAULT_COLLECT_INTERVAL_HOURS for any
@@ -79,9 +75,33 @@ export function getCollectorScheduleConfig(): Partial<Record<QueueName, Collecto
       const hours = override ?? COLLECTOR_DEFAULT_HOURS[name] ?? DEFAULT_COLLECT_INTERVAL_HOURS;
       const config: CollectorScheduleConfig = {
         repeat: { pattern: collectorCronExpression(hours) },
-        limiter: { max: RATE_LIMIT_MAX_JOBS_PER_MINUTE, duration: RATE_LIMIT_DURATION_MS },
+        limiter: COLLECTOR_RATE_LIMITER,
       };
       return [name, config];
+    })
+  );
+}
+
+// The ID, rather than the delayed job ID BullMQ creates on each tick, is the
+// idempotency key. Upserting on every worker startup updates cadence changes
+// without accumulating duplicate repeat definitions.
+export function collectorSchedulerId(queueName: QueueName): string {
+  return `signal:collector:${queueName}:v1`;
+}
+
+export async function registerCollectorSchedules(
+  queueMap: Pick<typeof queues, (typeof COLLECTOR_QUEUE_NAMES)[number]> = queues
+): Promise<void> {
+  const config = getCollectorScheduleConfig();
+  await Promise.all(
+    COLLECTOR_QUEUE_NAMES.map(async (queueName) => {
+      const schedule = config[queueName];
+      if (!schedule) throw new Error(`Missing collector schedule for ${queueName}`);
+      await queueMap[queueName].upsertJobScheduler(
+        collectorSchedulerId(queueName),
+        schedule.repeat,
+        { name: queueName, data: {} }
+      );
     })
   );
 }

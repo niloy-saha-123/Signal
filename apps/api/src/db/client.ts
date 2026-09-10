@@ -13,3 +13,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 pool.on("error", (err) => logger.error("Unexpected pg pool error", { error: err }));
 
 export const db = drizzle(pool, { schema });
+
+export async function closeDatabase(): Promise<void> {
+  await pool.end();
+}
