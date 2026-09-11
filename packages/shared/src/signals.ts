@@ -8,21 +8,25 @@ import { z } from "zod";
 // getCompanyContext(), injected into every analysis agent's system prompt so
 // output is judged against this company's actual positioning, not generic.
 export const CompanyProfileSchema = z.object({
-  product_description: z.string(),
-  icp_company_size: z.string().optional(),
-  icp_industries: z.array(z.string()).default([]),
-  icp_buyer_role: z.string().optional(),
+  product_description: z.string().trim().min(1).max(10_000),
+  icp_company_size: z.string().trim().min(1).max(500).optional(),
+  icp_industries: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
+  icp_buyer_role: z.string().trim().min(1).max(500).optional(),
   pricing_tiers: z
     .array(
       z.object({
-        name: z.string(),
-        price: z.number(),
+        name: z.string().trim().min(1).max(200),
+        price: z.number().finite().nonnegative().max(1_000_000_000),
         billing: z.enum(["monthly", "annual", "custom"]),
       })
     )
+    .max(50)
     .default([]),
-  key_differentiators: z.array(z.string()).default([]),
-  primary_competitor_ids: z.array(z.string().uuid()).default([]),
+  key_differentiators: z
+    .array(z.string().trim().min(1).max(1_000))
+    .max(50)
+    .default([]),
+  primary_competitor_ids: z.array(z.string().uuid()).max(50).default([]),
 });
 export type CompanyProfile = z.infer<typeof CompanyProfileSchema>;
 
@@ -30,13 +34,13 @@ export type CompanyProfile = z.infer<typeof CompanyProfileSchema>;
 // else is filled in asynchronously by CompetitorDiscoveryAgent, but callers
 // may still supply a field directly to skip discovery for that one field.
 export const CompetitorCreateInputSchema = z.object({
-  name: z.string().min(1),
-  domain: z.string().min(1),
-  subreddits: z.array(z.string()).optional(),
-  greenhouse_token: z.string().optional(),
-  lever_token: z.string().optional(),
-  pricing_url: z.string().url().optional(),
-  rss_url: z.string().url().optional(),
+  name: z.string().trim().min(1).max(200),
+  domain: z.string().trim().min(1).max(253),
+  subreddits: z.array(z.string().trim().min(1).max(100)).max(25).optional(),
+  greenhouse_token: z.string().trim().min(1).max(200).optional(),
+  lever_token: z.string().trim().min(1).max(200).optional(),
+  pricing_url: z.string().url().max(2_048).optional(),
+  rss_url: z.string().url().max(2_048).optional(),
 });
 export type CompetitorCreateInput = z.infer<typeof CompetitorCreateInputSchema>;
 
@@ -54,6 +58,20 @@ export const DiscoveryLogSchema = z.object({
   error_message: z.string().nullable(),
 });
 export type DiscoveryLog = z.infer<typeof DiscoveryLogSchema>;
+
+// Output of CompetitorDiscoveryAgent (agents/discovery/competitor-discovery.ts) —
+// the discovered field values plus one DiscoveryLog per field it attempted.
+// A field the agent skipped (already pre-filled on the competitors row) or failed
+// to find is null here (subreddits: [] for the array field).
+export const CompetitorDiscoveryResultSchema = z.object({
+  subreddits: z.array(z.string()),
+  greenhouse_token: z.string().nullable(),
+  lever_token: z.string().nullable(),
+  pricing_url: z.string().nullable(),
+  changelog_rss: z.string().nullable(),
+  logs: z.array(DiscoveryLogSchema),
+});
+export type CompetitorDiscoveryResult = z.infer<typeof CompetitorDiscoveryResultSchema>;
 
 // One row of the `signals` table (apps/api/src/db/schema.ts) — a single collected
 // mention/post/comment/pricing-page-diff before or after clustering.

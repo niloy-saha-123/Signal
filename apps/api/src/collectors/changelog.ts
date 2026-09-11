@@ -12,9 +12,11 @@ import {
   signalExistsBySourceUrl,
   createSignal,
 } from "../db/queries";
+import { assertPublicUrl, safeFetch } from "../lib/safe-fetch";
 
 const SERVICE_NAME = "changelog";
 const SOURCE = "changelog" as const;
+const MAX_CHANGELOG_BYTES = 2_000_000;
 
 // rss-parser stashes RSS2's <content:encoded> under a literal
 // 'content:encoded' key rather than aliasing it onto `.content` (that field
@@ -37,11 +39,25 @@ function parseArticleContent(html: string): string {
 }
 
 async function fetchArticleText(url: string): Promise<string> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
-  if (!response.ok) {
+  const response = await safeFetch(url, {
+    signal: AbortSignal.timeout(30000),
+    maxBytes: MAX_CHANGELOG_BYTES,
+  });
+  if (response.status < 200 || response.status >= 300) {
     throw new Error(`Fetching changelog entry ${url} returned ${response.status}`);
   }
   return parseArticleContent(await response.text());
+}
+
+async function fetchFeed(url: string) {
+  const response = await safeFetch(url, {
+    signal: AbortSignal.timeout(30000),
+    maxBytes: MAX_CHANGELOG_BYTES,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Fetching changelog feed ${url} returned ${response.status}`);
+  }
+  return parser.parseString(await response.text());
 }
 
 async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: string): Promise<string> {
@@ -71,7 +87,9 @@ async function collectForCompetitor(competitor: {
   changelog_rss: string;
 }): Promise<void> {
   const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, SOURCE);
-  const feed = await withRetry(() => parser.parseURL(competitor.changelog_rss));
+  // parseURL follows redirects internally and cannot re-check their targets.
+  // Fetch the bounded body through safeFetch, then parse the inert string.
+  const feed = await withRetry(() => fetchFeed(competitor.changelog_rss));
 
   for (const item of feed.items ?? []) {
     const sourceUrl = item.link;
@@ -87,6 +105,9 @@ async function collectForCompetitor(competitor: {
     // must not abort the rest of this competitor's batch — same isolation
     // one level up as the per-competitor loop, just per-item here.
     try {
+      // Validate links even when content:encoded means no article fetch. The
+      // URL is persisted and later rendered as evidence/source metadata.
+      await assertPublicUrl(sourceUrl);
       const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
       if (alreadyCollected) continue;
 

@@ -13,7 +13,7 @@ import { getActivePrompt } from "../../llm/prompt-registry";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "intent_analyzer" as const;
-const MODEL = "gpt-4o";
+const MODEL = "gpt-4.1";
 
 // Bounded client budget — same reasoning as pipeline/entity-extractor.ts: LangChain's
 // defaults (openai-node's 10-minute request timeout × AsyncCaller's maxRetries: 6) can

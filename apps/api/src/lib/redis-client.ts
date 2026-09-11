@@ -19,3 +19,20 @@ export const cacheRedis = new Redis(REDIS_URL, {
   maxRetriesPerRequest: 2,
 });
 cacheRedis.on("error", (err) => logger.error("Redis client error", { error: err }));
+
+export async function closeRedisConnections(): Promise<void> {
+  const clients = [redis, cacheRedis];
+  try {
+    await Promise.race([
+      Promise.allSettled(clients.map((client) => client.quit())),
+      new Promise<void>((resolve) => {
+        const handle = setTimeout(resolve, 5_000);
+        handle.unref();
+      }),
+    ]);
+  } finally {
+    // `disconnect` is idempotent and guarantees a blocking BullMQ connection
+    // cannot hold the process open if Redis vanished during shutdown.
+    for (const client of clients) client.disconnect();
+  }
+}

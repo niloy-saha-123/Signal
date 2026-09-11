@@ -87,11 +87,11 @@ graph TB
     COMPANY["Company Profile<br/>getCompanyContext() — 1h Redis cache"]
 
     subgraph Analysis["ANALYSIS LAYER · LangGraph.js directed graph, immutable state"]
-        IA["IntentAnalyzer<br/>GPT-4o"]
+        IA["IntentAnalyzer<br/>GPT-4.1"]
         SC["SentimentClusterer<br/>Claude Haiku"]
         CD["ChangeDetector<br/>GPT-4o-mini (conditional)"]
-        PD["PatternDetector<br/>GPT-4o + RAG + 90d history"]
-        VW["VulnerabilityWindowDetector<br/>GPT-4o · Claude Sonnet"]
+        PD["PatternDetector<br/>GPT-4.1 + RAG + 90d history"]
+        VW["VulnerabilityWindowDetector<br/>GPT-4.1 · Claude Sonnet"]
         SY["SynthesisAgent<br/>Claude Sonnet<br/>alert · confidence · Signal Score"]
 
         IA --- SC
@@ -151,10 +151,10 @@ graph TB
 
 | Model | Agents | Reason |
 |---|---|---|
-| GPT-4o | IntentAnalyzer, PatternDetector, VulnerabilityDetector (analysis) | Multi-signal reasoning across large context windows |
+| GPT-4.1 | IntentAnalyzer, PatternDetector, VulnerabilityDetector (analysis) | Multi-signal reasoning across large context windows |
 | GPT-4o-mini | ChangeDetector, EntityExtractor, PricingExtractor | Structured extraction — cheaper, sufficient accuracy |
-| Claude Sonnet 3.5 | SynthesisAgent, ChatAgent, VulnerabilityDetector (copy) | Writing quality matters for user-facing output |
-| Claude Haiku 3 | SentimentClusterer | Fast, cheap classification at 3 calls/day/competitor |
+| Claude Sonnet 5 | SynthesisAgent, ChatAgent, VulnerabilityDetector (copy) | Writing quality matters for user-facing output |
+| Claude Haiku 4.5 | SentimentClusterer | Fast, cheap classification at 3 calls/day/competitor |
 | text-embedding-3-small | All embeddings | Cost-efficient semantic accuracy at dedup threshold |
 | Cohere rerank-english-v3.0 | ChatAgent reranking | Jointly scores (query, chunk) pairs — improves retrieval precision over vector similarity alone. |
 
@@ -207,7 +207,7 @@ Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before e
 
 ### Analysis — LangGraph.js
 
-**IntentAnalyzerAgent** `GPT-4o`
+**IntentAnalyzerAgent** `GPT-4.1`
 Job postings from the last 7 days. Every inference must cite specific job titles and description phrases — enforced in the prompt and validated by Zod. Returns `confidence: "low"` when fewer than three postings support a claim. SynthesisAgent only escalates high and medium confidence inferences to real-time alerts.
 
 **SentimentClustererAgent** `Claude Haiku`
@@ -216,13 +216,13 @@ Runs in parallel with IntentAnalyzer. Queries Pinecone for existing clusters bef
 **ChangeDetectorAgent** `GPT-4o-mini`
 Conditional node — only fires when `pricing_diff_detected: true` in LangGraph state. Structured extraction from the pricing diff object, not raw text. `significance: critical` bypasses the weekly queue and escalates directly.
 
-**PatternDetectorAgent** `GPT-4o`
-Two phases, run for every competitor. Phase 1: PostgreSQL aggregates signal volume weighted by `quality_score` over 30 days — no LLM cost for counting. Phase 2: three Pinecone semantic queries ("negative feedback", "product improvements", "pricing concerns"), top 50 chunks each, passed to GPT-4o for trend synthesis. Data gaps caused by circuit breaker open periods are flagged and excluded from trend windows rather than interpreted as zero activity.
+**PatternDetectorAgent** `GPT-4.1`
+Two phases, run for every competitor. Phase 1: PostgreSQL aggregates signal volume weighted by `quality_score` over 30 days — no LLM cost for counting. Phase 2: three Pinecone semantic queries ("negative feedback", "product improvements", "pricing concerns"), top 50 chunks each, passed to GPT-4.1 for trend synthesis. Data gaps caused by circuit breaker open periods are flagged and excluded from trend windows rather than interpreted as zero activity.
 
 A third phase activates once a competitor has 90+ days of accumulated history: historical pattern matching. PatternDetector retrieves past occurrences of a structurally similar signal cluster for this specific competitor and asks what happened next each time, weighting the current prediction by those historical outcomes. This is the part that compounds — see [Signal Score compounds over time](#key-architecture-decisions) below.
 
-**VulnerabilityWindowDetector** `GPT-4o + Claude Sonnet`
-GPT-4o handles strategic analysis: identifies the vulnerable customer segment, estimates the window duration, assesses opportunity magnitude. Claude Sonnet handles copy generation: positioning language, ICP description, outreach subject lines. Two models because the tasks require different capabilities and the copy is read by humans.
+**VulnerabilityWindowDetector** `GPT-4.1 + Claude Sonnet`
+GPT-4.1 handles strategic analysis: identifies the vulnerable customer segment, estimates the window duration, assesses opportunity magnitude. Claude Sonnet handles copy generation: positioning language, ICP description, outreach subject lines. Two models because the tasks require different capabilities and the copy is read by humans.
 
 **SynthesisAgent** `Claude Sonnet`
 Receives all agent outputs from LangGraph graph state. Incorporates `corroboration_count` from the deduplication layer into confidence calculation. Selects the active prompt version from the registry. Decides: real-time alert, weekly digest entry, or suppress. Also recomputes each competitor's Signal Score daily from mention velocity, sentiment trajectory, hiring momentum, pricing change recency, and vulnerability window status.
@@ -386,9 +386,9 @@ Measured values will replace targets as the system accumulates data in `agent_la
 
 **LangGraph state is immutable.** Every node receives `AnalysisGraphState` and returns a new partial state object. No mutation. Six agents sharing state with in-place mutation produces bugs that are nearly impossible to trace. Immutable transitions make every state change explicit.
 
-**Conditional routing uses no LLM.** ChangeDetector fires on a boolean check in a conditional edge function. Deterministic, zero latency, zero cost. Not every decision in an agent system needs a model.
+**Conditional routing uses no LLM.** All analysis branches join before synthesis; ChangeDetector performs a deterministic boolean self-skip when no pricing diff exists. Deterministic, zero latency, zero cost. Not every decision in an agent system needs a model.
 
-**PatternDetector separates SQL from LLM.** Volume counts and quality-weighted metrics run in PostgreSQL. Only the interpretation step goes to GPT-4o. Deterministic computation stays deterministic.
+**PatternDetector separates SQL from LLM.** Volume counts and quality-weighted metrics run in PostgreSQL. Only the interpretation step goes to GPT-4.1. Deterministic computation stays deterministic.
 
 **Deduplication threshold is empirically derived.** 0.88 was chosen from a precision/recall analysis at five threshold values on 200 labeled signal pairs — not by intuition. The calibration script is in `scripts/dedup-calibration.ts` and reproducible.
 
@@ -634,7 +634,8 @@ LANGSMITH_API_KEY=
 LANGSMITH_TRACING=true
 LANGSMITH_PROJECT=signal
 MAX_TOKENS_PER_CALL=2000
-COLLECT_INTERVAL_HOURS=24
+# Optional global override; leave unset for the per-collector schedules
+# COLLECT_INTERVAL_HOURS=24
 DAILY_BUDGET_USD=2.00
 ENABLE_PLAYWRIGHT=true
 CIRCUIT_FAILURE_THRESHOLD=5
@@ -642,6 +643,13 @@ CIRCUIT_TIMEOUT_MS=1800000
 ```
 
 `DATABASE_URL` is a Supabase PostgreSQL connection string.
+
+The connected production project currently tracks applied SQL in Supabase's
+`supabase_migrations.schema_migrations` ledger, not Drizzle's separate migration
+table. Generate migration files with Drizzle, review them, and apply them through
+the established Supabase migration workflow. Do not run `drizzle-kit migrate`
+against that already-provisioned project unless its Drizzle history has first been
+explicitly baselined to the migrations already applied.
 
 ---
 

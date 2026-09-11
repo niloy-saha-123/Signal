@@ -1,10 +1,15 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 
+const { upsertJobSchedulerMock } = vi.hoisted(() => ({
+  upsertJobSchedulerMock: vi.fn().mockResolvedValue({ id: "scheduled" }),
+}));
+
 // registry.ts is mocked with a QUEUE_CONFIG that differs from the real one
 // (fewer collect-* queues than production) — if scheduler.ts derived its
 // collector list from a hardcoded array instead of this import, the test
 // below would still see the real 5 names and pass for the wrong reason.
 vi.mock("./registry", () => ({
+  COLLECTOR_RATE_LIMITER: { max: 10, duration: 60_000 },
   QUEUE_CONFIG: {
     "competitor-discovery": {},
     "company-profile-update": {},
@@ -16,6 +21,13 @@ vi.mock("./registry", () => ({
     "pipeline-entity-extraction": {},
     analysis: {},
   },
+  queues: {
+    "collect-reddit": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-hn": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-jobs": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-changelog": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
+  },
 }));
 
 import {
@@ -23,6 +35,8 @@ import {
   collectorCronExpression,
   getCollectIntervalHours,
   getCollectorScheduleConfig,
+  registerCollectorSchedules,
+  collectorSchedulerId,
 } from "./scheduler";
 
 describe("queues/scheduler", () => {
@@ -138,5 +152,20 @@ describe("queues/scheduler", () => {
     const config = getCollectorScheduleConfig();
     expect(config["competitor-discovery"]).toBeUndefined();
     expect(config["company-profile-update"]).toBeUndefined();
+  });
+
+  it("idempotently upserts every collector under a stable scheduler id", async () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
+    upsertJobSchedulerMock.mockClear();
+
+    await registerCollectorSchedules();
+
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(5);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      collectorSchedulerId("collect-reddit"),
+      { pattern: "0 */6 * * *" },
+      { name: "collect-reddit", data: {} }
+    );
+    expect(collectorSchedulerId("collect-pricing")).toBe("signal:collector:collect-pricing:v1");
   });
 });

@@ -3,7 +3,7 @@ import { getDailySpend } from "./cost-tracker";
 import { logger } from "../lib/logger";
 
 const DOWNGRADE_MAP: Record<string, string> = {
-  "gpt-4o": "gpt-4o-mini",
+  "gpt-4.1": "gpt-4o-mini",
   "claude-sonnet": "claude-haiku",
 };
 
@@ -14,8 +14,8 @@ const DOWNGRADE_MAP: Record<string, string> = {
 // hands back through this map for the constructor, and pass the untranslated alias to
 // trackCost. Lives here alongside DOWNGRADE_MAP, which owns the same alias vocabulary.
 export const ANTHROPIC_MODEL_IDS: Record<string, string> = {
-  "claude-haiku": "claude-haiku-4-5-20251001",
-  "claude-sonnet": "claude-sonnet-5",
+  "claude-haiku": process.env.ANTHROPIC_HAIKU_MODEL_ID ?? "claude-haiku-4-5-20251001",
+  "claude-sonnet": process.env.ANTHROPIC_SONNET_MODEL_ID ?? "claude-sonnet-5",
 };
 
 const DEFAULT_DAILY_BUDGET_USD = 2.0;

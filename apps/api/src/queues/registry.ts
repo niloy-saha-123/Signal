@@ -26,12 +26,23 @@
 // no per-queue spec exists for these yet.
 import { Queue, Worker, type ConnectionOptions, type Job, type Processor } from "bullmq";
 import { eq } from "drizzle-orm";
-import { redis } from "../lib/redis-client";
+import { z } from "zod";
+import { cacheRedis, redis } from "../lib/redis-client";
 import { db } from "../db/client";
 import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { withRetry } from "../lib/retry";
+import {
+  createAgentRun,
+  failRunIfRunning,
+  finalizeDiscovery,
+  getCompetitorById,
+  getRecentPricingDiffs,
+  listCompetitors,
+  updateDiscoveryStatus,
+} from "../db/queries";
+import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
 
 // bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
 // npm hoists two separate copies — same runtime API (bullmq duck-types via
@@ -57,6 +68,8 @@ export interface QueueConfig {
   concurrency: number;
   attempts: number;
   backoff?: { type: "fixed" | "exponential"; delay: number };
+  lockDuration?: number;
+  limiter?: { max: number; duration: number };
 }
 
 const DEFAULT_CONFIG: QueueConfig = {
@@ -65,14 +78,27 @@ const DEFAULT_CONFIG: QueueConfig = {
   backoff: { type: "exponential", delay: 5000 },
 };
 
+export const COLLECTOR_RATE_LIMITER = { max: 10, duration: 60_000 } as const;
+const COLLECTOR_CONFIG: QueueConfig = {
+  ...DEFAULT_CONFIG,
+  limiter: COLLECTOR_RATE_LIMITER,
+};
+
 export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
-  "competitor-discovery": { concurrency: 3, attempts: 2, backoff: { type: "fixed", delay: 5000 } },
+  "competitor-discovery": {
+    concurrency: 3,
+    attempts: 2,
+    backoff: { type: "fixed", delay: 5000 },
+    // discoverCompetitor enforces a 45s run deadline on all its probes, so the
+    // lock only has to cover that plus finalization — keep the two in step.
+    lockDuration: 60_000,
+  },
   "company-profile-update": { concurrency: 1, attempts: 1 },
-  "collect-reddit": DEFAULT_CONFIG,
-  "collect-hn": DEFAULT_CONFIG,
-  "collect-jobs": DEFAULT_CONFIG,
-  "collect-changelog": DEFAULT_CONFIG,
-  "collect-pricing": DEFAULT_CONFIG,
+  "collect-reddit": COLLECTOR_CONFIG,
+  "collect-hn": COLLECTOR_CONFIG,
+  "collect-jobs": COLLECTOR_CONFIG,
+  "collect-changelog": COLLECTOR_CONFIG,
+  "collect-pricing": COLLECTOR_CONFIG,
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,
@@ -119,6 +145,8 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
   const worker = new Worker(queueName, processor, {
     connection,
     concurrency: config.concurrency,
+    ...(config.lockDuration === undefined ? {} : { lockDuration: config.lockDuration }),
+    ...(config.limiter === undefined ? {} : { limiter: config.limiter }),
   });
 
   // Without this a failed job lands in Redis's failed-job hash and nowhere else,
@@ -142,26 +170,55 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
   return worker;
 }
 
-// Reusable across queues whose real processing logic hasn't landed yet
-// (Task 3 also throws this) — distinct from a transient failure so the
-// circuit breaker / logs read "not built" rather than "broken".
-export class NotImplementedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotImplementedError";
+const CompetitorDiscoveryJobDataSchema = z
+  .object({
+    competitor_id: z.string().uuid(),
+    name: z.string().trim().min(1).max(200),
+    domain: z.string().trim().min(1).max(253),
+  })
+  .strict();
+type CompetitorDiscoveryJobData = z.infer<typeof CompetitorDiscoveryJobDataSchema>;
+
+// Keep discovery orchestration here, inside the standalone worker boundary:
+// Express only enqueues the immutable job payload and never performs probes.
+async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
+  const { competitor_id, name, domain } = CompetitorDiscoveryJobDataSchema.parse(job.data);
+  const competitor = await getCompetitorById(competitor_id);
+  if (!competitor) {
+    throw new Error(`competitor ${competitor_id} not found`);
   }
-}
 
-interface CompetitorDiscoveryJobData {
-  competitor_id: string;
-  name: string;
-  domain: string;
-}
+  // A retry after finalizeDiscovery already committed (Redis blip on the
+  // circuit-breaker write, SIGKILL before BullMQ's completed-state write) must
+  // not re-probe, append a second set of log rows, or flip a terminal status.
+  if (competitor.discovery_status === "complete" || competitor.discovery_status === "failed") {
+    logger.info("competitor-discovery: already finalized, skipping", {
+      competitor_id,
+      discovery_status: competitor.discovery_status,
+    });
+    return;
+  }
 
-// CompetitorDiscoveryAgent doesn't exist yet — swap this body out once Part 11 lands,
-// the circuit-breaker/failure-logging wrapper below doesn't need to change.
-async function runDiscovery(_job: Job<CompetitorDiscoveryJobData>): Promise<void> {
-  throw new NotImplementedError("CompetitorDiscoveryAgent is not implemented yet (Part 11)");
+  await updateDiscoveryStatus(competitor_id, "in_progress");
+  const result = await discoverCompetitor({
+    competitor_id,
+    name,
+    domain,
+    existing: {
+      subreddits: competitor.subreddits,
+      greenhouse_token: competitor.greenhouse_token,
+      lever_token: competitor.lever_token,
+      pricing_url: competitor.pricing_url,
+      changelog_rss: competitor.changelog_rss,
+    },
+  });
+  await finalizeDiscovery(competitor_id, result);
+
+  if (result.logs.length > 0 && result.logs.every((log) => log.status !== "found")) {
+    logger.warn("competitor-discovery: no fields discovered — see competitor_discovery_log", {
+      competitor_id,
+    });
+  }
 }
 
 async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>): Promise<void> {
@@ -170,7 +227,15 @@ async function competitorDiscoveryProcessor(job: Job<CompetitorDiscoveryJobData>
   }
   try {
     await runDiscovery(job);
-    await recordSuccess("competitor-discovery");
+    try {
+      await recordSuccess("competitor-discovery");
+    } catch (recordErr) {
+      // Same unguarded Redis calls as recordFailure — bookkeeping must never
+      // fail a job whose real work already committed (that retry is C-1).
+      logger.error("Failed to record circuit-breaker success for competitor-discovery", {
+        error: recordErr,
+      });
+    }
   } catch (err) {
     try {
       await recordFailure("competitor-discovery", err instanceof Error ? err.message : String(err));
@@ -207,16 +272,53 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
   });
 }
 
-interface CompanyProfileUpdateJobData {
-  // Job data type — no fields needed until Part 10 implements the actual logic
-}
+const CompanyProfileUpdateJobDataSchema = z.object({}).strict();
+type CompanyProfileUpdateJobData = z.infer<typeof CompanyProfileUpdateJobDataSchema>;
 
 async function companyProfileUpdateProcessor(
   _job: Job<CompanyProfileUpdateJobData>
 ): Promise<void> {
-  throw new NotImplementedError(
-    "Company profile update re-analysis logic is not implemented yet (Part 10)"
+  CompanyProfileUpdateJobDataSchema.parse(_job.data);
+  // The API already attempts this after the DB write. Repeat it at the worker
+  // boundary so a transient API-side cache failure cannot make the queued
+  // analyses read stale company context.
+  await cacheRedis.del("company:profile");
+
+  // Bounded by the active competitor set, which is admin-controlled and small
+  // in Phase 0. This never replays historical runs or signals.
+  const activeCompetitors = (await listCompetitors()).filter(
+    (competitor) => competitor.is_active
   );
+  let failed = 0;
+
+  for (const competitor of activeCompetitors) {
+    const run = await createAgentRun({
+      competitor_id: competitor.id,
+      trigger: "scheduled",
+    });
+    try {
+      const hasPricingDiff = (await getRecentPricingDiffs(competitor.id, 7)).length > 0;
+      await queues.analysis.add("analysis", {
+        competitor_id: competitor.id,
+        run_id: run.id,
+        has_pricing_diff: hasPricingDiff,
+      });
+    } catch (error) {
+      failed += 1;
+      await failRunIfRunning(run.id).catch(() => undefined);
+      logger.error("Failed to enqueue profile-triggered analysis", {
+        competitor_id: competitor.id,
+        run_id: run.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (failed > 0) {
+    throw new Error(
+      `company-profile-update: failed to enqueue ${failed} of ${activeCompetitors.length} analyses`
+    );
+  }
 }
 
 // Constructs the live BullMQ Workers for competitor-discovery and
@@ -240,16 +342,24 @@ export function initWorkers(): {
     if (!job) return;
     const attemptsAllowed = job.opts.attempts ?? 1;
     if (job.attemptsMade < attemptsAllowed) return;
+    const parsed = CompetitorDiscoveryJobDataSchema.safeParse(job.data);
+    if (!parsed.success) {
+      logger.error("Cannot record terminal discovery failure for malformed job data", {
+        job_id: job.id,
+        issues: parsed.error.issues,
+      });
+      return;
+    }
 
     // withRetry: writeDiscoveryFailure's db.transaction can itself fail on a
     // transient Postgres blip — retry a few times before falling back to a
     // logged, silent drop, since this runs inside an event handler with
     // nothing else watching for the loss.
-    void withRetry(() => writeDiscoveryFailure(job.data.competitor_id, err), {
+    void withRetry(() => writeDiscoveryFailure(parsed.data.competitor_id, err), {
       maxAttempts: 3,
     }).catch((writeErr) => {
       logger.error("Failed to record competitor-discovery terminal failure", {
-        competitor_id: job.data.competitor_id,
+        competitor_id: parsed.data.competitor_id,
         error: writeErr,
       });
     });

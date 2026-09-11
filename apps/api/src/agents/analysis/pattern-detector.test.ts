@@ -252,7 +252,7 @@ describe("agents/analysis/pattern-detector", () => {
 
     await patternDetectorNode(state);
 
-    expect(trackCostMock).toHaveBeenCalledWith("pattern_detector", "gpt-4o", 80, 20, "run1", "c1");
+    expect(trackCostMock).toHaveBeenCalledWith("pattern_detector", "gpt-4.1", 80, 20, "run1", "c1");
   });
 
   it("short-circuits to a real stable-trend result (no LLM call) when there's no volume and no retrieved history", async () => {
@@ -293,12 +293,12 @@ describe("agents/analysis/pattern-detector", () => {
   });
 
   it("passes selectModel's chosen model to ChatOpenAI", async () => {
-    selectModelMock.mockResolvedValue("gpt-4o-alt");
+    selectModelMock.mockResolvedValue("gpt-4.1-alt");
 
     await patternDetectorNode(state);
 
-    expect(selectModelMock).toHaveBeenCalledWith("gpt-4o", true);
-    expect(chatOpenAIMock).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4o-alt" }));
+    expect(selectModelMock).toHaveBeenCalledWith("gpt-4.1", true);
+    expect(chatOpenAIMock).toHaveBeenCalledWith(expect.objectContaining({ model: "gpt-4.1-alt" }));
   });
 
   it("uses the active registry prompt when one exists, else SYSTEM_PROMPT_BASE", async () => {

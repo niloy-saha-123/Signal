@@ -23,6 +23,7 @@
     "drizzle-orm": "^0.45.2"
   },
   "overrides": {
-    "postcss": "^8.5.10"
+    "postcss": "^8.5.10",
+    "qs": "^6.16.0"
   }
 }

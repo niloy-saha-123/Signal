@@ -9,6 +9,8 @@ const {
   limitMock,
   insertMock,
   insertValuesMock,
+  onConflictDoUpdateMock,
+  onConflictReturningMock,
   insertReturningMock,
   updateMock,
   updateSetMock,
@@ -24,6 +26,8 @@ const {
   limitMock: vi.fn(),
   insertMock: vi.fn(),
   insertValuesMock: vi.fn(),
+  onConflictDoUpdateMock: vi.fn(),
+  onConflictReturningMock: vi.fn(),
   insertReturningMock: vi.fn(),
   updateMock: vi.fn(),
   updateSetMock: vi.fn(),
@@ -55,6 +59,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
   };
 });
 
+import type { CompetitorDiscoveryResult } from "@signal/shared";
 import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
 import {
   competitorsTable,
@@ -64,12 +69,14 @@ import {
   competitorSignalScoresTable,
   agentLatenciesTable,
   agentRunsTable,
+  alertsTable,
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
 } from "./schema";
 import {
   createCompetitor,
+  getCompetitorsByIds,
   getCompetitorById,
   listCompetitors,
   updateDiscoveryStatus,
@@ -87,6 +94,9 @@ import {
   getFirstSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
+  listSignalFeed,
+  listAlertFeed,
+  createAlert,
   createPricingBaseline,
   getLatestPricingBaseline,
   createPricingDiff,
@@ -98,6 +108,9 @@ import {
   getSignalClusterById,
   mergeSignalIntoCluster,
   completeAgentRun,
+  failRunIfRunning,
+  createAgentRun,
+  finalizeDiscovery,
 } from "./queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -132,6 +145,49 @@ describe("db/queries — competitors", () => {
         discovery_status: "pending",
       });
       expect(result).toEqual(row);
+    });
+
+    it("persists caller-supplied discovery overrides using schema column names", async () => {
+      insertReturningMock.mockResolvedValue([{ id: "c1" }]);
+
+      await createCompetitor({
+        name: "Acme",
+        domain: "acme.com",
+        subreddits: ["acme"],
+        greenhouse_token: "acmehq",
+        lever_token: "acme",
+        pricing_url: "https://acme.com/pricing",
+        rss_url: "https://acme.com/changelog.xml",
+      });
+
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        name: "Acme",
+        domain: "acme.com",
+        subreddits: ["acme"],
+        greenhouse_token: "acmehq",
+        lever_token: "acme",
+        pricing_url: "https://acme.com/pricing",
+        changelog_rss: "https://acme.com/changelog.xml",
+        discovery_status: "pending",
+      });
+    });
+  });
+
+  describe("getCompetitorsByIds", () => {
+    it("loads all requested competitors in one set-based query", async () => {
+      const rows = [{ id: "c1" }, { id: "c2" }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue(rows);
+
+      await expect(getCompetitorsByIds(["c1", "c2"])).resolves.toEqual(rows);
+
+      expect(inArray).toHaveBeenCalledWith(competitorsTable.id, ["c1", "c2"]);
+      expect(selectMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("short-circuits an empty id array", async () => {
+      await expect(getCompetitorsByIds([])).resolves.toEqual([]);
+      expect(selectMock).not.toHaveBeenCalled();
     });
   });
 
@@ -223,7 +279,9 @@ describe("db/queries — signals", () => {
     it("filters by competitor_id, source, and a created_at date window (7-day default)", async () => {
       const rows = [{ id: "s1", competitor_id: "c1", source: "jobs" }];
       fromMock.mockReturnValue({ where: whereMock });
-      whereMock.mockResolvedValue(rows);
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
 
       const result = await getRecentSignalsByCompetitorAndSource("c1", "jobs");
 
@@ -244,12 +302,16 @@ describe("db/queries — signals", () => {
       expect(intervalCall!.at(-1)).toBe(7);
 
       expect(whereMock).toHaveBeenCalled();
+      expect(orderByMock).toHaveBeenCalledWith(desc(signalsTable.created_at));
+      expect(limitMock).toHaveBeenCalledWith(500);
       expect(result).toEqual(rows);
     });
 
     it("honors a custom days window", async () => {
       fromMock.mockReturnValue({ where: whereMock });
-      whereMock.mockResolvedValue([]);
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
 
       await getRecentSignalsByCompetitorAndSource("c1", "reddit", 14);
 
@@ -607,7 +669,8 @@ describe("db/queries — pricing", () => {
       const rows = [{ id: "d1", competitor_id: "c1", significance: "critical" }];
       fromMock.mockReturnValue({ where: whereMock });
       whereMock.mockReturnValue({ orderBy: orderByMock });
-      orderByMock.mockResolvedValue(rows);
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
 
       const result = await getRecentPricingDiffs("c1");
 
@@ -625,13 +688,15 @@ describe("db/queries — pricing", () => {
       expect(intervalCall!.at(-1)).toBe(7);
 
       expect(orderByMock).toHaveBeenCalledWith(desc(pricingDiffsTable.detected_at));
+      expect(limitMock).toHaveBeenCalledWith(500);
       expect(result).toEqual(rows);
     });
 
     it("honors a custom days window", async () => {
       fromMock.mockReturnValue({ where: whereMock });
       whereMock.mockReturnValue({ orderBy: orderByMock });
-      orderByMock.mockResolvedValue([]);
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
 
       await getRecentPricingDiffs("c1", 14);
 
@@ -681,7 +746,7 @@ describe("db/queries — signal scores", () => {
   });
 
   describe("createSignalScore", () => {
-    it("inserts the given fields and returns the created row", async () => {
+    it("upserts the UTC-day row and returns it", async () => {
       const input = {
         competitor_id: "c1",
         score: 72,
@@ -690,12 +755,27 @@ describe("db/queries — signal scores", () => {
         delta_30d: -1.2,
       };
       const row = { id: "s1", ...input, computed_at: new Date() };
-      insertReturningMock.mockResolvedValue([row]);
+      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
+      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
+      onConflictReturningMock.mockResolvedValueOnce([row]);
 
       const result = await createSignalScore(input);
 
       expect(insertMock).toHaveBeenCalledWith(competitorSignalScoresTable);
       expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
+        target: [
+          competitorSignalScoresTable.competitor_id,
+          competitorSignalScoresTable.day,
+        ],
+        set: {
+          score: 72,
+          components: { hiring: 0.4, sentiment: 0.2 },
+          delta_7d: 3.5,
+          delta_30d: -1.2,
+          computed_at: expect.anything(),
+        },
+      });
       expect(result).toEqual(row);
     });
   });
@@ -833,35 +913,20 @@ describe("db/queries — company profile", () => {
   });
 
   describe("upsertCompanyProfile", () => {
-    it("updates the existing row when one is present", async () => {
-      const existing = { id: "p1", product_description: "Old description" };
-      const updated = { id: "p1", ...profileInput };
-      limitMock.mockResolvedValue([existing]);
-      updateReturningMock.mockResolvedValue([updated]);
-
-      const result = await upsertCompanyProfile(profileInput);
-
-      expect(transactionMock).toHaveBeenCalled();
-      expect(updateMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(updateSetMock).toHaveBeenCalledWith(
-        expect.objectContaining({ ...profileInput, updated_at: expect.any(Date) })
-      );
-      expect(eq).toHaveBeenCalledWith(companyProfileTable.id, "p1");
-      expect(insertMock).not.toHaveBeenCalled();
-      expect(result).toEqual(updated);
-    });
-
-    it("inserts a new row when the table is empty", async () => {
+    it("atomically upserts the singleton row", async () => {
       const inserted = { id: "p2", ...profileInput };
-      limitMock.mockResolvedValue([]);
-      insertReturningMock.mockResolvedValue([inserted]);
+      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
+      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
+      onConflictReturningMock.mockResolvedValueOnce([inserted]);
 
       const result = await upsertCompanyProfile(profileInput);
 
-      expect(transactionMock).toHaveBeenCalled();
       expect(insertMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(insertValuesMock).toHaveBeenCalledWith(profileInput);
-      expect(updateMock).not.toHaveBeenCalled();
+      expect(insertValuesMock).toHaveBeenCalledWith({ ...profileInput, singleton: true });
+      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
+        target: companyProfileTable.singleton,
+        set: { ...profileInput, singleton: true, updated_at: expect.any(Date) },
+      });
       expect(result).toEqual(inserted);
     });
   });
@@ -1099,9 +1164,29 @@ describe("db/queries — signal pipeline", () => {
 describe("db/queries — agent runs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
     updateMock.mockReturnValue({ set: updateSetMock });
     updateSetMock.mockReturnValue({ where: updateWhereMock });
     updateWhereMock.mockResolvedValue(undefined);
+  });
+
+  describe("createAgentRun", () => {
+    it("creates a running lifecycle row and returns it", async () => {
+      const row = { id: "run-1", competitor_id: "c1", trigger: "manual", status: "running" };
+      insertReturningMock.mockResolvedValue([row]);
+
+      await expect(createAgentRun({ competitor_id: "c1", trigger: "manual" })).resolves.toEqual(
+        row
+      );
+
+      expect(insertMock).toHaveBeenCalledWith(agentRunsTable);
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        competitor_id: "c1",
+        trigger: "manual",
+        status: "running",
+      });
+    });
   });
 
   describe("completeAgentRun", () => {
@@ -1115,6 +1200,8 @@ describe("db/queries — agent runs", () => {
         completed_at: expect.any(Date),
       });
       expect(eq).toHaveBeenCalledWith(agentRunsTable.id, "run-1");
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.status, "running");
+      expect(and).toHaveBeenCalled();
       expect(updateWhereMock).toHaveBeenCalled();
     });
 
@@ -1127,5 +1214,268 @@ describe("db/queries — agent runs", () => {
         completed_at: expect.any(Date),
       });
     });
+  });
+
+  describe("failRunIfRunning", () => {
+    it("marks only a still-running row failed", async () => {
+      await failRunIfRunning("run-1");
+
+      expect(updateMock).toHaveBeenCalledWith(agentRunsTable);
+      expect(updateSetMock).toHaveBeenCalledWith({
+        status: "failed",
+        completed_at: expect.any(Date),
+      });
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.id, "run-1");
+      expect(eq).toHaveBeenCalledWith(agentRunsTable.status, "running");
+      expect(and).toHaveBeenCalled();
+      expect(updateWhereMock).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("db/queries — route feeds", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ orderBy: orderByMock });
+    orderByMock.mockReturnValue({ limit: limitMock });
+    limitMock.mockResolvedValue([]);
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+  });
+
+  it("reads one extra signal with deterministic descending keyset pagination", async () => {
+    await listSignalFeed({
+      limit: 20,
+      competitor_ids: ["c1", "c2"],
+      sources: ["reddit", "jobs"],
+      min_quality: 0.6,
+      created_after: new Date("2026-09-01T00:00:00.000Z"),
+      created_before: new Date("2026-09-10T00:00:00.000Z"),
+      cursor: { created_at: new Date("2026-09-09T12:00:00.000Z"), id: "s1" },
+    });
+
+    expect(fromMock).toHaveBeenCalledWith(signalsTable);
+    expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, ["c1", "c2"]);
+    expect(inArray).toHaveBeenCalledWith(signalsTable.source, ["reddit", "jobs"]);
+    expect(orderByMock).toHaveBeenCalledWith(desc(signalsTable.created_at), desc(signalsTable.id));
+    expect(limitMock).toHaveBeenCalledWith(21);
+    const sqlText = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(rawSqlText)
+      .join(" ");
+    expect((sql as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(4);
+    expect(sqlText).toContain(">= ?");
+    expect(sqlText).toContain("<= ?");
+    expect(sqlText).toContain("< (?, ?::uuid)");
+  });
+
+  it("short-circuits empty signal filter arrays instead of calling inArray([])", async () => {
+    await expect(listSignalFeed({ limit: 20, competitor_ids: [] })).resolves.toEqual([]);
+    expect(selectMock).not.toHaveBeenCalled();
+  });
+
+  it("reads alerts with the same stable cursor ordering and a bounded lookahead", async () => {
+    await listAlertFeed({
+      limit: 10,
+      competitor_ids: ["c1"],
+      cursor: { created_at: new Date("2026-09-09T12:00:00.000Z"), id: "a1" },
+    });
+
+    expect(fromMock).toHaveBeenCalledWith(alertsTable);
+    expect(inArray).toHaveBeenCalledWith(alertsTable.competitor_id, ["c1"]);
+    expect(orderByMock).toHaveBeenCalledWith(desc(alertsTable.created_at), desc(alertsTable.id));
+    expect(limitMock).toHaveBeenCalledWith(11);
+  });
+
+  // Math.floor(NaN) is NaN and survives Math.max/Math.min — an unparsed
+  // `?limit=` must not reach the driver as a NaN LIMIT.
+  it.each([
+    ["signals", listSignalFeed],
+    ["alerts", listAlertFeed],
+  ])("clamps a non-finite %s limit to the default instead of passing NaN through", async (
+    _label,
+    listFeed
+  ) => {
+    await listFeed({ limit: Number.NaN });
+    expect(limitMock).toHaveBeenCalledWith(26);
+
+    await listFeed({ limit: 5_000 });
+    expect(limitMock).toHaveBeenCalledWith(101);
+
+    await listFeed({ limit: 0 });
+    expect(limitMock).toHaveBeenCalledWith(2);
+  });
+
+  it("creates an alert with the full evidence artifact", async () => {
+    const input = {
+      competitor_id: "c1",
+      run_id: "run-1",
+      pattern: "pricing change",
+      confidence: 0.9,
+      evidence: [{ signal_id: "s1" }],
+      interpretation: "The enterprise plan increased.",
+      vulnerability_window_days: 14,
+      recommended_actions: [{ action: "Update battlecard" }],
+      supporting_cluster_ids: ["cluster-1"],
+    };
+    insertReturningMock.mockResolvedValue([{ id: "a1", ...input, delivered: false }]);
+
+    const result = await createAlert(input);
+
+    expect(insertMock).toHaveBeenCalledWith(alertsTable);
+    expect(insertValuesMock).toHaveBeenCalledWith(input);
+    expect(result.id).toBe("a1");
+  });
+});
+
+describe("db/queries — competitor discovery write-back", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockResolvedValue(undefined);
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockResolvedValue(undefined);
+    transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb({ update: updateMock, insert: insertMock })
+    );
+  });
+
+  const mixedResult: CompetitorDiscoveryResult = {
+    subreddits: ["r/acme"],
+    greenhouse_token: "acmehq",
+    lever_token: null,
+    pricing_url: "https://acme.com/pricing",
+    changelog_rss: null,
+    logs: [
+      {
+        field_name: "subreddits",
+        attempted_urls: ["https://reddit.com/r/acme"],
+        discovered_value: "r/acme",
+        status: "found",
+        error_message: null,
+      },
+      {
+        field_name: "greenhouse",
+        attempted_urls: ["https://boards.greenhouse.io/acmehq"],
+        discovered_value: "acmehq",
+        status: "found",
+        error_message: null,
+      },
+      {
+        field_name: "lever",
+        attempted_urls: ["https://jobs.lever.co/acme"],
+        discovered_value: null,
+        status: "not_found",
+        error_message: null,
+      },
+      {
+        field_name: "rss_url",
+        attempted_urls: [],
+        discovered_value: null,
+        status: "error",
+        error_message: "fetch timed out",
+      },
+    ],
+  };
+
+  it("updates the row to 'complete' and bulk-inserts one log row per attempt when ≥1 field was found", async () => {
+    await finalizeDiscovery("c1", mixedResult);
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith(competitorsTable);
+    expect(updateSetMock).toHaveBeenCalledWith({
+      subreddits: ["r/acme"],
+      greenhouse_token: "acmehq",
+      lever_token: null,
+      pricing_url: "https://acme.com/pricing",
+      changelog_rss: null,
+      discovery_status: "complete",
+      discovered_at: expect.any(Date),
+      updated_at: expect.any(Date),
+    });
+
+    expect(insertMock).toHaveBeenCalledWith(competitorDiscoveryLogTable);
+    const rows = (insertValuesMock.mock.calls[0][0]) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r.competitor_id === "c1")).toBe(true);
+    expect(rows.map((r) => r.field_name)).toEqual([
+      "subreddits",
+      "greenhouse",
+      "lever",
+      "rss_url",
+    ]);
+    expect(rows.map((r) => r.status)).toEqual(["found", "found", "not_found", "error"]);
+    expect(rows[0].attempted_urls).toEqual(["https://reddit.com/r/acme"]);
+    expect(rows[3].attempted_urls).toEqual([]);
+    expect(rows[3].error_message).toBe("fetch timed out");
+  });
+
+  it("writes discovery_status 'failed' when the agent probed and found nothing usable", async () => {
+    await finalizeDiscovery("c1", {
+      subreddits: [],
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: mixedResult.logs.map((l) => ({
+        ...l,
+        status: l.status === "found" ? "not_found" : l.status,
+        discovered_value: null,
+      })),
+    });
+
+    expect(updateSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ discovery_status: "failed" })
+    );
+    expect(insertMock).toHaveBeenCalledWith(competitorDiscoveryLogTable);
+  });
+
+  it("writes 'complete' when every probe missed but a pre-filled value survived", async () => {
+    await finalizeDiscovery("c1", {
+      subreddits: ["r/acme"],
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: [
+        {
+          field_name: "greenhouse",
+          attempted_urls: ["https://boards.greenhouse.io/acme"],
+          discovered_value: null,
+          status: "not_found",
+          error_message: null,
+        },
+      ],
+    });
+
+    expect(updateSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ discovery_status: "complete" })
+    );
+  });
+
+  it("writes 'complete' (not 'failed') when logs is empty — all fields were pre-filled", async () => {
+    await finalizeDiscovery("c1", {
+      subreddits: ["r/acme"],
+      greenhouse_token: "acmehq",
+      lever_token: null,
+      pricing_url: "https://acme.com/pricing",
+      changelog_rss: null,
+      logs: [],
+    });
+
+    expect(updateMock).toHaveBeenCalledWith(competitorsTable);
+    expect(updateSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ discovery_status: "complete" })
+    );
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+
+  it("builds the update's .where from eq(competitorsTable.id, competitorId)", async () => {
+    await finalizeDiscovery("c1", mixedResult);
+
+    expect(eq).toHaveBeenCalledWith(competitorsTable.id, "c1");
+    expect(updateWhereMock).toHaveBeenCalled();
   });
 });

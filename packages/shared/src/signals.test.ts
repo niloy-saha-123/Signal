@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { SignalSchema, SignalClusterSchema, SignalScoreSchema } from "./signals";
+import {
+  SignalSchema,
+  SignalClusterSchema,
+  SignalScoreSchema,
+  CompetitorDiscoveryResultSchema,
+} from "./signals";
 
 describe("SignalSchema", () => {
   it("accepts a valid signal", () => {
@@ -133,6 +138,82 @@ describe("SignalScoreSchema", () => {
       delta_7d: 4.2,
       delta_30d: -1.1,
       computed_at: "2026-09-01T00:00:00.000Z",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("CompetitorDiscoveryResultSchema", () => {
+  const log = (over: Record<string, unknown>) => ({
+    field_name: "subreddits",
+    attempted_urls: ["https://example.com"],
+    discovered_value: null,
+    status: "not_found",
+    error_message: null,
+    ...over,
+  });
+
+  it("parses a fully-populated result and returns the same shape", () => {
+    const input = {
+      subreddits: ["saas", "startups"],
+      greenhouse_token: "acmeco",
+      lever_token: "acme",
+      pricing_url: "https://acme.com/pricing",
+      changelog_rss: "https://acme.com/changelog.rss",
+      logs: [
+        log({ field_name: "subreddits", discovered_value: "saas,startups", status: "found" }),
+        log({ field_name: "greenhouse", discovered_value: "acmeco", status: "found" }),
+        log({ field_name: "lever", status: "not_found" }),
+        log({
+          field_name: "pricing_url",
+          discovered_value: "https://acme.com/pricing",
+          status: "found",
+        }),
+        log({
+          field_name: "rss_url",
+          status: "error",
+          error_message: "timed out fetching feed",
+        }),
+      ],
+    };
+    const result = CompetitorDiscoveryResultSchema.parse(input);
+    expect(result).toEqual(input);
+  });
+
+  it("rejects a logs entry with a status outside the DiscoveryLog enum", () => {
+    expect(() =>
+      CompetitorDiscoveryResultSchema.parse({
+        subreddits: [],
+        greenhouse_token: null,
+        lever_token: null,
+        pricing_url: null,
+        changelog_rss: null,
+        logs: [log({ status: "partial" })],
+      }),
+    ).toThrow();
+  });
+
+  it("accepts null for every nullable field and empty arrays", () => {
+    const result = CompetitorDiscoveryResultSchema.parse({
+      subreddits: [],
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: [],
+    });
+    expect(result.subreddits).toEqual([]);
+    expect(result.greenhouse_token).toBeNull();
+    expect(result.logs).toEqual([]);
+  });
+
+  it("fails when a required key is missing", () => {
+    const result = CompetitorDiscoveryResultSchema.safeParse({
+      greenhouse_token: null,
+      lever_token: null,
+      pricing_url: null,
+      changelog_rss: null,
+      logs: [],
     });
     expect(result.success).toBe(false);
   });

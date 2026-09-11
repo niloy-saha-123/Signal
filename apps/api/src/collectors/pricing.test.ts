@@ -33,6 +33,12 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   registerWorkerMock: vi.fn(),
 }));
 
+const { assertPublicUrlMock } = vi.hoisted(() => ({
+  assertPublicUrlMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../lib/safe-fetch", () => ({ assertPublicUrl: assertPublicUrlMock }));
+
 vi.mock("../queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
@@ -41,11 +47,12 @@ vi.mock("../queues/registry", () => ({
 // Fake Playwright surface — chromium.launch() must never touch a real browser
 // in tests. newPageMock/gotoMock/evaluateMock/closeMock are shared across
 // tests so each one can assert call shape and control the scraped text.
-const { launchMock, newPageMock, setExtraHTTPHeadersMock, gotoMock, evaluateMock, closeMock } = vi.hoisted(
+const { launchMock, newPageMock, setExtraHTTPHeadersMock, routeMock, gotoMock, evaluateMock, closeMock } = vi.hoisted(
   () => ({
     launchMock: vi.fn(),
     newPageMock: vi.fn(),
     setExtraHTTPHeadersMock: vi.fn().mockResolvedValue(undefined),
+    routeMock: vi.fn().mockResolvedValue(undefined),
     gotoMock: vi.fn().mockResolvedValue(undefined),
     evaluateMock: vi.fn(),
     closeMock: vi.fn().mockResolvedValue(undefined),
@@ -108,6 +115,7 @@ describe("collectors/pricing", () => {
 
     newPageMock.mockResolvedValue({
       setExtraHTTPHeaders: setExtraHTTPHeadersMock,
+      route: routeMock,
       goto: gotoMock,
       evaluate: evaluateMock,
     });
@@ -118,6 +126,8 @@ describe("collectors/pricing", () => {
     // throws" test's gotoMock.mockRejectedValue would otherwise leak into
     // every test that runs after it).
     setExtraHTTPHeadersMock.mockResolvedValue(undefined);
+    routeMock.mockResolvedValue(undefined);
+    assertPublicUrlMock.mockResolvedValue(undefined);
     gotoMock.mockResolvedValue(undefined);
     closeMock.mockResolvedValue(undefined);
     evaluateMock.mockResolvedValue("Pro plan $99/mo\nEnterprise: contact us");
@@ -162,12 +172,29 @@ describe("collectors/pricing", () => {
     expect(setExtraHTTPHeadersMock).toHaveBeenCalledWith({
       "User-Agent": "Mozilla/5.0 (compatible; Signal/1.0; +https://signal.app)",
     });
+    expect(routeMock).toHaveBeenCalledWith("**/*", expect.any(Function));
     expect(gotoMock).toHaveBeenCalledWith("https://acme.com/pricing", {
       waitUntil: "networkidle",
       timeout: 30000,
     });
     expect(evaluateMock).toHaveBeenCalled();
     expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates browser requests and aborts a redirect or subresource targeting a private host", async () => {
+    await pricingCollectorProcessor({} as never);
+    const handler = routeMock.mock.calls[0][1] as (route: any) => Promise<void>;
+    const route = {
+      request: () => ({ url: () => "http://169.254.169.254/latest/meta-data" }),
+      continue: vi.fn(),
+      abort: vi.fn().mockResolvedValue(undefined),
+    };
+    assertPublicUrlMock.mockRejectedValueOnce(new Error("non-public"));
+
+    await handler(route);
+
+    expect(route.continue).not.toHaveBeenCalled();
+    expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
   });
 
   it("closes the browser even when the scrape throws", async () => {

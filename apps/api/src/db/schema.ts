@@ -12,6 +12,7 @@ import {
   numeric,
   boolean,
   jsonb,
+  date,
   timestamp,
   index,
   uniqueIndex,
@@ -192,8 +193,9 @@ export const pricingDiffsTable = pgTable(
 );
 
 // ── agent_runs ───────────────────────────────────────────────────────────
-// One row per LangGraph analysis-graph execution (not ChatAgent — that's
-// real-time and doesn't run as a batch graph).
+// One row per analysis or ChatAgent execution. Batch graph jobs use scheduled,
+// manual, or backfill triggers; real-time ChatAgent requests use manual so
+// latency/cost rows retain a real foreign-keyed lifecycle record.
 export const agentRunsTable = pgTable(
   "agent_runs",
   {
@@ -399,6 +401,12 @@ export const competitorSignalScoresTable = pgTable(
     delta_7d: real("delta_7d"),
     delta_30d: real("delta_30d"),
     computed_at: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+    // UTC is explicit so the idempotency boundary does not change with the
+    // database/session timezone. PostgreSQL stores generated columns, making
+    // this safe to target from ON CONFLICT and a regular unique index.
+    day: date("day").generatedAlwaysAs(
+      sql`("computed_at" AT TIME ZONE 'UTC')::date`
+    ),
   },
   (table) => [
     check("competitor_signal_scores_score_check", sql`${table.score} >= 0 AND ${table.score} <= 100`),
@@ -406,6 +414,10 @@ export const competitorSignalScoresTable = pgTable(
     index("competitor_signal_scores_competitor_computed_idx").on(
       table.competitor_id,
       table.computed_at
+    ),
+    uniqueIndex("competitor_signal_scores_competitor_day_uidx").on(
+      table.competitor_id,
+      table.day
     ),
   ]
 );

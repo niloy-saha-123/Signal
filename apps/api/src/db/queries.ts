@@ -1,6 +1,10 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, sql } from "drizzle-orm";
-import type { SignalSource } from "@signal/shared";
+import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
+import type {
+  SignalSource,
+  CompetitorDiscoveryResult,
+  CompetitorCreateInput,
+} from "@signal/shared";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -13,6 +17,7 @@ import {
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
+  alertsTable,
 } from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
@@ -23,6 +28,8 @@ export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
 export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
 export type CompanyProfile = typeof companyProfileTable.$inferSelect;
+export type AgentRun = typeof agentRunsTable.$inferSelect;
+export type Alert = typeof alertsTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
@@ -47,13 +54,21 @@ export type LatencyPercentiles = {
 type DiscoveryStatus = "pending" | "in_progress" | "complete" | "failed";
 
 
-export async function createCompetitor(input: {
-  name: string;
-  domain: string;
-}): Promise<Competitor> {
+export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
   const [row] = await db
     .insert(competitorsTable)
-    .values({ name: input.name, domain: input.domain, discovery_status: "pending" })
+    .values({
+      name: input.name,
+      domain: input.domain,
+      ...(input.subreddits === undefined ? {} : { subreddits: input.subreddits }),
+      ...(input.greenhouse_token === undefined
+        ? {}
+        : { greenhouse_token: input.greenhouse_token }),
+      ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
+      ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
+      ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
+      discovery_status: "pending",
+    })
     .returning();
   return row;
 }
@@ -61,6 +76,13 @@ export async function createCompetitor(input: {
 export async function getCompetitorById(id: string): Promise<Competitor | undefined> {
   const [row] = await db.select().from(competitorsTable).where(eq(competitorsTable.id, id));
   return row;
+}
+
+// Chat scope validation and other multi-competitor callers must load in one
+// set-based query rather than issuing one SELECT per id.
+export async function getCompetitorsByIds(ids: string[]): Promise<Competitor[]> {
+  if (ids.length === 0) return [];
+  return db.select().from(competitorsTable).where(inArray(competitorsTable.id, ids));
 }
 
 export async function listCompetitors(): Promise<Competitor[]> {
@@ -95,7 +117,8 @@ export async function getCompetitorDiscoveryLog(
 export async function getRecentSignalsByCompetitorAndSource(
   competitorId: string,
   source: SignalSource,
-  days = 7
+  days = 7,
+  limit = 500
 ): Promise<Signal[]> {
   return db
     .select()
@@ -106,7 +129,9 @@ export async function getRecentSignalsByCompetitorAndSource(
         eq(signalsTable.source, source),
         sql`${signalsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`
       )
-    );
+    )
+    .orderBy(desc(signalsTable.created_at))
+    .limit(analysisInputLimit(limit));
 }
 
 // Retrieval pipeline source — fetch recent signals across multiple competitors
@@ -232,6 +257,109 @@ export async function createSignal(input: CreateSignalInput): Promise<Signal> {
   return row;
 }
 
+export interface FeedCursor {
+  created_at: Date;
+  id: string;
+}
+
+export interface SignalFeedQuery {
+  limit: number;
+  competitor_ids?: string[];
+  sources?: SignalSource[];
+  min_quality?: number;
+  created_after?: Date;
+  created_before?: Date;
+  cursor?: FeedCursor;
+}
+
+// Math.floor(NaN) is NaN and NaN survives Math.max/Math.min, so an unparsed
+// `?limit=` from the route layer would reach the driver as a NaN LIMIT.
+const DEFAULT_FEED_LIMIT = 25;
+function feedLimit(value: number): number {
+  const floored = Math.floor(value);
+  return Number.isFinite(floored) ? Math.max(1, Math.min(100, floored)) : DEFAULT_FEED_LIMIT;
+}
+
+function analysisInputLimit(value: number): number {
+  const floored = Math.floor(value);
+  return Number.isFinite(floored) ? Math.max(1, Math.min(500, floored)) : 500;
+}
+
+// Returns limit + 1 rows so the HTTP boundary can determine whether a next
+// cursor exists without a separate COUNT query. The cursor includes both sort
+// columns, preventing duplicate/omitted rows when timestamps are equal.
+export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> {
+  if (input.competitor_ids?.length === 0 || input.sources?.length === 0) return [];
+
+  const predicates: SQL[] = [];
+  if (input.competitor_ids) {
+    predicates.push(inArray(signalsTable.competitor_id, input.competitor_ids));
+  }
+  if (input.sources) {
+    predicates.push(inArray(signalsTable.source, input.sources));
+  }
+  if (input.min_quality !== undefined) {
+    predicates.push(sql`${signalsTable.quality_score} >= ${input.min_quality}`);
+  }
+  if (input.created_after) {
+    predicates.push(sql`${signalsTable.created_at} >= ${input.created_after}`);
+  }
+  if (input.created_before) {
+    predicates.push(sql`${signalsTable.created_at} <= ${input.created_before}`);
+  }
+  if (input.cursor) {
+    predicates.push(
+      sql`(${signalsTable.created_at}, ${signalsTable.id}) < (${input.cursor.created_at}, ${input.cursor.id}::uuid)`
+    );
+  }
+
+  const limit = feedLimit(input.limit);
+  return db
+    .select()
+    .from(signalsTable)
+    .where(and(...predicates))
+    .orderBy(desc(signalsTable.created_at), desc(signalsTable.id))
+    .limit(limit + 1);
+}
+
+export interface AlertFeedQuery {
+  limit: number;
+  competitor_ids?: string[];
+  cursor?: FeedCursor;
+}
+
+export async function listAlertFeed(input: AlertFeedQuery): Promise<Alert[]> {
+  if (input.competitor_ids?.length === 0) return [];
+
+  const predicates: SQL[] = [];
+  if (input.competitor_ids) {
+    predicates.push(inArray(alertsTable.competitor_id, input.competitor_ids));
+  }
+  if (input.cursor) {
+    predicates.push(
+      sql`(${alertsTable.created_at}, ${alertsTable.id}) < (${input.cursor.created_at}, ${input.cursor.id}::uuid)`
+    );
+  }
+
+  const limit = feedLimit(input.limit);
+  return db
+    .select()
+    .from(alertsTable)
+    .where(and(...predicates))
+    .orderBy(desc(alertsTable.created_at), desc(alertsTable.id))
+    .limit(limit + 1);
+}
+
+export type CreateAlertInput = Omit<
+  typeof alertsTable.$inferInsert,
+  "id" | "created_at" | "delivered"
+>;
+
+export async function createAlert(input: CreateAlertInput): Promise<Alert> {
+  const [row] = await db.insert(alertsTable).values(input).returning();
+  return row;
+}
+
 // Matches pricing_diffs_significance_check in schema.ts.
 export type PricingSignificance = "minor" | "moderate" | "critical";
 
@@ -279,7 +407,8 @@ export async function createPricingDiff(input: CreatePricingDiffInput): Promise<
 // getRecentSignalsByCompetitorAndSource above.
 export async function getRecentPricingDiffs(
   competitorId: string,
-  days = 7
+  days = 7,
+  limit = 500
 ): Promise<PricingDiff[]> {
   return db
     .select()
@@ -290,7 +419,8 @@ export async function getRecentPricingDiffs(
         sql`${pricingDiffsTable.detected_at} >= NOW() - INTERVAL '1 day' * ${days}`
       )
     )
-    .orderBy(desc(pricingDiffsTable.detected_at));
+    .orderBy(desc(pricingDiffsTable.detected_at))
+    .limit(analysisInputLimit(limit));
 }
 
 // SynthesisAgent's exact query — latest N scores for one competitor, backed
@@ -315,9 +445,26 @@ export type CreateSignalScoreInput = {
   delta_30d?: number | null;
 };
 
-// SynthesisAgent's write — one Signal Score row per daily recompute.
+// SynthesisAgent's write — retries replace the same competitor's UTC-day row
+// instead of appending a duplicate score.
 export async function createSignalScore(input: CreateSignalScoreInput): Promise<SignalScore> {
-  const [row] = await db.insert(competitorSignalScoresTable).values(input).returning();
+  const [row] = await db
+    .insert(competitorSignalScoresTable)
+    .values(input)
+    .onConflictDoUpdate({
+      target: [
+        competitorSignalScoresTable.competitor_id,
+        competitorSignalScoresTable.day,
+      ],
+      set: {
+        score: input.score,
+        components: input.components,
+        delta_7d: input.delta_7d ?? null,
+        delta_30d: input.delta_30d ?? null,
+        computed_at: sql`now()`,
+      },
+    })
+    .returning();
   return row;
 }
 
@@ -356,27 +503,18 @@ export async function getCompanyProfile(): Promise<CompanyProfile | null> {
   return row ?? null;
 }
 
-// Select-then-write inside a transaction (same pattern as
-// queues/registry.ts's writeDiscoveryFailure): update the existing row if
-// one exists, insert otherwise. Not high-concurrency (single-tenant,
-// admin-configured), so this is simpler than an ON CONFLICT upsert against
-// a fixed known id.
+// One atomic singleton upsert. Two concurrent profile mutations cannot both
+// observe an empty table and make one request fail on the unique constraint.
 export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<CompanyProfile> {
-  return db.transaction(async (tx) => {
-    const [existing] = await tx.select().from(companyProfileTable).limit(1);
-
-    if (existing) {
-      const [row] = await tx
-        .update(companyProfileTable)
-        .set({ ...input, updated_at: new Date() })
-        .where(eq(companyProfileTable.id, existing.id))
-        .returning();
-      return row;
-    }
-
-    const [row] = await tx.insert(companyProfileTable).values(input).returning();
-    return row;
-  });
+  const [row] = await db
+    .insert(companyProfileTable)
+    .values({ ...input, singleton: true })
+    .onConflictDoUpdate({
+      target: companyProfileTable.singleton,
+      set: { ...input, singleton: true, updated_at: new Date() },
+    })
+    .returning();
+  return row;
 }
 
 // ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
@@ -506,6 +644,27 @@ export async function mergeSignalIntoCluster(
 
 // ── agent_runs ───────────────────────────────────────────────────────────
 
+export type AgentRunTrigger = "scheduled" | "manual" | "backfill";
+
+export async function createAgentRun(input: {
+  competitor_id: string;
+  trigger: AgentRunTrigger;
+  prompt_version_id?: string | null;
+}): Promise<AgentRun> {
+  const [row] = await db
+    .insert(agentRunsTable)
+    .values({
+      competitor_id: input.competitor_id,
+      trigger: input.trigger,
+      ...(input.prompt_version_id === undefined
+        ? {}
+        : { prompt_version_id: input.prompt_version_id }),
+      status: "running",
+    })
+    .returning();
+  return row;
+}
+
 // Closes out the analysis-graph DAG's run record — every node that reaches
 // SynthesisAgent (or fails before it) finishes here, per agent_runs_status_check
 // / agent_runs_outcome_check in schema.ts.
@@ -517,5 +676,76 @@ export async function completeAgentRun(
   await db
     .update(agentRunsTable)
     .set({ status, outcome, completed_at: new Date() })
-    .where(eq(agentRunsTable.id, runId));
+    .where(and(eq(agentRunsTable.id, runId), eq(agentRunsTable.status, "running")));
+}
+
+// A worker timeout is a give-up boundary, not a guarantee that all nested LLM
+// calls stopped. Only a still-running row may transition to failed, so late
+// graph completion cannot be overwritten by an older timeout handler.
+export async function failRunIfRunning(runId: string): Promise<void> {
+  await db
+    .update(agentRunsTable)
+    .set({ status: "failed", completed_at: new Date() })
+    .where(and(eq(agentRunsTable.id, runId), eq(agentRunsTable.status, "running")));
+}
+
+// ── competitor discovery write-back (Part 11) ────────────────────────────
+
+// CompetitorDiscoveryAgent's write-back — the discovery BullMQ worker calls
+// this once discovery finishes: it stamps the five discovered field values
+// (+ discovery_status + discovered_at) onto the competitors row and bulk-inserts
+// one competitor_discovery_log row per attempted field, all in one transaction.
+// The caller merges any skipped field's prior value into `result` first, so
+// writing all five back unconditionally is a no-op for those.
+//
+// This deliberately writes discovery_status = 'failed' WITHOUT going through
+// updateDiscoveryStatus's guard (which throws on 'failed'), because it writes
+// the diagnostic competitor_discovery_log rows in the SAME transaction — the
+// same legitimate-exception rationale as queues/registry.ts's writeDiscoveryFailure.
+export async function finalizeDiscovery(
+  competitorId: string,
+  result: CompetitorDiscoveryResult
+): Promise<void> {
+  // `failed` is terminal (no auto-rediscovery), so only use it when the agent
+  // actually probed and came back with nothing usable. A competitor created
+  // with every field pre-filled produces `logs: []` — that row is fully usable,
+  // not a failure. And a run where every probe missed but a pre-filled value
+  // survived is still usable.
+  const anyValue =
+    result.subreddits.length > 0 ||
+    result.greenhouse_token != null ||
+    result.lever_token != null ||
+    result.pricing_url != null ||
+    result.changelog_rss != null;
+  const discoveryStatus = result.logs.length === 0 || anyValue ? "complete" : "failed";
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(competitorsTable)
+      .set({
+        subreddits: result.subreddits,
+        greenhouse_token: result.greenhouse_token,
+        lever_token: result.lever_token,
+        pricing_url: result.pricing_url,
+        changelog_rss: result.changelog_rss,
+        discovery_status: discoveryStatus,
+        discovered_at: new Date(),
+        updated_at: new Date(),
+      })
+      .where(eq(competitorsTable.id, competitorId));
+
+    // Drizzle's .values([]) throws — skip the insert when nothing was attempted.
+    if (result.logs.length > 0) {
+      await tx.insert(competitorDiscoveryLogTable).values(
+        result.logs.map((l) => ({
+          competitor_id: competitorId,
+          field_name: l.field_name,
+          attempted_urls: l.attempted_urls,
+          discovered_value: l.discovered_value,
+          status: l.status,
+          error_message: l.error_message,
+        }))
+      );
+    }
+  });
 }

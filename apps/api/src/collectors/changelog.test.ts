@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
@@ -31,8 +31,18 @@ vi.mock("../queues/registry", () => ({
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
 }));
 
-const { parseURLMock, capturedParserOptions } = vi.hoisted(() => ({
-  parseURLMock: vi.fn(),
+const { safeFetchMock, assertPublicUrlMock } = vi.hoisted(() => ({
+  safeFetchMock: vi.fn(),
+  assertPublicUrlMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../lib/safe-fetch", () => ({
+  safeFetch: safeFetchMock,
+  assertPublicUrl: assertPublicUrlMock,
+}));
+
+const { parseStringMock, capturedParserOptions } = vi.hoisted(() => ({
+  parseStringMock: vi.fn(),
   // A plain array, not a vi.fn() call log — the Parser is constructed once
   // at module import time (before any test's beforeEach/vi.clearAllMocks
   // runs), so a vi.fn()'s call history would already be wiped by the time
@@ -45,8 +55,8 @@ vi.mock("rss-parser", () => ({
     constructor(options?: unknown) {
       capturedParserOptions.push(options);
     }
-    parseURL(url: string) {
-      return parseURLMock(url);
+    parseString(body: string) {
+      return parseStringMock(body);
     }
   },
 }));
@@ -75,8 +85,6 @@ function feed(items: unknown[]) {
 }
 
 describe("collectors/changelog", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
@@ -87,13 +95,12 @@ describe("collectors/changelog", () => {
       id: "s1",
       ...input,
     }));
-    parseURLMock.mockResolvedValue(feed([]));
-    fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => "<body>fallback</body>" });
-    vi.stubGlobal("fetch", fetchMock);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
+    parseStringMock.mockResolvedValue(feed([]));
+    safeFetchMock.mockResolvedValue({
+      status: 200,
+      text: async () => "<feed />",
+    });
+    assertPublicUrlMock.mockResolvedValue(undefined);
   });
 
   it("short-circuits without hitting the network when the changelog circuit is open", async () => {
@@ -101,19 +108,23 @@ describe("collectors/changelog", () => {
 
     await expect(changelogCollectorProcessor({} as never)).rejects.toThrow();
 
-    expect(parseURLMock).not.toHaveBeenCalled();
+    expect(parseStringMock).not.toHaveBeenCalled();
     expect(listCompetitorsMock).not.toHaveBeenCalled();
   });
 
   it("parses the feed only for active competitors with a changelog_rss set", async () => {
     await changelogCollectorProcessor({} as never);
 
-    expect(parseURLMock).toHaveBeenCalledTimes(1);
-    expect(parseURLMock).toHaveBeenCalledWith(activeCompetitor.changelog_rss);
+    expect(parseStringMock).toHaveBeenCalledTimes(1);
+    expect(safeFetchMock).toHaveBeenCalledWith(
+      activeCompetitor.changelog_rss,
+      expect.objectContaining({ maxBytes: 2_000_000, signal: expect.any(AbortSignal) })
+    );
+    expect(parseStringMock).toHaveBeenCalledWith("<feed />");
   });
 
   it("uses embedded content:encoded as raw_text without fetching the entry", async () => {
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([
         {
           link: "https://acme.example.com/posts/1",
@@ -126,7 +137,7 @@ describe("collectors/changelog", () => {
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
     expect(createSignalMock).toHaveBeenCalledWith(
       expect.objectContaining({
         competitor_id: "c1",
@@ -140,7 +151,7 @@ describe("collectors/changelog", () => {
   });
 
   it("trusts a short content:encoded outright — length never forces a fetch when it's present", async () => {
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([
         {
           link: "https://acme.example.com/posts/short",
@@ -152,7 +163,7 @@ describe("collectors/changelog", () => {
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
     expect(createSignalMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source_url: "https://acme.example.com/posts/short",
@@ -173,7 +184,7 @@ describe("collectors/changelog", () => {
       "Read the full post on our blog";
     expect(truncatedExcerpt.length).toBeGreaterThan(500);
 
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([
         {
           link: "https://acme.example.com/posts/teaser",
@@ -183,17 +194,16 @@ describe("collectors/changelog", () => {
         },
       ])
     );
-    fetchMock.mockResolvedValue({
-      ok: true,
+    safeFetchMock.mockResolvedValue({
       status: 200,
       text: async () => "<html><body><article>" + LONG_TEXT + "</article></body></html>",
     });
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(safeFetchMock).toHaveBeenCalledWith(
       "https://acme.example.com/posts/teaser",
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
+      expect.objectContaining({ maxBytes: 2_000_000, signal: expect.any(AbortSignal) })
     );
     expect(createSignalMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -204,7 +214,7 @@ describe("collectors/changelog", () => {
   });
 
   it("fetches and parses the entry page via Cheerio when only a short summary is embedded", async () => {
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([
         {
           link: "https://acme.example.com/posts/2",
@@ -214,8 +224,7 @@ describe("collectors/changelog", () => {
         },
       ])
     );
-    fetchMock.mockResolvedValue({
-      ok: true,
+    safeFetchMock.mockResolvedValue({
       status: 200,
       text: async () =>
         "<html><body><nav>skip</nav><article>" + LONG_TEXT + "</article></body></html>",
@@ -223,9 +232,9 @@ describe("collectors/changelog", () => {
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(safeFetchMock).toHaveBeenCalledWith(
       "https://acme.example.com/posts/2",
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
+      expect.objectContaining({ maxBytes: 2_000_000, signal: expect.any(AbortSignal) })
     );
     expect(createSignalMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -236,7 +245,23 @@ describe("collectors/changelog", () => {
   });
 
   it("skips a feed entry with no link (can't dedup or fetch it)", async () => {
-    parseURLMock.mockResolvedValue(feed([{ title: "No link", content: LONG_TEXT }]));
+    parseStringMock.mockResolvedValue(feed([{ title: "No link", content: LONG_TEXT }]));
+
+    await changelogCollectorProcessor({} as never);
+
+    expect(createSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a private feed-entry link even when embedded content needs no fetch", async () => {
+    parseStringMock.mockResolvedValue(
+      feed([
+        {
+          link: "http://169.254.169.254/latest/meta-data",
+          "content:encoded": `<p>${LONG_TEXT}</p>`,
+        },
+      ])
+    );
+    assertPublicUrlMock.mockRejectedValueOnce(new Error("non-public"));
 
     await changelogCollectorProcessor({} as never);
 
@@ -245,7 +270,7 @@ describe("collectors/changelog", () => {
 
   it("skips entries older than the watermark without fetching or inserting", async () => {
     getLatestSignalCollectedAtMock.mockResolvedValue(new Date("2026-08-10T00:00:00.000Z"));
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([
         {
           link: "https://acme.example.com/posts/old",
@@ -262,7 +287,7 @@ describe("collectors/changelog", () => {
   });
 
   it("skips a feed entry whose source_url already exists for this competitor+source", async () => {
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([{ link: "https://acme.example.com/posts/dup", content: LONG_TEXT }])
     );
     signalExistsBySourceUrlMock.mockResolvedValue(true);
@@ -281,7 +306,7 @@ describe("collectors/changelog", () => {
     vi.clearAllMocks();
     listCompetitorsMock.mockResolvedValue([activeCompetitor]);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
-    parseURLMock.mockRejectedValue(new Error("feed unreachable"));
+    parseStringMock.mockRejectedValue(new Error("feed unreachable"));
 
     await expect(changelogCollectorProcessor({} as never)).resolves.toBeUndefined();
     expect(recordFailure).toHaveBeenCalledWith("changelog", expect.any(String));
@@ -296,10 +321,13 @@ describe("collectors/changelog", () => {
       changelog_rss: "https://failco.example.com/changelog.rss",
     };
     listCompetitorsMock.mockResolvedValue([failingCompetitor, activeCompetitor]);
-    parseURLMock.mockImplementation(async (url: string) => {
+    safeFetchMock.mockImplementation(async (url: string) => {
       if (url.includes("failco")) throw new Error("feed unreachable");
-      return feed([{ link: "https://acme.example.com/posts/3", content: LONG_TEXT }]);
+      return { status: 200, text: async () => "<feed />" };
     });
+    parseStringMock.mockResolvedValue(
+      feed([{ link: "https://acme.example.com/posts/3", "content:encoded": LONG_TEXT }])
+    );
 
     await changelogCollectorProcessor({} as never);
 
@@ -315,19 +343,19 @@ describe("collectors/changelog", () => {
   });
 
   it("sets a 30s abort timeout when fetching a changelog entry page", async () => {
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([{ link: "https://acme.example.com/posts/x", content: "short excerpt" }])
     );
 
     await changelogCollectorProcessor({} as never);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, options] = fetchMock.mock.calls[0];
+    expect(safeFetchMock).toHaveBeenCalledTimes(2);
+    const [, options] = safeFetchMock.mock.calls[1];
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("keeps processing subsequent feed entries when an earlier one fails", async () => {
-    parseURLMock.mockResolvedValue(
+    parseStringMock.mockResolvedValue(
       feed([
         { link: "https://acme.example.com/posts/bad", "content:encoded": `<p>${LONG_TEXT}</p>` },
         { link: "https://acme.example.com/posts/good", "content:encoded": `<p>${LONG_TEXT}</p>` },
@@ -364,8 +392,11 @@ describe("collectors/changelog", () => {
 
     await changelogCollectorProcessor({} as never);
 
-    expect(parseURLMock).toHaveBeenCalledTimes(1);
-    expect(parseURLMock).toHaveBeenCalledWith(activeCompetitor.changelog_rss);
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+    expect(safeFetchMock).toHaveBeenCalledWith(
+      activeCompetitor.changelog_rss,
+      expect.objectContaining({ maxBytes: 2_000_000 })
+    );
     // Regression guard: a mid-run trip must not force-close a circuit that
     // was just correctly observed open (e.g. tripped by a concurrent run of
     // this same collector) — recordSuccess must not fire on this exit path,
