@@ -18,6 +18,7 @@ import {
   pricingBaselinesTable,
   pricingDiffsTable,
   alertsTable,
+  llmCostsTable,
 } from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
@@ -48,6 +49,23 @@ export type LatencyPercentiles = {
   // NULL, not 0. `number | null` reflects that instead of type-lying.
   p50: number | null;
   p95: number | null;
+};
+
+export type AgentLatencyReportRow = {
+  agent_name: string;
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  mean: number | null;
+  sample_count: number;
+  failed_count: number;
+  run_count: number;
+};
+
+export type CostByCompetitorDayRow = {
+  competitor_id: string | null;
+  day: string;
+  cost_usd: number;
 };
 
 // Matches competitors_discovery_status_check in schema.ts.
@@ -487,6 +505,41 @@ export async function getLatencyPercentiles(days = 7): Promise<LatencyPercentile
     .from(agentLatenciesTable)
     .where(sql`${agentLatenciesTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
     .groupBy(agentLatenciesTable.agent_name);
+}
+
+// Operational report source — one set-based aggregation for every agent.
+// Failure rate excludes skipped samples because a deliberate no-op is neither
+// success nor failure. Percentiles ignore NULL duration_ms by PostgreSQL design.
+export async function getAgentLatencyReport(days = 7): Promise<AgentLatencyReportRow[]> {
+  return db
+    .select({
+      agent_name: agentLatenciesTable.agent_name,
+      p50: sql<number | null>`PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      p95: sql<number | null>`PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      p99: sql<number | null>`PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      mean: sql<number | null>`AVG(${agentLatenciesTable.duration_ms})::float8`,
+      sample_count: sql<number>`COUNT(${agentLatenciesTable.duration_ms})::int`,
+      failed_count: sql<number>`COUNT(*) FILTER (WHERE ${agentLatenciesTable.status} = 'failed')::int`,
+      run_count: sql<number>`COUNT(*) FILTER (WHERE ${agentLatenciesTable.status} IN ('success', 'failed'))::int`,
+    })
+    .from(agentLatenciesTable)
+    .where(sql`${agentLatenciesTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
+    .groupBy(agentLatenciesTable.agent_name);
+}
+
+// LLM cost is stored as NUMERIC for exact accounting. The report converts the
+// six-decimal aggregate to float8 only at this display boundary.
+export async function getCostByCompetitorDay(days = 7): Promise<CostByCompetitorDayRow[]> {
+  const utcDay = sql<string>`DATE_TRUNC('day', ${llmCostsTable.created_at} AT TIME ZONE 'UTC')::date::text`;
+  return db
+    .select({
+      competitor_id: llmCostsTable.competitor_id,
+      day: utcDay,
+      cost_usd: sql<number>`SUM(${llmCostsTable.cost_usd})::float8`,
+    })
+    .from(llmCostsTable)
+    .where(sql`${llmCostsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
+    .groupBy(llmCostsTable.competitor_id, utcDay);
 }
 
 // company_profile is single-row (no natural unique key beyond its own id —

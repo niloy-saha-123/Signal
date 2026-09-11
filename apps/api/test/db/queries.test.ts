@@ -73,6 +73,7 @@ import {
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
+  llmCostsTable,
 } from "@/db/schema";
 import {
   createCompetitor,
@@ -88,6 +89,8 @@ import {
   getLatestSignalScores,
   createSignalScore,
   getLatencyPercentiles,
+  getAgentLatencyReport,
+  getCostByCompetitorDay,
   getCompanyProfile,
   upsertCompanyProfile,
   getLatestSignalCollectedAt,
@@ -834,6 +837,64 @@ describe("db/queries — latency percentiles", () => {
       const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
       expect(intervalCall!.at(-1)).toBe(14);
     });
+  });
+});
+
+describe("db/queries — operational reporting", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ groupBy: groupByMock });
+  });
+
+  it("gets latency distribution and failure counts for every agent in one grouped query", async () => {
+    const rows = [
+      {
+        agent_name: "synthesis",
+        p50: 100,
+        p95: 240,
+        p99: 300,
+        mean: 125.5,
+        sample_count: 5,
+        failed_count: 1,
+        run_count: 5,
+      },
+    ];
+    groupByMock.mockResolvedValue(rows);
+
+    await expect(getAgentLatencyReport(14)).resolves.toEqual(rows);
+
+    expect(fromMock).toHaveBeenCalledWith(agentLatenciesTable);
+    expect(groupByMock).toHaveBeenCalledWith(agentLatenciesTable.agent_name);
+    const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const rawTexts = sqlCalls.map(rawSqlText);
+    expect(rawTexts.some((text) => text.includes("PERCENTILE_CONT(0.99)"))).toBe(true);
+    expect(rawTexts.some((text) => text.includes("AVG("))).toBe(true);
+    expect(rawTexts.some((text) => text.includes("FILTER (WHERE"))).toBe(true);
+    const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+    expect(intervalCall!.at(-1)).toBe(14);
+  });
+
+  it("groups LLM cost by competitor and UTC day in one bounded query", async () => {
+    const rows = [
+      { competitor_id: "c1", day: "2026-09-10", cost_usd: 0.125 },
+    ];
+    groupByMock.mockResolvedValue(rows);
+
+    await expect(getCostByCompetitorDay()).resolves.toEqual(rows);
+
+    expect(fromMock).toHaveBeenCalledWith(llmCostsTable);
+    expect(groupByMock).toHaveBeenCalledWith(
+      llmCostsTable.competitor_id,
+      expect.anything()
+    );
+    const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const rawTexts = sqlCalls.map(rawSqlText);
+    expect(rawTexts.some((text) => text.includes("AT TIME ZONE 'UTC'"))).toBe(true);
+    expect(rawTexts.some((text) => text.includes("SUM("))).toBe(true);
+    const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+    expect(intervalCall!.at(-1)).toBe(7);
   });
 });
 
