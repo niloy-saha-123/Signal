@@ -581,8 +581,18 @@ curl -X POST http://localhost:3000/api/competitors/{id}/analyze
 Backfill historical data:
 
 ```bash
-npm run backfill -- --competitor-id={id} --days=30
+npm run backfill --workspace=apps/api -- \
+  --competitor-id={uuid} \
+  --days=30 \
+  --sources=reddit,hn
 ```
+
+This command validates one active competitor and enqueues bounded historical collection jobs; it
+does not scrape in the CLI process. Reddit uses listing cursors and Hacker News uses Algolia page
+metadata, with a 10-page safety cap per source query. Use `--dry-run=true` to inspect the immutable
+UTC window and stable queue IDs without writing to Redis. Only `reddit` and `hn` are supported
+because the jobs, changelog, and pricing collectors expose current snapshots rather than reliable
+historical feeds. `--days` defaults to 30 and must be between 1 and 365.
 
 Run the full backtesting suite:
 

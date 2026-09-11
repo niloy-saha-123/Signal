@@ -6,9 +6,10 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
+const { listCompetitorsMock, getCompetitorByIdMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
   vi.hoisted(() => ({
     listCompetitorsMock: vi.fn(),
+    getCompetitorByIdMock: vi.fn(),
     getLatestSignalCollectedAtMock: vi.fn(),
     signalExistsBySourceUrlMock: vi.fn(),
     createSignalMock: vi.fn(),
@@ -16,6 +17,7 @@ const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourc
 
 vi.mock("@/db/queries", () => ({
   listCompetitors: listCompetitorsMock,
+  getCompetitorById: getCompetitorByIdMock,
   getLatestSignalCollectedAt: getLatestSignalCollectedAtMock,
   signalExistsBySourceUrl: signalExistsBySourceUrlMock,
   createSignal: createSignalMock,
@@ -36,6 +38,7 @@ import { hnCollectorProcessor, initHnWorker } from "@/collectors/hn";
 
 const activeCompetitor = { id: "c1", name: "Acme", is_active: true };
 const inactiveCompetitor = { id: "c2", name: "Zeta", is_active: false };
+const backfillCompetitorId = "11111111-1111-4111-8111-111111111111";
 
 function algoliaResponse(hits: unknown[]) {
   return {
@@ -52,6 +55,7 @@ describe("collectors/hn", () => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([activeCompetitor, inactiveCompetitor]);
+    getCompetitorByIdMock.mockResolvedValue(activeCompetitor);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
     signalExistsBySourceUrlMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -91,9 +95,9 @@ describe("collectors/hn", () => {
     await hnCollectorProcessor({} as never);
 
     const [url] = fetchMock.mock.calls[0];
-    const match = url.match(/numericFilters=created_at_i>(\d+)/);
-    expect(match).not.toBeNull();
-    const since = Number(match![1]);
+    const filter = new URL(url).searchParams.get("numericFilters");
+    expect(filter).not.toBeNull();
+    const since = Number(filter!.match(/created_at_i>(\d+)/)![1]);
     expect(since).toBeGreaterThanOrEqual(before - 5);
     expect(since).toBeLessThanOrEqual(before + 5);
   });
@@ -105,7 +109,71 @@ describe("collectors/hn", () => {
     await hnCollectorProcessor({} as never);
 
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain(`numericFilters=created_at_i>${Math.floor(lastCollectedAt.getTime() / 1000)}`);
+    expect(new URL(url).searchParams.get("numericFilters")).toBe(
+      `created_at_i>${Math.floor(lastCollectedAt.getTime() / 1000)}`
+    );
+  });
+
+  it("scopes a backfill to one active competitor and uses both requested time bounds", async () => {
+    const since = "2026-08-12T15:30:00.000Z";
+    const until = "2026-09-11T15:30:00.000Z";
+
+    await hnCollectorProcessor({
+      data: { backfill: { competitor_id: backfillCompetitorId, since, until } },
+    } as never);
+
+    expect(getCompetitorByIdMock).toHaveBeenCalledWith(backfillCompetitorId);
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getLatestSignalCollectedAtMock).not.toHaveBeenCalled();
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/search_by_date?");
+    expect(decodeURIComponent(url)).toContain(
+      `numericFilters=created_at_i>${Math.floor(Date.parse(since) / 1000)},created_at_i<=${Math.floor(Date.parse(until) / 1000)}`
+    );
+  });
+
+  it("paginates bounded HN backfill results using page and nbPages", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const page = Number(new URL(url).searchParams.get("page") ?? "0");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          hits: [
+            {
+              objectID: `${page}`,
+              created_at_i: Math.floor(Date.parse("2026-09-01T00:00:00.000Z") / 1000),
+              comment_text: `page ${page}`,
+            },
+          ],
+          page,
+          nbPages: 2,
+        }),
+      };
+    });
+
+    await hnCollectorProcessor({
+      data: {
+        backfill: {
+          competitor_id: backfillCompetitorId,
+          since: "2026-08-12T15:30:00.000Z",
+          until: "2026-09-11T15:30:00.000Z",
+        },
+      },
+    } as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toContain("page=1");
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed backfill job data before database or network work", async () => {
+    await expect(
+      hnCollectorProcessor({ data: { backfill: { competitor_id: "bad" } } } as never)
+    ).rejects.toThrow();
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getCompetitorByIdMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("inserts a new signal per hit, deduped by source_url, and enqueues entity extraction", async () => {
@@ -168,6 +236,25 @@ describe("collectors/hn", () => {
     // resolves instead of rejecting).
     await expect(hnCollectorProcessor({} as never)).resolves.toBeUndefined();
     expect(recordFailure).toHaveBeenCalledWith("hn", expect.any(String));
+    expect(recordSuccess).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("rejects a scoped backfill when its competitor fetch fails so BullMQ can retry", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+
+    await expect(
+      hnCollectorProcessor({
+        data: {
+          backfill: {
+            competitor_id: backfillCompetitorId,
+            since: "2026-08-12T15:30:00.000Z",
+            until: "2026-09-11T15:30:00.000Z",
+          },
+        },
+      } as never)
+    ).rejects.toThrow("Algolia HN API returned 500");
+
+    expect(recordFailure).toHaveBeenCalledTimes(1);
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 

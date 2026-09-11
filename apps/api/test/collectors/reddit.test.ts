@@ -6,9 +6,10 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
+const { listCompetitorsMock, getCompetitorByIdMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
   vi.hoisted(() => ({
     listCompetitorsMock: vi.fn(),
+    getCompetitorByIdMock: vi.fn(),
     getLatestSignalCollectedAtMock: vi.fn(),
     signalExistsBySourceUrlMock: vi.fn(),
     createSignalMock: vi.fn(),
@@ -16,6 +17,7 @@ const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourc
 
 vi.mock("@/db/queries", () => ({
   listCompetitors: listCompetitorsMock,
+  getCompetitorById: getCompetitorByIdMock,
   getLatestSignalCollectedAt: getLatestSignalCollectedAtMock,
   signalExistsBySourceUrl: signalExistsBySourceUrlMock,
   createSignal: createSignalMock,
@@ -37,16 +39,19 @@ import { redditCollectorProcessor, initRedditWorker } from "@/collectors/reddit"
 const activeCompetitor = { id: "c1", name: "Acme", is_active: true, subreddits: ["acme"] };
 const noSubredditsCompetitor = { id: "c2", name: "NoSubs", is_active: true, subreddits: [] };
 const inactiveCompetitor = { id: "c3", name: "Zeta", is_active: false, subreddits: ["zeta"] };
+const backfillCompetitorId = "11111111-1111-4111-8111-111111111111";
 
 function tokenResponse(token = "test-token") {
   return { ok: true, status: 200, json: async () => ({ access_token: token }) };
 }
 
-function listingResponse(posts: unknown[]) {
+function listingResponse(posts: unknown[], after: string | null = null) {
   return {
     ok: true,
     status: 200,
-    json: async () => ({ data: { children: posts.map((data) => ({ kind: "t3", data })) } }),
+    json: async () => ({
+      data: { children: posts.map((data) => ({ kind: "t3", data })), after },
+    }),
   };
 }
 
@@ -57,6 +62,7 @@ describe("collectors/reddit", () => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([activeCompetitor, inactiveCompetitor]);
+    getCompetitorByIdMock.mockResolvedValue(activeCompetitor);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
     signalExistsBySourceUrlMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -179,6 +185,88 @@ describe("collectors/reddit", () => {
     );
   });
 
+  it("scopes a backfill to one active competitor and ignores the scheduled watermark", async () => {
+    getLatestSignalCollectedAtMock.mockResolvedValue(new Date("2026-09-10T00:00:00.000Z"));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return listingResponse([
+        {
+          id: "historical",
+          name: "t3_historical",
+          permalink: "/r/acme/comments/historical/post/",
+          title: "Historical Acme post",
+          selftext: "historical body",
+          created_utc: Math.floor(Date.parse("2026-09-01T00:00:00.000Z") / 1000),
+        },
+      ]);
+    });
+
+    await redditCollectorProcessor({
+      data: {
+        backfill: {
+          competitor_id: backfillCompetitorId,
+          since: "2026-08-12T15:30:00.000Z",
+          until: "2026-09-11T15:30:00.000Z",
+        },
+      },
+    } as never);
+
+    expect(getCompetitorByIdMock).toHaveBeenCalledWith(backfillCompetitorId);
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getLatestSignalCollectedAtMock).not.toHaveBeenCalled();
+    expect(createSignalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source_url: expect.stringContaining("historical") })
+    );
+  });
+
+  it("paginates Reddit backfill with official after cursors and stops when exhausted", async () => {
+    let page = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      page += 1;
+      return listingResponse(
+        [
+          {
+            id: `${page}`,
+            name: `t3_${page}`,
+            permalink: `/r/acme/comments/${page}/post/`,
+            title: `Page ${page}`,
+            selftext: `page ${page}`,
+            created_utc: Math.floor(Date.parse("2026-09-01T00:00:00.000Z") / 1000),
+          },
+        ],
+        page === 1 ? "t3_next" : null
+      );
+    });
+
+    await redditCollectorProcessor({
+      data: {
+        backfill: {
+          competitor_id: backfillCompetitorId,
+          since: "2026-08-12T15:30:00.000Z",
+          until: "2026-09-11T15:30:00.000Z",
+        },
+      },
+    } as never);
+
+    const listingCalls = fetchMock.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes("oauth.reddit.com")
+    );
+    expect(listingCalls).toHaveLength(2);
+    expect(listingCalls[0][0]).toContain("limit=100");
+    expect(listingCalls[1][0]).toContain("after=t3_next");
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed backfill job data before OAuth or database work", async () => {
+    await expect(
+      redditCollectorProcessor({ data: { backfill: { competitor_id: "bad" } } } as never)
+    ).rejects.toThrow();
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getCompetitorByIdMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("inserts a new signal per post, deduped by source_url, and enqueues entity extraction", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes("access_token")) return tokenResponse();
@@ -272,6 +360,28 @@ describe("collectors/reddit", () => {
 
     await expect(redditCollectorProcessor({} as never)).resolves.toBeUndefined();
     expect(recordFailure).toHaveBeenCalledWith("reddit", expect.any(String));
+    expect(recordSuccess).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("rejects a scoped backfill when its subreddit fetch fails so BullMQ can retry", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return { ok: false, status: 500, json: async () => ({}) };
+    });
+
+    await expect(
+      redditCollectorProcessor({
+        data: {
+          backfill: {
+            competitor_id: backfillCompetitorId,
+            since: "2026-08-12T15:30:00.000Z",
+            until: "2026-09-11T15:30:00.000Z",
+          },
+        },
+      } as never)
+    ).rejects.toThrow("Failed to collect 1 subreddit");
+
+    expect(recordFailure).toHaveBeenCalledTimes(1);
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 
