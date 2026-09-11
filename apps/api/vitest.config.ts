@@ -1,11 +1,15 @@
 import { defineConfig, configDefaults } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": new URL("./src", import.meta.url).pathname,
+    },
+  },
   test: {
     environment: "node",
-    // `npm run build` compiles src/**/*.test.ts into dist/ too (they have to stay in
-    // tsconfig's include so typecheck covers them). Without this, a test run after a
-    // build collects the stale compiled copies and fails them all on `require`.
+    // Keep old compiled tests out of discovery when a developer switches to
+    // this branch with a dist/ directory produced before tests moved out of src/.
     exclude: [...configDefaults.exclude, "dist/**"],
   },
 });

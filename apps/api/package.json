@@ -6,7 +6,7 @@
     "dev": "tsx watch src/api/index.ts",
     "start": "node dist/api/index.js",
     "worker": "tsx watch worker.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "backfill": "tsx scripts/backfill.ts",

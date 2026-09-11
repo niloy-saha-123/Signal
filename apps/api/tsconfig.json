@@ -4,12 +4,16 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*", "worker.ts", "scripts/**/*"],
+  "include": ["src/**/*", "test/**/*", "worker.ts", "scripts/**/*"],
   "exclude": ["node_modules", "dist"]
 }
