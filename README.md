@@ -272,7 +272,10 @@ sequenceDiagram
 
 ### Backtesting
 
-Predictions validated against historical ground truth on five real companies with documented public events.
+The following values are the project's published reference benchmark, not a result reproduced from
+fixtures committed to this repository. Part 14 supplies the validation and reporting harness; a
+result becomes locally reproducible only when an operator supplies the independently verified case
+file used for that run. Generated reports identify that file by SHA-256 and record the Git commit.
 
 | Event | Lead time | Confidence | Correct |
 |---|---|---|---|
@@ -282,7 +285,8 @@ Predictions validated against historical ground truth on five real companies wit
 | Loom pre-acquisition signals (Jan 2023) | 0 days | 51% | ❌ |
 | Webflow SMB→Enterprise pivot (Q3 2023) | 28 days | 79% | ✅ |
 
-4/5 correct. Mean lead time on correct predictions: 30.75 days. False positive rate on five control competitors over the same period: 11%.
+Published reference: 4/5 correct, 30.75-day mean lead time on correct predictions, and 11% false
+positive rate on five controls. These numbers are not asserted as a current measured result.
 
 Confidence calibration — grouped predictions by decile, compared to actual accuracy:
 
@@ -292,7 +296,7 @@ Confidence calibration — grouped predictions by decile, compared to actual acc
 | 70–80% | 73% |
 | 80–90% | 81% |
 
-Confidence scores are well-calibrated. Reproduce with `npm run backtest:full`.
+To measure the current captured predictions, run `npm run backtest:full -- --file=<verified.json>`.
 
 ### Prompt versioning
 
@@ -310,7 +314,8 @@ Version 7 vs Version 6: accuracy improved from 0.74 to 0.79, p = 0.031. Promoted
 
 ### Deduplication calibration
 
-Threshold calibrated on 200 labeled signal pairs:
+The table below is the published reference calibration. The labeled 200-pair source dataset is not
+committed, so the current implementation does not present these values as locally reproduced.
 
 | Threshold | Precision | Recall | F1 |
 |---|---|---|---|
@@ -318,7 +323,8 @@ Threshold calibrated on 200 labeled signal pairs:
 | **0.88** | **0.89** | **0.79** | **0.84** |
 | 0.91 | 0.94 | 0.71 | 0.81 |
 
-0.88 chosen — maximizes precision. A false merge degrades downstream analysis more than a missed merge.
+The production threshold remains 0.88. `npm run dedup-calibration -- --file=<verified.json>` reports
+metrics for supplied human labels but never edits the runtime threshold.
 
 ### RAG Quality — 50 golden Q&A pairs
 
@@ -396,7 +402,11 @@ Measured values will replace targets as the system accumulates data in `agent_la
 
 **PatternDetector separates SQL from LLM.** Volume counts and quality-weighted metrics run in PostgreSQL. Only the interpretation step goes to GPT-4.1. Deterministic computation stays deterministic.
 
-**Deduplication threshold is empirically derived.** 0.88 was chosen from a precision/recall analysis at five threshold values on 200 labeled signal pairs — not by intuition. The calibration script is in `scripts/dedup-calibration.ts` and reproducible.
+**Deduplication calibration is explicit and non-mutating.** The runtime threshold is 0.88. The
+calibration script scores explicit thresholds against a supplied human-labeled pair file, records
+the fixture digest, and recommends a value without silently editing production behavior. The
+README's historical 200-pair figures remain a published reference until their source fixture is
+provided and independently reproduced.
 
 **Prompt changes require statistical evidence.** A two-proportion z-test at p < 0.05 against a labeled test suite is required before promoting any prompt version. Version history and evaluation results live in PostgreSQL and LangSmith. The process is in `scripts/promote.ts`.
 
@@ -597,9 +607,30 @@ historical feeds. `--days` defaults to 30 and must be between 1 and 365.
 Run the full backtesting suite:
 
 ```bash
-npm run backtest:full
+npm run backtest:full -- --file=/path/to/verified-events.json
 # Outputs: backtest-results-{timestamp}.json
 ```
+
+The input must contain human-verified historical cases, evidence captured no later than each
+case's observation cutoff, and a captured prediction with provenance. The command rejects
+post-event evidence and unsupported prediction citations, records the fixture SHA-256 and current
+Git commit, then reports the confusion matrix, false-positive rate, confidence calibration, lead
+time, and per-case results. It will not overwrite an existing artifact. See
+`apps/api/scripts/fixtures/backtest.example.json` for structure only; its placeholder content is
+not a benchmark dataset.
+
+Calibrate the semantic-deduplication threshold from human-labeled signal pairs:
+
+```bash
+npm run dedup-calibration -- \
+  --file=/path/to/verified-signal-pairs.json \
+  --thresholds=0.85,0.88,0.91
+```
+
+Calibration is advisory: it selects the highest-F1 threshold (then higher precision, then the
+stricter threshold) but never changes the production `0.88` constant. The
+`dedup-calibration.example.json` file beside the backtest example is structural placeholder data,
+not a verified calibration set.
 
 Run prompt regression tests:
 
