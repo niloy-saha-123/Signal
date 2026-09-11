@@ -174,7 +174,9 @@ Do not push, open a PR, or apply a live database migration without the user's ex
 - Task 5: executable API, schedules, worker composition, shutdown — `c23e14e`
 - Task 6: whole-branch fix/review/docs wave — see the review artifact and later commits
 
-Migration `apps/api/drizzle/0004_nervous_kate_bishop.sql` was generated and
-committed but deliberately **not applied** to Supabase. The branch may be reviewed
-as a PR; deployment must sequence the reviewed migration before the new worker
-writes daily scores.
+Migration `apps/api/drizzle/0004_nervous_kate_bishop.sql` was applied to the
+connected `signal` Supabase project on 2026-09-10 after explicit authorization and
+recorded there as migration version `20260910235923`. Post-apply catalog checks
+confirmed the stored generated UTC `day` expression and unique
+`(competitor_id, day)` index; the table contained no rows requiring deduplication.
+The database prerequisite for the new analysis worker is therefore satisfied.

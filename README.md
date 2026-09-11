@@ -643,6 +643,13 @@ CIRCUIT_TIMEOUT_MS=1800000
 
 `DATABASE_URL` is a Supabase PostgreSQL connection string.
 
+The connected production project currently tracks applied SQL in Supabase's
+`supabase_migrations.schema_migrations` ledger, not Drizzle's separate migration
+table. Generate migration files with Drizzle, review them, and apply them through
+the established Supabase migration workflow. Do not run `drizzle-kit migrate`
+against that already-provisioned project unless its Drizzle history has first been
+explicitly baselined to the migrations already applied.
+
 ---
 
 ## Roadmap
