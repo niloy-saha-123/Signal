@@ -43,6 +43,13 @@
       "when": 1789277078878,
       "tag": "0005_jittery_ink",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789278298762,
+      "tag": "0006_spooky_dakota_north",
+      "breakpoints": true
     }
   ]
 }

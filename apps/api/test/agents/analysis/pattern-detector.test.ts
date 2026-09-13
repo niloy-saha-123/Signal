@@ -172,7 +172,7 @@ describe("agents/analysis/pattern-detector", () => {
       return invokeResult();
     });
     trackLatencyMock.mockImplementation(
-      async (_a: string, _c: string, _r: string, fn: () => unknown) => {
+      async (_a: string, _context: unknown, fn: () => unknown) => {
         callOrder.push("trackLatency:start");
         const result = await fn();
         callOrder.push("trackLatency:end");
@@ -252,7 +252,13 @@ describe("agents/analysis/pattern-detector", () => {
 
     await patternDetectorNode(state);
 
-    expect(trackCostMock).toHaveBeenCalledWith("pattern_detector", "gpt-4.1", 80, 20, "run1", "c1");
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "pattern_detector",
+      "gpt-4.1",
+      80,
+      20,
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } }
+    );
   });
 
   it("short-circuits to a real stable-trend result (no LLM call) when there's no volume and no retrieved history", async () => {

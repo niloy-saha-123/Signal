@@ -74,7 +74,11 @@ export async function intentAnalyzerNode(
       includeRaw: true,
     });
 
-    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+    const telemetryContext = {
+      competitorId: state.competitor_id,
+      identity: { kind: "run" as const, runId: state.run_id },
+    };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       structuredModel.invoke([
         ["system", systemPrompt],
         ["human", buildPostingsText(postings)],
@@ -88,8 +92,7 @@ export async function intentAnalyzerNode(
       model,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      telemetryContext
     );
 
     // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation

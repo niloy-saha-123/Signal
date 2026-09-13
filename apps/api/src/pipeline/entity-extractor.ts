@@ -81,7 +81,11 @@ async function extractEntities(signal: Signal, runId: string): Promise<void> {
     includeRaw: true,
   });
 
-  const { raw, parsed } = await trackLatency(AGENT_NAME, signal.competitor_id, runId, () =>
+  const telemetryContext = {
+    competitorId: signal.competitor_id,
+    identity: { kind: "job" as const, jobId: runId },
+  };
+  const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
     structuredModel.invoke([
       ["system", promptText],
       ["human", signal.raw_text],
@@ -95,8 +99,7 @@ async function extractEntities(signal: Signal, runId: string): Promise<void> {
     model,
     usage?.input_tokens ?? 0,
     usage?.output_tokens ?? 0,
-    runId,
-    signal.competitor_id
+    telemetryContext
   );
 
   // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation

@@ -274,8 +274,10 @@ async function generateGroundedAnswer(
     modelAlias,
     usage?.input_tokens ?? 0,
     usage?.output_tokens ?? 0,
-    runId,
-    primaryCompetitorId
+    {
+      competitorId: primaryCompetitorId,
+      identity: { kind: "run", runId },
+    }
   );
 
   const draft = messageText(message);
@@ -297,7 +299,10 @@ export async function runChatAgent(
     ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
     : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
 
-  const work = trackLatency("chat_agent", primaryCompetitorId, parsed.run_id, async () => {
+  const work = trackLatency("chat_agent", {
+    competitorId: primaryCompetitorId,
+    identity: { kind: "run", runId: parsed.run_id },
+  }, async () => {
     signal.throwIfAborted();
     // Prompt and company context influence the answer, so they are part of
     // the cache identity. A profile or prompt update must never reuse an

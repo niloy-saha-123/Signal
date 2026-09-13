@@ -251,8 +251,7 @@ describe("enforceCitations", () => {
       "gpt-4o-mini",
       123,
       45,
-      undefined,
-      undefined
+      { competitorId: null, identity: { kind: "unattributed" } }
     );
   });
 
@@ -266,8 +265,7 @@ describe("enforceCitations", () => {
       "gpt-4o-mini",
       0,
       0,
-      undefined,
-      undefined
+      { competitorId: null, identity: { kind: "unattributed" } }
     );
   });
 

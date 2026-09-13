@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const { loggerErrorMock } = vi.hoisted(() => ({ loggerErrorMock: vi.fn() }));
+
 vi.mock("@/db/client", () => ({
   db: {
     insert: vi.fn().mockReturnValue({
@@ -8,6 +10,7 @@ vi.mock("@/db/client", () => ({
     select: vi.fn(),
   },
 }));
+vi.mock("@/lib/logger", () => ({ logger: { error: loggerErrorMock } }));
 
 import { db } from "@/db/client";
 import { trackLatency, computePercentiles } from "@/lib/latency-tracker";
@@ -21,12 +24,19 @@ describe("trackLatency", () => {
     const fn = vi.fn().mockResolvedValue("agent-output");
     const result = await trackLatency(
       "intent_analyzer",
-      "550e8400-e29b-41d4-a716-446655440000",
-      "550e8400-e29b-41d4-a716-446655440001",
+      {
+        competitorId: "550e8400-e29b-41d4-a716-446655440000",
+        identity: { kind: "run", runId: "550e8400-e29b-41d4-a716-446655440001" },
+      },
       fn
     );
     expect(result).toBe("agent-output");
-    expect(db.insert).toHaveBeenCalled();
+    expect(JSON.stringify(loggerErrorMock.mock.calls)).not.toContain("db down");
+    const values = (db.insert as ReturnType<typeof vi.fn>).mock.results[0]?.value.values;
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({
+      run_id: "550e8400-e29b-41d4-a716-446655440001",
+      job_id: null,
+    }));
   });
 
   it("records a failed row and re-throws when fn rejects", async () => {
@@ -34,12 +44,19 @@ describe("trackLatency", () => {
     await expect(
       trackLatency(
         "synthesis",
-        "550e8400-e29b-41d4-a716-446655440000",
-        "550e8400-e29b-41d4-a716-446655440001",
+        {
+          competitorId: "550e8400-e29b-41d4-a716-446655440000",
+          identity: { kind: "job", jobId: "analysis-job-42" },
+        },
         fn
       )
     ).rejects.toThrow("agent crashed");
-    expect(db.insert).toHaveBeenCalled();
+    const values = (db.insert as ReturnType<typeof vi.fn>).mock.results[0]?.value.values;
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({
+      run_id: null,
+      job_id: "analysis-job-42",
+      status: "failed",
+    }));
   });
 
   it("still returns fn's result when the success-path insert throws", async () => {
@@ -49,8 +66,10 @@ describe("trackLatency", () => {
     const fn = vi.fn().mockResolvedValue("agent-output");
     const result = await trackLatency(
       "intent_analyzer",
-      "550e8400-e29b-41d4-a716-446655440000",
-      "550e8400-e29b-41d4-a716-446655440001",
+      {
+        competitorId: "550e8400-e29b-41d4-a716-446655440000",
+        identity: { kind: "run", runId: "550e8400-e29b-41d4-a716-446655440001" },
+      },
       fn
     );
     expect(result).toBe("agent-output");
@@ -64,11 +83,35 @@ describe("trackLatency", () => {
     await expect(
       trackLatency(
         "synthesis",
-        "550e8400-e29b-41d4-a716-446655440000",
-        "550e8400-e29b-41d4-a716-446655440001",
+        {
+          competitorId: "550e8400-e29b-41d4-a716-446655440000",
+          identity: { kind: "job", jobId: "analysis-job-42" },
+        },
         fn
       )
     ).rejects.toThrow("agent crashed");
+  });
+
+  it("rejects a missing or blank latency identity before running work", async () => {
+    const fn = vi.fn().mockResolvedValue("must-not-run");
+    await expect(
+      trackLatency(
+        "synthesis",
+        { competitorId: "550e8400-e29b-41d4-a716-446655440000", identity: undefined } as never,
+        fn
+      )
+    ).rejects.toThrow(/telemetry identity/i);
+    await expect(
+      trackLatency(
+        "synthesis",
+        {
+          competitorId: "550e8400-e29b-41d4-a716-446655440000",
+          identity: { kind: "job", jobId: "   " },
+        },
+        fn
+      )
+    ).rejects.toThrow(/telemetry identity/i);
+    expect(fn).not.toHaveBeenCalled();
   });
 });
 

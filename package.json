@@ -20,7 +20,7 @@
     "dedup-calibration": "npm run dedup-calibration -w @signal/api"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2"

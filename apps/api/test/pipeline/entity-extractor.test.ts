@@ -66,7 +66,7 @@ vi.mock("@/llm/cost-tracker", () => ({
 const { trackLatencyMock } = vi.hoisted(() => ({
   // Mirrors the real trackLatency's pass-through contract (call fn, return its
   // result) so tests exercise the actual invoke() call through the wrapper.
-  trackLatencyMock: vi.fn((_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) =>
+  trackLatencyMock: vi.fn((_agentName: string, _context: unknown, fn: () => unknown) =>
     fn()
   ),
 }));
@@ -136,7 +136,7 @@ describe("pipeline/entity-extractor", () => {
       return "added";
     });
     invokeMock.mockResolvedValue(invokeResult());
-    trackLatencyMock.mockImplementation((_a: string, _c: string, _r: string, fn: () => unknown) => fn());
+    trackLatencyMock.mockImplementation((_a: string, _context: unknown, fn: () => unknown) => fn());
   });
 
   it("returns early without calling the LLM when the signal is not found", async () => {
@@ -204,8 +204,7 @@ describe("pipeline/entity-extractor", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "entity_extractor",
-      "c1",
-      "job1",
+      { competitorId: "c1", identity: { kind: "job", jobId: "job1" } },
       expect.any(Function)
     );
   });
@@ -215,8 +214,7 @@ describe("pipeline/entity-extractor", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "entity_extractor",
-      "c1",
-      "s1",
+      { competitorId: "c1", identity: { kind: "job", jobId: "s1" } },
       expect.any(Function)
     );
   });
@@ -239,8 +237,7 @@ describe("pipeline/entity-extractor", () => {
       "gpt-4o-mini",
       100,
       20,
-      "job1",
-      "c1"
+      { competitorId: "c1", identity: { kind: "job", jobId: "job1" } }
     );
   });
 
@@ -249,7 +246,13 @@ describe("pipeline/entity-extractor", () => {
 
     await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
 
-    expect(trackCostMock).toHaveBeenCalledWith("entity_extractor", "gpt-4o-mini", 0, 0, "job1", "c1");
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "entity_extractor",
+      "gpt-4o-mini",
+      0,
+      0,
+      { competitorId: "c1", identity: { kind: "job", jobId: "job1" } }
+    );
   });
 
   it("enqueues pipeline-quality-scoring after a successful extraction", async () => {

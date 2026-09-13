@@ -60,7 +60,7 @@ const { trackLatencyMock } = vi.hoisted(() => ({
   // Mirrors the real trackLatency's pass-through contract (call fn, return its
   // result) so tests exercise the actual invoke() call through the wrapper.
   trackLatencyMock: vi.fn(
-    (_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    (_agentName: string, _context: unknown, fn: () => unknown) => fn()
   ),
 }));
 
@@ -150,7 +150,7 @@ describe("agents/analysis/sentiment-clusterer", () => {
     selectModelMock.mockImplementation((preferredModel: string) => Promise.resolve(preferredModel));
     invokeMock.mockResolvedValue(invokeResult());
     trackLatencyMock.mockImplementation(
-      (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
+      (_a: string, _context: unknown, fn: () => unknown) => fn()
     );
   });
 
@@ -213,8 +213,7 @@ describe("agents/analysis/sentiment-clusterer", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "sentiment_clusterer",
-      "c1",
-      "run1",
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } },
       expect.any(Function)
     );
   });
@@ -231,8 +230,7 @@ describe("agents/analysis/sentiment-clusterer", () => {
       "claude-haiku",
       200,
       40,
-      "run1",
-      "c1"
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } }
     );
   });
 

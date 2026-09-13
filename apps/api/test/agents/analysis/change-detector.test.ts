@@ -55,7 +55,7 @@ const { trackLatencyMock } = vi.hoisted(() => ({
   // Mirrors the real trackLatency's pass-through contract (call fn, return its
   // result) so tests exercise the actual invoke() call through the wrapper.
   trackLatencyMock: vi.fn(
-    (_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    (_agentName: string, _context: unknown, fn: () => unknown) => fn()
   ),
 }));
 
@@ -134,7 +134,7 @@ describe("agents/analysis/change-detector", () => {
     selectModelMock.mockImplementation((preferredModel: string) => Promise.resolve(preferredModel));
     invokeMock.mockResolvedValue(invokeResult());
     trackLatencyMock.mockImplementation(
-      (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
+      (_a: string, _context: unknown, fn: () => unknown) => fn()
     );
   });
 
@@ -262,7 +262,11 @@ describe("agents/analysis/change-detector", () => {
   it("wraps the LLM invocation in trackLatency with change_detector/competitor_id/run_id", async () => {
     await changeDetectorNode(state);
 
-    expect(trackLatencyMock).toHaveBeenCalledWith("change_detector", "c1", "run1", expect.any(Function));
+    expect(trackLatencyMock).toHaveBeenCalledWith(
+      "change_detector",
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } },
+      expect.any(Function)
+    );
   });
 
   it("tracks cost using the real token counts and model name", async () => {
@@ -272,7 +276,13 @@ describe("agents/analysis/change-detector", () => {
 
     await changeDetectorNode(state);
 
-    expect(trackCostMock).toHaveBeenCalledWith("change_detector", "gpt-4o-mini", 200, 40, "run1", "c1");
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "change_detector",
+      "gpt-4o-mini",
+      200,
+      40,
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } }
+    );
   });
 
   it("degrades to {} when structured output fails schema validation (parsed is null), not rethrown", async () => {

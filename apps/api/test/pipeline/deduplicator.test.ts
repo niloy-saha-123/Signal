@@ -25,7 +25,7 @@ const { trackLatencyMock } = vi.hoisted(() => ({
   // Mirrors the real trackLatency's pass-through contract (same as
   // entity-extractor.test.ts) so the wrapped I/O still runs.
   trackLatencyMock: vi.fn(
-    (_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    (_agentName: string, _context: unknown, fn: () => unknown) => fn()
   ),
 }));
 
@@ -108,7 +108,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
     pineconeUpsertMock.mockResolvedValue(undefined);
     pineconeQueryMock.mockResolvedValue([]);
     trackLatencyMock.mockImplementation(
-      (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
+      (_a: string, _context: unknown, fn: () => unknown) => fn()
     );
     createClusterForSignalPairMock.mockResolvedValue({
       id: "cluster1",
@@ -339,8 +339,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "deduplicator",
-      "c1",
-      "job1",
+      { competitorId: "c1", identity: { kind: "job", jobId: "job1" } },
       expect.any(Function)
     );
   });
@@ -350,8 +349,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "deduplicator",
-      "c1",
-      "s1",
+      { competitorId: "c1", identity: { kind: "job", jobId: "s1" } },
       expect.any(Function)
     );
   });

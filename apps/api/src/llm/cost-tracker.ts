@@ -4,6 +4,7 @@ import type { AgentName } from "@signal/shared";
 import { db } from "../db/client";
 import { llmCostsTable } from "../db/schema";
 import { logger } from "../lib/logger";
+import { telemetryIdentityColumns, type TelemetryContext } from "../lib/telemetry-context";
 
 const PRICING_PER_MILLION_TOKENS: Record<string, { input: number; output: number }> = {
   "gpt-4.1": { input: 2.0, output: 8.0 },
@@ -17,8 +18,7 @@ export async function trackCost(
   model: string,
   inputTokens: number,
   outputTokens: number,
-  runId?: string,
-  competitorId?: string
+  context: TelemetryContext = { competitorId: null, identity: { kind: "unattributed" } }
 ): Promise<number> {
   const pricing = PRICING_PER_MILLION_TOKENS[model];
   if (!pricing) {
@@ -28,20 +28,26 @@ export async function trackCost(
   const cost =
     (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
 
+  const identity = telemetryIdentityColumns(context.identity);
+
   try {
     await db.insert(llmCostsTable).values({
-      run_id: runId ?? null,
-      competitor_id: competitorId ?? null,
+      ...identity,
+      competitor_id: context.competitorId,
       agent_name: agentName,
       model,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       cost_usd: cost.toFixed(6),
     });
-  } catch (error) {
+  } catch {
     // Telemetry must never mask the real LLM call result — log and swallow,
     // same pattern as trackLatency (lib/latency-tracker.ts).
-    logger.error("Failed to record llm_costs row", { error, agentName, model });
+    logger.error("Failed to record llm_costs row", {
+      agentName,
+      model,
+      identityKind: context.identity.kind,
+    });
   }
 
   return cost;

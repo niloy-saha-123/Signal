@@ -81,7 +81,7 @@ vi.mock("@/retrieval", () => ({
 }));
 
 vi.mock("@/lib/latency-tracker", () => ({
-  trackLatency: vi.fn((_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) =>
+  trackLatency: vi.fn((_agentName: string, _context: unknown, fn: () => unknown) =>
     fn()
   ),
 }));

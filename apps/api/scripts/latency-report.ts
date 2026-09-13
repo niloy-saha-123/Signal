@@ -1,4 +1,5 @@
-// Queries agent_latencies and llm_costs and emits a bounded operational report.
+// Queries run- and job-attributed agent_latencies plus all llm_costs (including
+// legitimate unattributed standalone calls) and emits the same aggregate report.
 import { z } from "zod";
 import {
   getAgentLatencyReport,

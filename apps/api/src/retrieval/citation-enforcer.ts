@@ -106,8 +106,7 @@ async function extractClaims(response: string): Promise<string[]> {
     model,
     usage?.input_tokens ?? 0,
     usage?.output_tokens ?? 0,
-    undefined,
-    undefined
+    { competitorId: null, identity: { kind: "unattributed" } }
   );
 
   // includeRaw can return parsed:null; validate the runtime boundary regardless of SDK types.

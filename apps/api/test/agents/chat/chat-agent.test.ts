@@ -17,7 +17,7 @@ vi.mock("@/retrieval", () => ({
 
 const { trackLatencyMock } = vi.hoisted(() => ({
   trackLatencyMock: vi.fn(
-    (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    (_agent: string, _context: unknown, fn: () => unknown) => fn()
   ),
 }));
 
@@ -130,7 +130,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
       usage_metadata: { input_tokens: 20, output_tokens: 5 },
     });
     trackLatencyMock.mockImplementation(
-      (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+      (_agent: string, _context: unknown, fn: () => unknown) => fn()
     );
   });
 
@@ -147,8 +147,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     ]);
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "chat_agent",
-      COMPETITOR_2,
-      RUN_ID,
+      { competitorId: COMPETITOR_2, identity: { kind: "run", runId: RUN_ID } },
       expect.any(Function)
     );
   });
@@ -262,7 +261,7 @@ describe("agents/chat/chat-agent — grounded generation", () => {
       usage_metadata: { input_tokens: 20, output_tokens: 5 },
     });
     trackLatencyMock.mockImplementation(
-      (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+      (_agent: string, _context: unknown, fn: () => unknown) => fn()
     );
   });
 
@@ -307,8 +306,7 @@ describe("agents/chat/chat-agent — grounded generation", () => {
       "claude-haiku",
       20,
       5,
-      RUN_ID,
-      COMPETITOR_1
+      { competitorId: COMPETITOR_1, identity: { kind: "run", runId: RUN_ID } }
     );
   });
 
@@ -385,8 +383,7 @@ describe("agents/chat/chat-agent — grounded generation", () => {
       "claude-sonnet",
       10,
       1,
-      RUN_ID,
-      COMPETITOR_1
+      { competitorId: COMPETITOR_1, identity: { kind: "run", runId: RUN_ID } }
     );
     expect(enforceCitationsMock).not.toHaveBeenCalled();
   });
@@ -428,7 +425,7 @@ describe("agents/chat/chat-agent — final-result cache", () => {
       usage_metadata: { input_tokens: 20, output_tokens: 5 },
     });
     trackLatencyMock.mockImplementation(
-      (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+      (_agent: string, _context: unknown, fn: () => unknown) => fn()
     );
   });
 
@@ -625,7 +622,7 @@ describe("agents/chat/chat-agent — cancellation and prompt-injection boundary"
       usage_metadata: { input_tokens: 20, output_tokens: 5 },
     });
     trackLatencyMock.mockImplementation(
-      (_agent: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+      (_agent: string, _context: unknown, fn: () => unknown) => fn()
     );
   });
 

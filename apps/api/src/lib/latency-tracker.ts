@@ -1,6 +1,6 @@
 // Latency tracker — records per-agent timing for every analysis graph run and every ChatAgent request.
 //
-// Usage: wrap any agent execution with trackLatency(agentName, competitorId, runId, fn). The
+// Usage: wrap any agent execution with trackLatency(agentName, context, fn). The
 // wrapper records start time, calls fn(), records end time, computes duration_ms, and writes a row
 // to the agent_latencies table (see db/schema.ts).
 //
@@ -15,32 +15,38 @@ import type { AgentName, LatencyRecord } from "@signal/shared";
 import { db } from "../db/client";
 import { agentLatenciesTable } from "../db/schema";
 import { logger } from "./logger";
+import {
+  telemetryIdentityColumns,
+  type LatencyTelemetryContext,
+} from "./telemetry-context";
 
 export async function trackLatency<T>(
   agentName: AgentName,
-  competitorId: string,
-  runId: string,
+  context: LatencyTelemetryContext,
   fn: () => Promise<T>
 ): Promise<T> {
+  const identity = telemetryIdentityColumns(context.identity);
+  if (identity.run_id === null && identity.job_id === null) {
+    throw new Error("Telemetry identity is required for latency tracking");
+  }
   const startedAt = new Date();
   try {
     const result = await fn();
     const completedAt = new Date();
     try {
       await db.insert(agentLatenciesTable).values({
-        run_id: runId,
-        competitor_id: competitorId,
+        ...identity,
+        competitor_id: context.competitorId,
         agent_name: agentName,
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: completedAt.getTime() - startedAt.getTime(),
         status: "success",
       });
-    } catch (insertError) {
+    } catch {
       logger.error("Failed to write agent_latencies row (success)", {
         agentName,
-        runId,
-        error: insertError,
+        identityKind: context.identity.kind,
       });
     }
     return result;
@@ -48,19 +54,18 @@ export async function trackLatency<T>(
     const completedAt = new Date();
     try {
       await db.insert(agentLatenciesTable).values({
-        run_id: runId,
-        competitor_id: competitorId,
+        ...identity,
+        competitor_id: context.competitorId,
         agent_name: agentName,
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: completedAt.getTime() - startedAt.getTime(),
         status: "failed",
       });
-    } catch (insertError) {
+    } catch {
       logger.error("Failed to write agent_latencies row (failed)", {
         agentName,
-        runId,
-        error: insertError,
+        identityKind: context.identity.kind,
       });
     }
     throw error;

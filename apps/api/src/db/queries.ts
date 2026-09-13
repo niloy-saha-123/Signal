@@ -33,6 +33,8 @@ export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
 export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
 export type CompanyProfile = typeof companyProfileTable.$inferSelect;
 export type AgentRun = typeof agentRunsTable.$inferSelect;
+export type AgentLatency = typeof agentLatenciesTable.$inferSelect;
+export type LlmCost = typeof llmCostsTable.$inferSelect;
 export type Alert = typeof alertsTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
@@ -62,6 +64,8 @@ export type AgentLatencyReportRow = {
   mean: number | null;
   sample_count: number;
   failed_count: number;
+  // Historical output name: this counts completed telemetry spans, whether
+  // attributed to an agent run or a queue job.
   run_count: number;
 };
 
@@ -513,7 +517,8 @@ export async function getLatencyPercentiles(days = 7): Promise<LatencyPercentile
     .groupBy(agentLatenciesTable.agent_name);
 }
 
-// Operational report source — one set-based aggregation for every agent.
+// Operational report source — one set-based aggregation for every agent,
+// across both run- and job-attributed spans.
 // Failure rate excludes skipped samples because a deliberate no-op is neither
 // success nor failure. Percentiles ignore NULL duration_ms by PostgreSQL design.
 export async function getAgentLatencyReport(days = 7): Promise<AgentLatencyReportRow[]> {

@@ -109,8 +109,10 @@ export async function patternDetectorNode(
     // paths can skip the LLM call while keeping Phase 1/2 inside the measured span.
     const outcome = await trackLatency(
       AGENT_NAME,
-      state.competitor_id,
-      state.run_id,
+      {
+        competitorId: state.competitor_id,
+        identity: { kind: "run", runId: state.run_id },
+      },
       async (): Promise<
         | { kind: "empty" }
         | { kind: "budget" }
@@ -180,8 +182,10 @@ export async function patternDetectorNode(
       outcome.model,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      {
+        competitorId: state.competitor_id,
+        identity: { kind: "run", runId: state.run_id },
+      }
     );
 
     // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation

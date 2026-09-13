@@ -91,7 +91,10 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
 
   // The most external I/O of any pipeline stage (one embedding + two Pinecone
   // round-trips) — tracked as one span so it shows up in scripts/latency-report.ts.
-  const matches = await trackLatency("deduplicator", signal.competitor_id, runId, async () => {
+  const matches = await trackLatency("deduplicator", {
+    competitorId: signal.competitor_id,
+    identity: { kind: "job", jobId: runId },
+  }, async () => {
     const embedding = await embedText(embeddingText);
 
     // The one-time embed+index write this signal will ever get.
