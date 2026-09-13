@@ -18,7 +18,7 @@ export const AgentNameSchema = z.enum([
 export type AgentName = z.infer<typeof AgentNameSchema>;
 
 // Returned by retrieval/citation-enforcer.ts (retrieval/index.ts stage 3) when the
-// generated response is sufficiently grounded in retrieved chunks (<=40% unsupported claims).
+// every extracted factual claim is grounded in retrieved chunks.
 export const CitationSchema = z.object({
   claim: z.string(),
   chunk_id: z.string(),
@@ -30,11 +30,11 @@ export type Citation = z.infer<typeof CitationSchema>;
 export const CitationResultSchema = z.object({
   refused: z.literal(false),
   answer: z.string(),
-  citations: z.array(CitationSchema),
+  citations: z.array(CitationSchema).min(1),
 });
 export type CitationResult = z.infer<typeof CitationResultSchema>;
 
-// Returned instead of CitationResult when >40% of extracted claims are unsupported.
+// Returned instead of CitationResult when any extracted claim is unsupported or no claims exist.
 // Not an error — a valid, first-class ChatAgent output; callers must not treat it as one.
 export const RefusalResultSchema = z.object({
   refused: z.literal(true),

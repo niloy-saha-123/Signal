@@ -1,16 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RetrievedChunk, RerankedChunk } from "@/retrieval";
 
-const { hybridRetrieveMock, rerankChunksMock, enforceCitationsMock } = vi.hoisted(() => ({
+const { hybridRetrieveMock, rerankChunksMock, enforceCitationsMock, citationThresholdMock } = vi.hoisted(() => ({
   hybridRetrieveMock: vi.fn(),
   rerankChunksMock: vi.fn(),
   enforceCitationsMock: vi.fn(),
+  citationThresholdMock: vi.fn(() => 0.75),
 }));
 
 vi.mock("@/retrieval", () => ({
   hybridRetrieve: hybridRetrieveMock,
   rerankChunks: rerankChunksMock,
   enforceCitations: enforceCitationsMock,
+  getCitationEnforcementThreshold: citationThresholdMock,
 }));
 
 const { trackLatencyMock } = vi.hoisted(() => ({
@@ -72,6 +74,12 @@ import { runChatAgent } from "@/agents/chat/chat-agent";
 const COMPETITOR_1 = "11111111-1111-4111-8111-111111111111";
 const COMPETITOR_2 = "22222222-2222-4222-8222-222222222222";
 const RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const TEST_CITATION = {
+  claim: "Acme customers report slower support response times.",
+  chunk_id: "signal-1",
+  source: "reddit" as const,
+  similarity_score: 0.91,
+};
 
 function retrieved(overrides: Partial<RetrievedChunk> = {}): RetrievedChunk {
   return {
@@ -111,7 +119,12 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     trackCostMock.mockResolvedValue(0);
     hybridRetrieveMock.mockResolvedValue([retrieved()]);
     rerankChunksMock.mockResolvedValue([]);
-    enforceCitationsMock.mockResolvedValue({ refused: false, answer: "answer", citations: [] });
+    citationThresholdMock.mockReturnValue(0.75);
+    enforceCitationsMock.mockResolvedValue({
+      refused: false,
+      answer: "answer",
+      citations: [TEST_CITATION],
+    });
     anthropicInvokeMock.mockResolvedValue({
       content: "answer",
       usage_metadata: { input_tokens: 20, output_tokens: 5 },
@@ -238,10 +251,11 @@ describe("agents/chat/chat-agent — grounded generation", () => {
     trackCostMock.mockResolvedValue(0);
     hybridRetrieveMock.mockResolvedValue([retrieved()]);
     rerankChunksMock.mockResolvedValue([reranked()]);
+    citationThresholdMock.mockReturnValue(0.75);
     enforceCitationsMock.mockResolvedValue({
       refused: false,
       answer: "Acme support response times slowed.",
-      citations: [],
+      citations: [TEST_CITATION],
     });
     anthropicInvokeMock.mockResolvedValue({
       content: "Acme support response times slowed.",
@@ -312,7 +326,7 @@ describe("agents/chat/chat-agent — grounded generation", () => {
     expect(result).toEqual({
       refused: false,
       answer: "Acme support response times slowed.",
-      citations: [],
+      citations: [TEST_CITATION],
     });
   });
 
@@ -393,7 +407,7 @@ describe("agents/chat/chat-agent — final-result cache", () => {
   const finalResult = {
     refused: false,
     answer: "Acme support response times slowed.",
-    citations: [],
+    citations: [TEST_CITATION],
   } as const;
 
   beforeEach(() => {
@@ -407,6 +421,7 @@ describe("agents/chat/chat-agent — final-result cache", () => {
     trackCostMock.mockResolvedValue(0);
     hybridRetrieveMock.mockResolvedValue([retrieved()]);
     rerankChunksMock.mockResolvedValue([reranked()]);
+    citationThresholdMock.mockReturnValue(0.75);
     enforceCitationsMock.mockResolvedValue(finalResult);
     anthropicInvokeMock.mockResolvedValue({
       content: finalResult.answer,
@@ -423,7 +438,7 @@ describe("agents/chat/chat-agent — final-result cache", () => {
     const result = await runChatAgent(input());
 
     expect(result).toEqual(finalResult);
-    expect(cacheGetMock).toHaveBeenCalledWith(expect.stringMatching(/^chat:response:[a-f0-9]{64}$/));
+    expect(cacheGetMock).toHaveBeenCalledWith(expect.stringMatching(/^chat:response:v2:[a-f0-9]{64}$/));
     expect(hybridRetrieveMock).not.toHaveBeenCalled();
     expect(chatAnthropicMock).not.toHaveBeenCalled();
     expect(cacheSetexMock).not.toHaveBeenCalled();
@@ -432,6 +447,7 @@ describe("agents/chat/chat-agent — final-result cache", () => {
   it.each([
     ["malformed JSON", "{not-json"],
     ["wrong result schema", JSON.stringify({ refused: false, answer: 42, citations: [] })],
+    ["positive result without citations", JSON.stringify({ refused: false, answer: "answer", citations: [] })],
   ])("treats %s as a cache miss", async (_label, cached) => {
     cacheGetMock.mockResolvedValueOnce(cached);
 
@@ -472,6 +488,28 @@ describe("agents/chat/chat-agent — final-result cache", () => {
     expect(cacheGetMock.mock.calls[0][0]).not.toBe(cacheGetMock.mock.calls[1][0]);
   });
 
+  it("changes the cache key when the citation threshold changes", async () => {
+    citationThresholdMock.mockReturnValueOnce(0.75).mockReturnValueOnce(0.9);
+
+    await runChatAgent(input());
+    await runChatAgent(input());
+
+    expect(cacheGetMock.mock.calls[0][0]).not.toBe(cacheGetMock.mock.calls[1][0]);
+  });
+
+  it("rejects an invalid citation policy before reading the response cache", async () => {
+    citationThresholdMock.mockImplementationOnce(() => {
+      throw new Error("Invalid numeric configuration: CITATION_ENFORCEMENT_THRESHOLD");
+    });
+
+    await expect(runChatAgent(input())).rejects.toThrow(
+      "Invalid numeric configuration: CITATION_ENFORCEMENT_THRESHOLD"
+    );
+
+    expect(cacheGetMock).not.toHaveBeenCalled();
+    expect(hybridRetrieveMock).not.toHaveBeenCalled();
+  });
+
   it("caches only the citation-enforced final result for four hours", async () => {
     const result = await runChatAgent(input());
 
@@ -479,7 +517,7 @@ describe("agents/chat/chat-agent — final-result cache", () => {
       cacheSetexMock.mock.invocationCallOrder[0]
     );
     expect(cacheSetexMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^chat:response:[a-f0-9]{64}$/),
+      expect.stringMatching(/^chat:response:v2:[a-f0-9]{64}$/),
       14_400,
       JSON.stringify(result)
     );
@@ -535,6 +573,18 @@ describe("agents/chat/chat-agent — final-result cache", () => {
     expect(cacheSetexMock).not.toHaveBeenCalled();
   });
 
+  it("does not cache a citation refusal because later evidence can make it answerable", async () => {
+    enforceCitationsMock.mockResolvedValueOnce({
+      refused: true,
+      reason: "One claim was not supported by the retrieved evidence.",
+      suggested_query: "Ask about a narrower timeframe.",
+    });
+
+    await expect(runChatAgent(input())).resolves.toMatchObject({ refused: true });
+
+    expect(cacheSetexMock).not.toHaveBeenCalled();
+  });
+
   it("keys the cache identically across whitespace and case variants of one question", async () => {
     await runChatAgent({ ...input(), query: "What   Changed?" });
     await runChatAgent({ ...input(), query: "  what changed?  " });
@@ -554,7 +604,7 @@ describe("agents/chat/chat-agent — cancellation and prompt-injection boundary"
   const finalResult = {
     refused: false,
     answer: "Acme support response times slowed.",
-    citations: [],
+    citations: [TEST_CITATION],
   } as const;
 
   beforeEach(() => {
@@ -568,6 +618,7 @@ describe("agents/chat/chat-agent — cancellation and prompt-injection boundary"
     trackCostMock.mockResolvedValue(0);
     hybridRetrieveMock.mockResolvedValue([retrieved()]);
     rerankChunksMock.mockResolvedValue([reranked()]);
+    citationThresholdMock.mockReturnValue(0.75);
     enforceCitationsMock.mockResolvedValue(finalResult);
     anthropicInvokeMock.mockResolvedValue({
       content: finalResult.answer,

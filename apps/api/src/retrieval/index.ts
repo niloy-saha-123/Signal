@@ -7,4 +7,8 @@
 
 export { hybridRetrieve, type RetrievedChunk } from "./hybrid-retrieval";
 export { rerankChunks, type RerankedChunk } from "./reranker";
-export { enforceCitations } from "./citation-enforcer";
+export {
+  enforceCitations,
+  getCitationEnforcementThreshold,
+  CitationVerificationUnavailableError,
+} from "./citation-enforcer";

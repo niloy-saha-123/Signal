@@ -102,7 +102,7 @@ async function extractEntities(signal: Signal, runId: string): Promise<void> {
     logger.error("entity-extractor: structured output failed schema validation", {
       signal_id: signal.id,
       model,
-      raw_content: (raw as AIMessage)?.content,
+      failure: "invalid_structured_output",
     });
     throw new Error(
       `entity-extractor: structured output failed schema validation for signal ${signal.id}`

@@ -31,6 +31,12 @@ describe("CitationResultSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("rejects a positive answer without any verified citation", () => {
+    expect(
+      CitationResultSchema.safeParse({ refused: false, answer: "answer", citations: [] }).success
+    ).toBe(false);
+  });
 });
 
 describe("CitationSchema", () => {
@@ -63,7 +69,7 @@ describe("RefusalResultSchema", () => {
   it("accepts a refusal with a suggested query", () => {
     const result = RefusalResultSchema.safeParse({
       refused: true,
-      reason: "Over 40% of claims were unsupported by retrieved chunks.",
+      reason: "At least one claim was unsupported by retrieved chunks.",
       suggested_query: "Ask about a specific competitor and time window instead.",
     });
     expect(result.success).toBe(true);
@@ -80,7 +86,14 @@ describe("ChatAgentResultSchema", () => {
     const citation = ChatAgentResultSchema.safeParse({
       refused: false,
       answer: "answer",
-      citations: [],
+      citations: [
+        {
+          claim: "answer",
+          chunk_id: "chunk-1",
+          source: "reddit",
+          similarity_score: 0.9,
+        },
+      ],
     });
     expect(refusal.success).toBe(true);
     expect(citation.success).toBe(true);

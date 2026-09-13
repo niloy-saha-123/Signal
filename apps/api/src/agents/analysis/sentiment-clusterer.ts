@@ -115,7 +115,7 @@ export async function sentimentClustererNode(
       logger.error("sentiment-clusterer: structured output failed schema validation", {
         competitor_id: state.competitor_id,
         run_id: state.run_id,
-        raw_content: (raw as AIMessage)?.content,
+        failure: "invalid_structured_output",
       });
       throw new Error(
         `sentiment-clusterer: structured output failed schema validation for competitor ${state.competitor_id}`

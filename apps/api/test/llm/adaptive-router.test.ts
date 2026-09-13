@@ -1,13 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/llm/cost-tracker", () => ({
   getDailySpend: vi.fn(),
 }));
 
 import { getDailySpend } from "@/llm/cost-tracker";
-import { selectModel } from "@/llm/adaptive-router";
+import { getDailyBudget, selectModel } from "@/llm/adaptive-router";
 
 describe("selectModel", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.DAILY_BUDGET_USD = "2.00";
@@ -34,11 +36,19 @@ describe("selectModel", () => {
     expect(await selectModel("gpt-4o-mini", true)).toBe("gpt-4o-mini");
   });
 
-  it("falls back to the default budget instead of NaN when DAILY_BUDGET_USD is malformed", async () => {
-    process.env.DAILY_BUDGET_USD = "not-a-number";
-    (getDailySpend as ReturnType<typeof vi.fn>).mockResolvedValue(2.5);
-    // Default budget is 2.0 — spend of 2.5 must still trigger a downgrade,
-    // proving the comparison isn't silently `spend >= NaN` (always false).
+  it.each(["not-a-number", "Infinity", "-0.01", "", "  "])(
+    "rejects unsafe DAILY_BUDGET_USD values: %j",
+    async (value) => {
+      vi.stubEnv("DAILY_BUDGET_USD", value);
+      (getDailySpend as ReturnType<typeof vi.fn>).mockResolvedValue(2.5);
+      await expect(selectModel("gpt-4.1", true)).rejects.toThrow(/DAILY_BUDGET_USD/);
+    }
+  );
+
+  it("preserves a zero daily budget as an immediate downgrade boundary", async () => {
+    vi.stubEnv("DAILY_BUDGET_USD", "0");
+    (getDailySpend as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+    expect(getDailyBudget()).toBe(0);
     expect(await selectModel("gpt-4.1", true)).toBe("gpt-4o-mini");
   });
 });

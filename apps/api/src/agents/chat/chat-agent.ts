@@ -12,7 +12,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessageChunk } from "@langchain/core/messages";
 import { ChatAgentResultSchema, type ChatAgentResult, type RefusalResult } from "@signal/shared";
-import { enforceCitations, hybridRetrieve, rerankChunks } from "../../retrieval";
+import {
+  enforceCitations,
+  getCitationEnforcementThreshold,
+  hybridRetrieve,
+  rerankChunks,
+} from "../../retrieval";
 import type { RerankedChunk } from "../../retrieval";
 import { getCompanyContext } from "../../lib/company-context";
 import { trackLatency } from "../../lib/latency-tracker";
@@ -33,6 +38,9 @@ const DEFAULT_MAX_TOKENS = 2_000;
 const HARD_MAX_TOKENS = 4_096;
 const PREFERRED_MODEL = "claude-sonnet";
 const CACHE_TTL_SECONDS = 4 * 60 * 60;
+// Bump whenever the verification policy changes so cached responses admitted
+// under an older policy cannot bypass the current enforcement contract.
+const CACHE_POLICY_VERSION = "v2";
 // Bounds the whole request — retrieval, rerank and generation — so a hung
 // Redis/embeddings call can't strand a caller (or a Part 13 SSE connection).
 const OVERALL_TIMEOUT_MS = 60_000;
@@ -81,7 +89,8 @@ function cacheKey(
   query: string,
   competitorIds: string[],
   activePrompt: string | null,
-  companyContext: string
+  companyContext: string,
+  citationThreshold: number
 ): string {
   // JSON, not `${query}|${scope}`: a query containing the separator would
   // otherwise collide with a different query/scope pair. Whitespace and case
@@ -94,10 +103,11 @@ function cacheKey(
         [...competitorIds].sort(),
         activePrompt ?? DEFAULT_SYSTEM_PROMPT,
         companyContext,
+        citationThreshold,
       ])
     )
     .digest("hex");
-  return `chat:response:${digest}`;
+  return `chat:response:${CACHE_POLICY_VERSION}:${digest}`;
 }
 
 async function readCachedResult(key: string): Promise<ChatAgentResult | null> {
@@ -296,12 +306,14 @@ export async function runChatAgent(
       getActivePrompt("chat_agent"),
       getCompanyContext(),
     ]);
+    const citationThreshold = getCitationEnforcementThreshold();
     signal.throwIfAborted();
     const key = cacheKey(
       parsed.query,
       parsed.competitor_ids,
       activePrompt,
-      companyContext
+      companyContext,
+      citationThreshold
     );
     const cached = await readCachedResult(key);
     if (cached) return cached;
@@ -333,7 +345,9 @@ export async function runChatAgent(
     );
     // Never write the cache for a run whose caller is already gone.
     signal.throwIfAborted();
-    await writeCachedResult(key, result);
+    // Evidence-dependent refusals can become answerable as new signals land;
+    // caching them would freeze an obsolete refusal for four hours.
+    if (!result.refused) await writeCachedResult(key, result);
     return result;
   });
   // Some retrieval/cache dependencies do not expose AbortSignal inputs yet.

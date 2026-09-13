@@ -12,13 +12,14 @@ const { rerankMock, cohereClientMock } = vi.hoisted(() => {
 
 vi.mock("cohere-ai", () => ({ CohereClient: cohereClientMock }));
 
-const { getMock, setexMock } = vi.hoisted(() => ({
+const { getMock, setexMock, delMock } = vi.hoisted(() => ({
   getMock: vi.fn(),
   setexMock: vi.fn(),
+  delMock: vi.fn(),
 }));
 
 vi.mock("@/lib/redis-client", () => ({
-  cacheRedis: { get: getMock, setex: setexMock },
+  cacheRedis: { get: getMock, setex: setexMock, del: delMock },
 }));
 
 const { loggerMock } = vi.hoisted(() => ({
@@ -43,19 +44,28 @@ function chunk(overrides: Partial<RetrievedChunk> = {}): RetrievedChunk {
   };
 }
 
-function cacheKey(query: string, chunks: RetrievedChunk[]): string {
+function cacheKey(
+  query: string,
+  chunks: RetrievedChunk[],
+  topK = 10,
+  minRelevanceScore = 0.4
+): string {
   const ids = chunks
     .map((c) => c.id)
     .sort()
     .join(",");
-  return createHash("sha256").update(`${query}|${ids}`).digest("hex");
+  return createHash("sha256")
+    .update(`${query}|${ids}|${topK}|${minRelevanceScore}`)
+    .digest("hex");
 }
 
 describe("rerankChunks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     getMock.mockResolvedValue(null);
     setexMock.mockResolvedValue("OK");
+    delMock.mockResolvedValue(1);
   });
 
   it("returns [] without calling Cohere when chunks is empty", async () => {
@@ -177,12 +187,16 @@ describe("rerankChunks", () => {
     rerankMock.mockRejectedValue(cohereError);
     const chunks = [chunk({ id: "s1" })];
 
-    await expect(rerankChunks("query", chunks)).rejects.toThrow("Cohere unreachable");
+    await expect(rerankChunks("query", chunks)).rejects.toThrow(
+      "rerankChunks: Cohere request failed"
+    );
 
     expect(loggerMock.error).toHaveBeenCalledWith(
       expect.stringContaining("Cohere rerank failed"),
-      expect.objectContaining({ query: "query", chunk_count: 1 })
+      expect.objectContaining({ chunk_count: 1, failure: "provider_error" })
     );
+    expect(JSON.stringify(loggerMock.error.mock.calls)).not.toContain("query");
+    expect(JSON.stringify(loggerMock.error.mock.calls)).not.toContain("Cohere unreachable");
   });
 
   it("treats a malformed cached JSON value as a cache miss and still calls Cohere", async () => {
@@ -198,5 +212,66 @@ describe("rerankChunks", () => {
     );
     expect(rerankMock).toHaveBeenCalled();
     expect(result).toEqual([{ ...chunks[0], relevance_score: 0.9 }]);
+    expect(delMock).toHaveBeenCalledWith(cacheKey("query", chunks));
+  });
+
+  it.each([
+    JSON.stringify([{ id: "s1", relevance_score: "high" }]),
+    JSON.stringify([{ ...chunk({ id: "not-a-candidate" }), relevance_score: 0.9 }]),
+    JSON.stringify([{ ...chunk(), relevance_score: Number.POSITIVE_INFINITY }]),
+  ])("evicts schema-invalid or out-of-scope cached data and reranks instead", async (cached) => {
+    getMock.mockResolvedValue(cached);
+    rerankMock.mockResolvedValue({ results: [{ index: 0, relevanceScore: 0.9 }] });
+    const chunks = [chunk({ id: "s1" })];
+
+    await expect(rerankChunks("PRIVATE_QUERY", chunks)).resolves.toEqual([
+      { ...chunks[0], relevance_score: 0.9 },
+    ]);
+
+    expect(delMock).toHaveBeenCalledWith(cacheKey("PRIVATE_QUERY", chunks));
+    expect(rerankMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { results: [{ index: 9, relevanceScore: 0.9 }] },
+    { results: [{ index: -1, relevanceScore: 0.9 }] },
+    { results: [{ index: 0, relevanceScore: Number.POSITIVE_INFINITY }] },
+    { results: [{ index: 0, relevanceScore: 0.9 }, { index: 0, relevanceScore: 0.8 }] },
+  ])("rejects malformed Cohere result mappings without logging the query", async (providerResult) => {
+    rerankMock.mockResolvedValue(providerResult);
+
+    await expect(rerankChunks("PRIVATE_QUERY", [chunk()])).rejects.toThrow(/rerank/i);
+    expect(setexMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(loggerMock.error.mock.calls)).not.toContain("PRIVATE_QUERY");
+  });
+
+  it.each([
+    ["RERANKER_TOP_K", "0"],
+    ["RERANKER_TOP_K", "1.5"],
+    ["RERANKER_TOP_K", "Infinity"],
+    ["RERANKER_MIN_RELEVANCE_SCORE", "-1"],
+    ["RERANKER_MIN_RELEVANCE_SCORE", "1.1"],
+    ["RERANKER_MIN_RELEVANCE_SCORE", "NaN"],
+  ])("rejects invalid numeric configuration %s=%s", async (name, value) => {
+    vi.stubEnv(name, value);
+    await expect(rerankChunks("query", [chunk()])).rejects.toThrow(name);
+    expect(getMock).not.toHaveBeenCalled();
+    expect(rerankMock).not.toHaveBeenCalled();
+  });
+
+  it("changes the cache identity when top-K or relevance policy changes", async () => {
+    rerankMock.mockResolvedValue({ results: [{ index: 0, relevanceScore: 0.9 }] });
+    const chunks = [chunk()];
+
+    vi.stubEnv("RERANKER_TOP_K", "3");
+    await rerankChunks("query", chunks);
+    const topKKey = getMock.mock.calls[0][0];
+
+    vi.stubEnv("RERANKER_TOP_K", "10");
+    vi.stubEnv("RERANKER_MIN_RELEVANCE_SCORE", "0.8");
+    await rerankChunks("query", chunks);
+    const thresholdKey = getMock.mock.calls[1][0];
+
+    expect(topKKey).not.toBe(thresholdKey);
   });
 });
