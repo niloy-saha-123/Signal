@@ -19,11 +19,14 @@ import {
   pricingDiffsTable,
   alertsTable,
   llmCostsTable,
+  signalPipelineOutboxTable,
+  type SignalPipelineStage,
 } from "./schema";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
 export type Signal = typeof signalsTable.$inferSelect;
+export type SignalPipelineOutbox = typeof signalPipelineOutboxTable.$inferSelect;
 export type SignalCluster = typeof signalClustersTable.$inferSelect;
 export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
@@ -271,8 +274,11 @@ export type CreateSignalInput = {
 };
 
 export async function createSignal(input: CreateSignalInput): Promise<Signal> {
-  const [row] = await db.insert(signalsTable).values(input).returning();
-  return row;
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(signalsTable).values(input).returning();
+    await tx.insert(signalPipelineOutboxTable).values({ signal_id: row.id });
+    return row;
+  });
 }
 
 export interface FeedCursor {
@@ -573,6 +579,89 @@ export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<
 // ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
 // Collectors (Part 6) only INSERT raw signal rows; these UPDATE the columns each
 // pipeline stage populates as a signal moves through it.
+
+const DEFAULT_OUTBOX_BATCH_LIMIT = 100;
+const MAX_OUTBOX_BATCH_LIMIT = 500;
+
+function outboxBatchLimit(value: number): number {
+  const floored = Math.floor(value);
+  return Number.isFinite(floored)
+    ? Math.max(1, Math.min(MAX_OUTBOX_BATCH_LIMIT, floored))
+    : DEFAULT_OUTBOX_BATCH_LIMIT;
+}
+
+export async function listPendingSignalPipelineOutbox(
+  limit = DEFAULT_OUTBOX_BATCH_LIMIT
+): Promise<SignalPipelineOutbox[]> {
+  return db
+    .select()
+    .from(signalPipelineOutboxTable)
+    .orderBy(asc(signalPipelineOutboxTable.created_at))
+    .limit(outboxBatchLimit(limit));
+}
+
+export async function advanceSignalPipelineOutbox(
+  signalId: string,
+  expectedStage: SignalPipelineStage,
+  nextStage: SignalPipelineStage
+): Promise<boolean> {
+  const rows = await db
+    .update(signalPipelineOutboxTable)
+    .set({ stage: nextStage, updated_at: new Date() })
+    .where(
+      and(
+        eq(signalPipelineOutboxTable.signal_id, signalId),
+        eq(signalPipelineOutboxTable.stage, expectedStage)
+      )
+    )
+    .returning({ signal_id: signalPipelineOutboxTable.signal_id });
+  return rows.length > 0;
+}
+
+// Score persistence and stage ownership are one transaction. If a worker advances
+// the outbox but cannot enqueue deduplication, a retry/recovery job observes the lost
+// compare-and-set and cannot replace the already-committed time-sensitive score.
+export async function scoreSignalAndAdvanceOutbox(
+  signalId: string,
+  qualityScore: number
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const advancedRows = await tx
+      .update(signalPipelineOutboxTable)
+      .set({ stage: "deduplication", updated_at: new Date() })
+      .where(
+        and(
+          eq(signalPipelineOutboxTable.signal_id, signalId),
+          eq(signalPipelineOutboxTable.stage, "quality_scoring")
+        )
+      )
+      .returning({ signal_id: signalPipelineOutboxTable.signal_id });
+
+    if (advancedRows.length === 0) return false;
+
+    await tx
+      .update(signalsTable)
+      .set({ quality_score: qualityScore })
+      .where(eq(signalsTable.id, signalId));
+    return true;
+  });
+}
+
+export async function completeSignalPipelineOutbox(
+  signalId: string,
+  expectedStage: "deduplication"
+): Promise<boolean> {
+  const rows = await db
+    .delete(signalPipelineOutboxTable)
+    .where(
+      and(
+        eq(signalPipelineOutboxTable.signal_id, signalId),
+        eq(signalPipelineOutboxTable.stage, expectedStage)
+      )
+    )
+    .returning({ signal_id: signalPipelineOutboxTable.signal_id });
+  return rows.length > 0;
+}
 
 export async function getSignalById(id: string): Promise<Signal | undefined> {
   const [row] = await db.select().from(signalsTable).where(eq(signalsTable.id, id));

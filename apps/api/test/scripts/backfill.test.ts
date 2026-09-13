@@ -7,8 +7,8 @@ const now = new Date("2026-09-11T15:30:00.000Z");
 function dependencies(overrides: Partial<BackfillDeps> = {}): BackfillDeps {
   return {
     getCompetitorById: vi.fn(async () => ({ id: competitorId, is_active: true })),
-    addRedditJob: vi.fn(async () => undefined),
-    addHnJob: vi.fn(async () => undefined),
+    ensureRedditJob: vi.fn(async () => "added" as const),
+    ensureHnJob: vi.fn(async () => "added" as const),
     now: () => now,
     ...overrides,
   };
@@ -55,7 +55,7 @@ describe("backfill", () => {
     );
 
     expect(deps.getCompetitorById).toHaveBeenCalledWith(competitorId);
-    expect(deps.addRedditJob).toHaveBeenCalledWith(
+    expect(deps.ensureRedditJob).toHaveBeenCalledWith(
       "backfill",
       {
         backfill: {
@@ -66,7 +66,7 @@ describe("backfill", () => {
       },
       { jobId: `backfill-reddit-${competitorId}-2026-08-12-2026-09-11` }
     );
-    expect(deps.addHnJob).toHaveBeenCalledOnce();
+    expect(deps.ensureHnJob).toHaveBeenCalledOnce();
     expect(result.jobs).toHaveLength(2);
   });
 
@@ -85,8 +85,8 @@ describe("backfill", () => {
 
     expect(result.jobs.map((job) => job.source)).toEqual(["hn"]);
     expect(result.dry_run).toBe(true);
-    expect(deps.addRedditJob).not.toHaveBeenCalled();
-    expect(deps.addHnJob).not.toHaveBeenCalled();
+    expect(deps.ensureRedditJob).not.toHaveBeenCalled();
+    expect(deps.ensureHnJob).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -114,13 +114,13 @@ describe("backfill", () => {
     await expect(
       runBackfill([`--competitor-id=${competitorId}`], inactive)
     ).rejects.toThrow("inactive");
-    expect(inactive.addRedditJob).not.toHaveBeenCalled();
-    expect(inactive.addHnJob).not.toHaveBeenCalled();
+    expect(inactive.ensureRedditJob).not.toHaveBeenCalled();
+    expect(inactive.ensureHnJob).not.toHaveBeenCalled();
   });
 
   it("surfaces an enqueue failure so a rerun can reuse stable job IDs", async () => {
     const deps = dependencies({
-      addHnJob: vi.fn(async () => {
+      ensureHnJob: vi.fn(async () => {
         throw new Error("Redis unavailable");
       }),
     });
@@ -137,17 +137,35 @@ describe("backfill", () => {
     await runBackfill(argv, deps);
     await runBackfill(argv, deps);
 
-    expect(deps.addRedditJob).toHaveBeenNthCalledWith(
+    expect(deps.ensureRedditJob).toHaveBeenNthCalledWith(
       1,
       "backfill",
       expect.any(Object),
       { jobId: `backfill-reddit-${competitorId}-2026-08-12-2026-09-11` }
     );
-    expect(deps.addRedditJob).toHaveBeenNthCalledWith(
+    expect(deps.ensureRedditJob).toHaveBeenNthCalledWith(
       2,
       "backfill",
       expect.any(Object),
       { jobId: `backfill-reddit-${competitorId}-2026-08-12-2026-09-11` }
+    );
+  });
+
+  it("uses the recovery-aware enqueue path so a retained failed job can be retried", async () => {
+    const ensureRedditJob = vi.fn(async () => "retried" as const);
+    const deps = dependencies({ ensureRedditJob });
+
+    await runBackfill(
+      [`--competitor-id=${competitorId}`, "--sources=reddit"],
+      deps
+    );
+
+    expect(ensureRedditJob).toHaveBeenCalledWith(
+      "backfill",
+      expect.objectContaining({
+        backfill: expect.objectContaining({ competitor_id: competitorId }),
+      }),
+      { jobId: expect.stringMatching(/^backfill-reddit-/) }
     );
   });
 });

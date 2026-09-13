@@ -19,6 +19,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-changelog": {},
     "collect-pricing": {},
     "pipeline-entity-extraction": {},
+    "pipeline-recovery": {},
     analysis: {},
   },
   queues: {
@@ -27,6 +28,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-jobs": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-changelog": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
+    "pipeline-recovery": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -37,6 +39,8 @@ import {
   getCollectorScheduleConfig,
   registerCollectorSchedules,
   collectorSchedulerId,
+  PIPELINE_RECOVERY_CRON,
+  PIPELINE_RECOVERY_SCHEDULER_ID,
 } from "@/queues/scheduler";
 
 describe("queues/scheduler", () => {
@@ -160,12 +164,17 @@ describe("queues/scheduler", () => {
 
     await registerCollectorSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(5);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(6);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
       { name: "collect-reddit", data: {} }
     );
     expect(collectorSchedulerId("collect-pricing")).toBe("signal:collector:collect-pricing:v1");
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      PIPELINE_RECOVERY_SCHEDULER_ID,
+      { pattern: PIPELINE_RECOVERY_CRON },
+      { name: "pipeline-recovery", data: {} }
+    );
   });
 });

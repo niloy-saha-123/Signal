@@ -14,6 +14,7 @@ import {
   getSignalById,
   createClusterForSignalPair,
   mergeSignalIntoCluster,
+  completeSignalPipelineOutbox,
   type Signal,
 } from "../db/queries";
 
@@ -56,6 +57,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
     logger.warn("deduplicator: signal not found — skipping", {
       signal_id: job.data.signal_id,
     });
+    await completeSignalPipelineOutbox(job.data.signal_id, "deduplication");
     return;
   }
 
@@ -68,6 +70,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
       signal_id: signal.id,
       cluster_id: signal.cluster_id,
     });
+    await completeSignalPipelineOutbox(signal.id, "deduplication");
     return;
   }
 
@@ -78,6 +81,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
     logger.warn("deduplicator: signal has no embeddable text — skipping", {
       signal_id: signal.id,
     });
+    await completeSignalPipelineOutbox(signal.id, "deduplication");
     return;
   }
 
@@ -105,6 +109,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
   if (!bestMatch) {
     // No near-duplicate — leave cluster_id null. No cluster row for a singleton signal
     // (signal_clusters only exists for actual multi-signal groups, per its header comment).
+    await completeSignalPipelineOutbox(signal.id, "deduplication");
     return;
   }
 
@@ -114,6 +119,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
       signal_id: signal.id,
       matched_id: bestMatch.id,
     });
+    await completeSignalPipelineOutbox(signal.id, "deduplication");
     return;
   }
 
@@ -130,6 +136,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
       cluster_id: cluster.id,
       corroboration_count: cluster.corroboration_count,
     });
+    await completeSignalPipelineOutbox(signal.id, "deduplication");
     return;
   }
 
@@ -150,6 +157,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
     cluster_id: cluster.id,
     corroboration_count: cluster.corroboration_count,
   });
+  await completeSignalPipelineOutbox(signal.id, "deduplication");
 }
 
 // Extension point — must only be called from the standalone worker process

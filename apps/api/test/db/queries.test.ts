@@ -17,6 +17,9 @@ const {
   updateWhereMock,
   updateReturningMock,
   transactionMock,
+  deleteMock,
+  deleteWhereMock,
+  deleteReturningMock,
 } = vi.hoisted(() => ({
   selectMock: vi.fn(),
   fromMock: vi.fn(),
@@ -34,6 +37,9 @@ const {
   updateWhereMock: vi.fn(),
   updateReturningMock: vi.fn(),
   transactionMock: vi.fn(),
+  deleteMock: vi.fn(),
+  deleteWhereMock: vi.fn(),
+  deleteReturningMock: vi.fn(),
 }));
 
 vi.mock("@/db/client", () => ({
@@ -41,6 +47,7 @@ vi.mock("@/db/client", () => ({
     select: selectMock,
     insert: insertMock,
     update: updateMock,
+    delete: deleteMock,
     transaction: transactionMock,
   },
 }));
@@ -74,6 +81,7 @@ import {
   pricingBaselinesTable,
   pricingDiffsTable,
   llmCostsTable,
+  signalPipelineOutboxTable,
 } from "@/db/schema";
 import {
   createCompetitor,
@@ -107,6 +115,7 @@ import {
   getSignalById,
   updateSignalEntities,
   updateSignalQualityScore,
+  scoreSignalAndAdvanceOutbox,
   createClusterForSignalPair,
   getSignalClusterById,
   mergeSignalIntoCluster,
@@ -114,6 +123,9 @@ import {
   failRunIfRunning,
   createAgentRun,
   finalizeDiscovery,
+  listPendingSignalPipelineOutbox,
+  advanceSignalPipelineOutbox,
+  completeSignalPipelineOutbox,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -577,7 +589,7 @@ describe("db/queries — hn collector support", () => {
   });
 
   describe("createSignal", () => {
-    it("inserts the given fields and returns the created row", async () => {
+    it("inserts the signal and initial outbox row in one transaction", async () => {
       const input = {
         competitor_id: "c1",
         source: "hn" as const,
@@ -586,13 +598,51 @@ describe("db/queries — hn collector support", () => {
         raw_text: "Acme just raised a Series B",
       };
       const row = { id: "s1", ...input, quality_score: 0, collected_at: new Date(), created_at: new Date() };
-      insertReturningMock.mockResolvedValue([row]);
+      const signalValues = vi.fn(() => ({ returning: vi.fn(async () => [row]) }));
+      const outboxValues = vi.fn(async () => undefined);
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) => {
+        if (table === signalsTable) {
+          return { values: signalValues };
+        }
+        return { values: outboxValues };
+      });
 
       const result = await createSignal(input);
 
-      expect(insertMock).toHaveBeenCalledWith(signalsTable);
-      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(insertMock).toHaveBeenNthCalledWith(1, signalsTable);
+      expect(insertMock).toHaveBeenNthCalledWith(2, signalPipelineOutboxTable);
+      expect(signalValues).toHaveBeenCalledWith(input);
+      expect(outboxValues).toHaveBeenCalledWith({ signal_id: "s1" });
       expect(result).toEqual(row);
+    });
+
+    it("rejects the transaction when the initial outbox write fails", async () => {
+      const input = {
+        competitor_id: "c1",
+        source: "hn" as const,
+        raw_text: "Acme changed",
+      };
+      const row = { id: "s1", ...input };
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) => {
+        if (table === signalsTable) {
+          return { values: vi.fn(() => ({ returning: vi.fn(async () => [row]) })) };
+        }
+        return {
+          values: vi.fn(async () => {
+            throw new Error("outbox insert failed");
+          }),
+        };
+      });
+
+      await expect(createSignal(input)).rejects.toThrow("outbox insert failed");
+      expect(transactionMock).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -1002,6 +1052,109 @@ describe("db/queries — signal pipeline", () => {
     updateMock.mockReturnValue({ set: updateSetMock });
     updateSetMock.mockReturnValue({ where: updateWhereMock });
     updateWhereMock.mockResolvedValue(undefined);
+    deleteMock.mockReturnValue({ where: deleteWhereMock });
+    deleteWhereMock.mockReturnValue({ returning: deleteReturningMock });
+  });
+
+  describe("signal pipeline outbox", () => {
+    it("lists a bounded oldest-first batch", async () => {
+      const rows = [{ signal_id: "s1", stage: "entity_extraction" }];
+      fromMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
+
+      await expect(listPendingSignalPipelineOutbox(25)).resolves.toEqual(rows);
+
+      expect(fromMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+      expect(orderByMock).toHaveBeenCalledWith(asc(signalPipelineOutboxTable.created_at));
+      expect(limitMock).toHaveBeenCalledWith(25);
+    });
+
+    it("clamps malformed and oversized recovery batch limits", async () => {
+      fromMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      await listPendingSignalPipelineOutbox(Number.NaN);
+      await listPendingSignalPipelineOutbox(10_000);
+
+      expect(limitMock).toHaveBeenNthCalledWith(1, 100);
+      expect(limitMock).toHaveBeenNthCalledWith(2, 500);
+    });
+
+    it("advances only from the expected stage with compare-and-set", async () => {
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([{ signal_id: "s1" }]);
+
+      await expect(
+        advanceSignalPipelineOutbox("s1", "entity_extraction", "quality_scoring")
+      ).resolves.toBe(true);
+
+      expect(updateMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+      expect(updateSetMock).toHaveBeenCalledWith({
+        stage: "quality_scoring",
+        updated_at: expect.any(Date),
+      });
+      expect(and).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.signal_id, "s1");
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.stage, "entity_extraction");
+    });
+
+    it("reports a lost compare-and-set without pretending to advance", async () => {
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([]);
+
+      await expect(
+        advanceSignalPipelineOutbox("s1", "entity_extraction", "quality_scoring")
+      ).resolves.toBe(false);
+    });
+
+    it("writes the quality score only when it atomically owns and advances the stage", async () => {
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ update: updateMock })
+      );
+      updateWhereMock
+        .mockReturnValueOnce({ returning: updateReturningMock })
+        .mockResolvedValueOnce(undefined);
+      updateReturningMock.mockResolvedValueOnce([{ signal_id: "s1" }]);
+
+      await expect(scoreSignalAndAdvanceOutbox("s1", 0.72)).resolves.toBe(true);
+
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(updateMock).toHaveBeenNthCalledWith(1, signalPipelineOutboxTable);
+      expect(updateSetMock).toHaveBeenNthCalledWith(1, {
+        stage: "deduplication",
+        updated_at: expect.any(Date),
+      });
+      expect(updateMock).toHaveBeenNthCalledWith(2, signalsTable);
+      expect(updateSetMock).toHaveBeenNthCalledWith(2, { quality_score: 0.72 });
+    });
+
+    it("does not overwrite the score when a retry has lost stage ownership", async () => {
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ update: updateMock })
+      );
+      updateWhereMock.mockReturnValueOnce({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValueOnce([]);
+
+      await expect(scoreSignalAndAdvanceOutbox("s1", 0.81)).resolves.toBe(false);
+
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect(updateMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+    });
+
+    it("completes only from the expected terminal stage", async () => {
+      deleteReturningMock.mockResolvedValue([{ signal_id: "s1" }]);
+
+      await expect(
+        completeSignalPipelineOutbox("s1", "deduplication")
+      ).resolves.toBe(true);
+
+      expect(deleteMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+      expect(and).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.signal_id, "s1");
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.stage, "deduplication");
+    });
   });
 
   describe("getSignalById", () => {

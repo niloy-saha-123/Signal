@@ -32,6 +32,9 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   queueAddMock: vi.fn().mockResolvedValue(undefined),
   registerWorkerMock: vi.fn(),
 }));
+const { enqueueInitialSignalPipelineMock } = vi.hoisted(() => ({
+  enqueueInitialSignalPipelineMock: vi.fn(),
+}));
 
 const { assertPublicUrlMock } = vi.hoisted(() => ({
   assertPublicUrlMock: vi.fn().mockResolvedValue(undefined),
@@ -42,6 +45,9 @@ vi.mock("@/lib/safe-fetch", () => ({ assertPublicUrl: assertPublicUrlMock }));
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
 // Fake Playwright surface — chromium.launch() must never touch a real browser
@@ -112,6 +118,10 @@ describe("collectors/pricing", () => {
       id: "s1",
       ...input,
     }));
+    enqueueInitialSignalPipelineMock.mockImplementation(async (signalId: string) => {
+      await queueAddMock("extract-entities", { signal_id: signalId });
+      return "added";
+    });
 
     newPageMock.mockResolvedValue({
       setExtraHTTPHeaders: setExtraHTTPHeadersMock,

@@ -11,6 +11,7 @@ import { initPricingWorker } from "./src/collectors/pricing";
 import { initEntityExtractorWorker } from "./src/pipeline/entity-extractor";
 import { initQualityScorerWorker } from "./src/pipeline/quality-scorer";
 import { initDeduplicatorWorker } from "./src/pipeline/deduplicator";
+import { initPipelineRecoveryWorker } from "./src/pipeline/recovery";
 import { initAnalysisWorker } from "./src/agents/analysis/analysis-worker";
 import { closeRedisConnections } from "./src/lib/redis-client";
 import { closeDatabase } from "./src/db/client";
@@ -59,6 +60,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initEntityExtractorWorker,
         initQualityScorerWorker,
         initDeduplicatorWorker,
+        initPipelineRecoveryWorker,
         initAnalysisWorker,
       ]) {
         initialized.push(initialize());

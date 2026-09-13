@@ -27,10 +27,16 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   queueAddMock: vi.fn().mockResolvedValue(undefined),
   registerWorkerMock: vi.fn(),
 }));
+const { enqueueInitialSignalPipelineMock } = vi.hoisted(() => ({
+  enqueueInitialSignalPipelineMock: vi.fn(),
+}));
 
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
 import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
@@ -64,6 +70,10 @@ describe("collectors/hn", () => {
     }));
     fetchMock = vi.fn().mockResolvedValue(algoliaResponse([]));
     vi.stubGlobal("fetch", fetchMock);
+    enqueueInitialSignalPipelineMock.mockImplementation(async (signalId: string) => {
+      await queueAddMock("extract-entities", { signal_id: signalId });
+      return "added";
+    });
   });
 
   afterEach(() => {
@@ -181,7 +191,7 @@ describe("collectors/hn", () => {
       algoliaResponse([
         {
           objectID: "111",
-          created_at_i: 1700000000,
+          created_at_i: Math.floor(Date.now() / 1000),
           comment_text: "Acme just shipped a new feature",
           story_title: "Acme launches thing",
         },
@@ -210,7 +220,7 @@ describe("collectors/hn", () => {
   it("skips a hit whose source_url already exists for this competitor+source", async () => {
     fetchMock.mockResolvedValue(
       algoliaResponse([
-        { objectID: "111", created_at_i: 1700000000, comment_text: "Acme mention" },
+        { objectID: "111", created_at_i: Math.floor(Date.now() / 1000), comment_text: "Acme mention" },
       ])
     );
     signalExistsBySourceUrlMock.mockResolvedValue(true);
@@ -266,7 +276,7 @@ describe("collectors/hn", () => {
         throw new Error("network down");
       }
       return algoliaResponse([
-        { objectID: "222", created_at_i: 1700000000, comment_text: "Acme mention" },
+        { objectID: "222", created_at_i: Math.floor(Date.now() / 1000), comment_text: "Acme mention" },
       ]);
     });
 
@@ -292,11 +302,53 @@ describe("collectors/hn", () => {
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("validates the provider payload before reading hits or writing signals", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ hits: [{ objectID: 42, created_at_i: "yesterday" }] }),
+    });
+
+    await expect(hnCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      "hn",
+      expect.stringContaining("Algolia HN response was invalid")
+    );
+    expect(createSignalMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("enforces both backfill boundaries client-side, excluding the exact lower bound", async () => {
+    const since = "2026-08-12T15:30:00.000Z";
+    const until = "2026-09-11T15:30:00.000Z";
+    const lower = Math.floor(Date.parse(since) / 1000);
+    const upper = Math.floor(Date.parse(until) / 1000);
+    fetchMock.mockResolvedValue(
+      algoliaResponse([
+        { objectID: "before", created_at_i: lower - 1, comment_text: "before" },
+        { objectID: "lower", created_at_i: lower, comment_text: "lower" },
+        { objectID: "inside", created_at_i: lower + 1, comment_text: "inside" },
+        { objectID: "upper", created_at_i: upper, comment_text: "upper" },
+        { objectID: "after", created_at_i: upper + 1, comment_text: "after" },
+      ])
+    );
+
+    await hnCollectorProcessor({
+      data: { backfill: { competitor_id: backfillCompetitorId, since, until } },
+    } as never);
+
+    const urls = createSignalMock.mock.calls.map((call) => call[0].source_url);
+    expect(urls).toEqual([
+      "https://news.ycombinator.com/item?id=inside",
+      "https://news.ycombinator.com/item?id=upper",
+    ]);
+  });
+
   it("keeps processing subsequent hits in the same competitor's batch when an earlier hit fails", async () => {
     fetchMock.mockResolvedValue(
       algoliaResponse([
-        { objectID: "bad", created_at_i: 1700000000, comment_text: "bad hit" },
-        { objectID: "good", created_at_i: 1700000000, comment_text: "good hit" },
+        { objectID: "bad", created_at_i: Math.floor(Date.now() / 1000), comment_text: "bad hit" },
+        { objectID: "good", created_at_i: Math.floor(Date.now() / 1000), comment_text: "good hit" },
       ])
     );
     createSignalMock

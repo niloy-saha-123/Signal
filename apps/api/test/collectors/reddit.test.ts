@@ -27,10 +27,16 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   queueAddMock: vi.fn().mockResolvedValue(undefined),
   registerWorkerMock: vi.fn(),
 }));
+const { enqueueInitialSignalPipelineMock } = vi.hoisted(() => ({
+  enqueueInitialSignalPipelineMock: vi.fn().mockResolvedValue("added"),
+}));
 
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
 import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
@@ -74,6 +80,10 @@ describe("collectors/reddit", () => {
       return listingResponse([]);
     });
     vi.stubGlobal("fetch", fetchMock);
+    enqueueInitialSignalPipelineMock.mockImplementation(async (signalId: string) => {
+      await queueAddMock("extract-entities", { signal_id: signalId });
+      return "added";
+    });
   });
 
   afterEach(() => {
@@ -468,6 +478,43 @@ describe("collectors/reddit", () => {
     }
   });
 
+  it("rejects an invalid OAuth token payload without exposing its body or touching signal data", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "" , secret_debug: "must-not-leak" }),
+    });
+
+    await expect(redditCollectorProcessor({} as never)).rejects.toThrow(
+      "Reddit OAuth token response was invalid"
+    );
+
+    expect(signalExistsBySourceUrlMock).not.toHaveBeenCalled();
+    expect(createSignalMock).not.toHaveBeenCalled();
+    expect(JSON.stringify((recordFailure as ReturnType<typeof vi.fn>).mock.calls)).not.toContain(
+      "must-not-leak"
+    );
+  }, 10000);
+
+  it("rejects a malformed listing payload before any signal write", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { children: [{ data: { id: 42 } }] } }),
+      };
+    });
+
+    await expect(redditCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      "reddit",
+      expect.stringContaining("Failed to collect 1 subreddit")
+    );
+    expect(createSignalMock).not.toHaveBeenCalled();
+  }, 10000);
+
   it("keeps processing subsequent posts in the same subreddit's batch when an earlier post fails", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes("access_token")) return tokenResponse();
@@ -502,6 +549,29 @@ describe("collectors/reddit", () => {
     expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s2" });
     // A single item's failure is logged and skipped — it's not a
     // subreddit/competitor-level failure, so the run still records success.
+    expect(recordSuccess).toHaveBeenCalledWith("reddit");
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps a persisted signal recoverable when immediate Redis enqueue fails", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return listingResponse([
+        {
+          id: "111",
+          permalink: "/r/acme/comments/111/thing/",
+          title: "Thing",
+          selftext: "body",
+          created_utc: Math.floor(Date.now() / 1000),
+        },
+      ]);
+    });
+    enqueueInitialSignalPipelineMock.mockResolvedValue("deferred");
+
+    await expect(redditCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(createSignalMock).toHaveBeenCalledTimes(1);
+    expect(enqueueInitialSignalPipelineMock).toHaveBeenCalledWith("s1");
     expect(recordSuccess).toHaveBeenCalledWith("reddit");
     expect(recordFailure).not.toHaveBeenCalled();
   });

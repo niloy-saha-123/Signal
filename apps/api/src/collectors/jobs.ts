@@ -13,36 +13,41 @@
 // current listing and relies entirely on signalExistsBySourceUrl for dedup.
 import type { Job } from "bullmq";
 import * as cheerio from "cheerio";
+import { z } from "zod";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import { listCompetitors, signalExistsBySourceUrl, createSignal } from "../db/queries";
 
 const SOURCE = "jobs" as const;
 const GREENHOUSE_SERVICE = "greenhouse";
 const LEVER_SERVICE = "lever";
 
-interface GreenhouseJob {
-  id: number;
-  title: string;
-  absolute_url: string;
-  content?: string;
-}
+const GreenhouseJobSchema = z.object({
+  id: z.number().int().nonnegative(),
+  title: z.string().trim().min(1),
+  absolute_url: z.string().url(),
+  content: z.string().optional(),
+});
 
-interface GreenhouseJobsResponse {
-  jobs: GreenhouseJob[];
-}
+const GreenhouseJobsResponseSchema = z.object({
+  jobs: z.array(GreenhouseJobSchema),
+});
+type GreenhouseJob = z.infer<typeof GreenhouseJobSchema>;
 
 // Verified against github.com/lever/postings-api (README.md, master) plus
 // independent third-party documentation (fantastic.jobs, atsfeeds.com,
 // parse.bot) — no snippet existed in the skill doc for this one.
-interface LeverPosting {
-  id: string;
-  text: string;
-  hostedUrl: string;
-  descriptionPlain?: string;
-}
+const LeverPostingSchema = z.object({
+  id: z.string().trim().min(1),
+  text: z.string().trim().min(1),
+  hostedUrl: z.string().url(),
+  descriptionPlain: z.string().optional(),
+});
+type LeverPosting = z.infer<typeof LeverPostingSchema>;
+const LeverPostingsResponseSchema = z.array(LeverPostingSchema);
 
 async function fetchGreenhouseJobs(token: string): Promise<GreenhouseJob[]> {
   const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(token)}/jobs`;
@@ -50,8 +55,9 @@ async function fetchGreenhouseJobs(token: string): Promise<GreenhouseJob[]> {
   if (!response.ok) {
     throw new Error(`Greenhouse API returned ${response.status} for board "${token}"`);
   }
-  const data = (await response.json()) as GreenhouseJobsResponse;
-  return data.jobs ?? [];
+  const parsed = GreenhouseJobsResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Greenhouse response was invalid");
+  return parsed.data.jobs;
 }
 
 async function fetchLeverPostings(site: string): Promise<LeverPosting[]> {
@@ -60,8 +66,9 @@ async function fetchLeverPostings(site: string): Promise<LeverPosting[]> {
   if (!response.ok) {
     throw new Error(`Lever API returned ${response.status} for site "${site}"`);
   }
-  const data = (await response.json()) as LeverPosting[];
-  return data ?? [];
+  const parsed = LeverPostingsResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Lever response was invalid");
+  return parsed.data;
 }
 
 async function collectGreenhouse(competitor: { id: string; greenhouse_token: string }): Promise<void> {
@@ -88,9 +95,7 @@ async function collectGreenhouse(competitor: { id: string; greenhouse_token: str
       raw_text: plainContent || job.title || "",
     });
 
-    await withRetry(() =>
-      queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-    );
+    await enqueueInitialSignalPipeline(signal.id);
   }
 }
 
@@ -112,9 +117,7 @@ async function collectLever(competitor: { id: string; lever_token: string }): Pr
       raw_text: posting.descriptionPlain || posting.text || "",
     });
 
-    await withRetry(() =>
-      queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-    );
+    await enqueueInitialSignalPipeline(signal.id);
   }
 }
 

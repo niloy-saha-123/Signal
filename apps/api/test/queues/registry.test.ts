@@ -130,6 +130,7 @@ import {
   connection,
   QUEUE_CONFIG,
   queues,
+  ensureStableJob,
   registerWorker,
   initWorkers,
   type QueueName,
@@ -159,10 +160,124 @@ const OTHER_QUEUES: QueueName[] = [
   "pipeline-entity-extraction",
   "pipeline-quality-scoring",
   "pipeline-deduplication",
+  "pipeline-recovery",
   "analysis",
 ];
 
 describe("queues/registry", () => {
+  describe("ensureStableJob", () => {
+    it("adds an absent job under its stable id", async () => {
+      const queue = { getJob: vi.fn(async () => undefined), add: vi.fn(async () => undefined) };
+
+      await expect(
+        ensureStableJob(queue, { name: "work", data: { signal_id: "s1" }, jobId: "stable-s1" })
+      ).resolves.toBe("added");
+
+      expect(queue.add).toHaveBeenCalledWith(
+        "work",
+        { signal_id: "s1" },
+        { jobId: "stable-s1" }
+      );
+    });
+
+    it.each(["waiting", "delayed", "active", "prioritized", "waiting-children"])(
+      "leaves a healthy %s job unchanged",
+      async (state) => {
+        const retry = vi.fn(async () => undefined);
+        const queue = {
+          getJob: vi.fn(async () => ({ getState: async () => state, retry })),
+          add: vi.fn(async () => undefined),
+        };
+
+        await expect(
+          ensureStableJob(queue, { name: "work", data: {}, jobId: "stable-s1" })
+        ).resolves.toBe("existing");
+        expect(queue.add).not.toHaveBeenCalled();
+        expect(retry).not.toHaveBeenCalled();
+      }
+    );
+
+    it("resets and retries a retained failed job", async () => {
+      const retry = vi.fn(async () => undefined);
+      const queue = {
+        getJob: vi.fn(async () => ({ getState: async () => "failed", retry })),
+        add: vi.fn(async () => undefined),
+      };
+
+      await expect(
+        ensureStableJob(queue, { name: "work", data: {}, jobId: "stable-s1" })
+      ).resolves.toBe("retried");
+      expect(retry).toHaveBeenCalledWith("failed", {
+        resetAttemptsMade: true,
+        resetAttemptsStarted: true,
+      });
+    });
+
+    it("repairs a completed job only when the caller requests it", async () => {
+      const retry = vi.fn(async () => undefined);
+      const queue = {
+        getJob: vi.fn(async () => ({ getState: async () => "completed", retry })),
+        add: vi.fn(async () => undefined),
+      };
+
+      await expect(
+        ensureStableJob(queue, { name: "work", data: {}, jobId: "stable-s1" })
+      ).resolves.toBe("existing");
+      expect(retry).not.toHaveBeenCalled();
+
+      await expect(
+        ensureStableJob(queue, {
+          name: "work",
+          data: {},
+          jobId: "stable-s1",
+          repairCompleted: true,
+        })
+      ).resolves.toBe("retried");
+      expect(retry).toHaveBeenCalledWith("completed", {
+        resetAttemptsMade: true,
+        resetAttemptsStarted: true,
+      });
+    });
+
+    it("re-adds a job whose BullMQ state is unknown", async () => {
+      const queue = {
+        getJob: vi.fn(async () => ({ getState: async () => "unknown", retry: vi.fn() })),
+        add: vi.fn(async () => undefined),
+      };
+
+      await expect(
+        ensureStableJob(queue, { name: "work", data: {}, jobId: "stable-s1" })
+      ).resolves.toBe("added");
+      expect(queue.add).toHaveBeenCalledWith("work", {}, { jobId: "stable-s1" });
+    });
+
+    it.each(["paused", "garbage"])("rejects unsafe job state %s", async (state) => {
+      const queue = {
+        getJob: vi.fn(async () => ({ getState: async () => state, retry: vi.fn() })),
+        add: vi.fn(async () => undefined),
+      };
+
+      await expect(
+        ensureStableJob(queue, { name: "work", data: {}, jobId: "stable-s1" })
+      ).rejects.toThrow(`Unexpected BullMQ job state "${state}"`);
+      expect(queue.add).not.toHaveBeenCalled();
+    });
+
+    it("surfaces Redis lookup errors without adding duplicate work", async () => {
+      const queue = {
+        getJob: vi.fn(async () => {
+          throw new Error("Redis unavailable");
+        }),
+        add: vi.fn(async () => undefined),
+      };
+
+      await expect(
+        ensureStableJob(queue, { name: "work", data: {}, jobId: "stable-s1" })
+      ).rejects.toThrow("Redis unavailable");
+      expect(queue.add).not.toHaveBeenCalled();
+    });
+  });
+
   it("reuses the shared redis connection from lib/redis-client rather than creating a new one", () => {
     expect(connection).toBe(redis);
   });
@@ -190,7 +305,7 @@ describe("queues/registry", () => {
   it("defaults every other queue to concurrency 2, 3 attempts, exponential backoff from 5s", () => {
     for (const name of OTHER_QUEUES) {
       expect(QUEUE_CONFIG[name]).toEqual({
-        concurrency: 2,
+        concurrency: name === "pipeline-recovery" ? 1 : 2,
         attempts: 3,
         backoff: { type: "exponential", delay: 5000 },
         ...(name.startsWith("collect-")

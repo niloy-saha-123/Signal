@@ -1,9 +1,11 @@
 // BullMQ collector — pulls posts/comments from configured subreddits via Reddit's OAuth API every 6h.
 import type { Job } from "bullmq";
+import { z } from "zod";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
   getCompetitorById,
@@ -25,24 +27,25 @@ const SOURCE = "reddit" as const;
 const INITIAL_WINDOW_SECONDS = 7 * 24 * 3600;
 const POSTS_PER_SUBREDDIT = 25;
 
-interface RedditTokenResponse {
-  access_token: string;
-}
+const RedditTokenResponseSchema = z.object({
+  access_token: z.string().trim().min(1),
+});
 
-interface RedditPostData {
-  id: string;
-  permalink: string;
-  title: string;
-  selftext: string;
-  created_utc: number;
-}
+const RedditPostDataSchema = z.object({
+  id: z.string().trim().min(1),
+  permalink: z.string().startsWith("/"),
+  title: z.string(),
+  selftext: z.string(),
+  created_utc: z.number().finite().nonnegative(),
+});
+type RedditPostData = z.infer<typeof RedditPostDataSchema>;
 
-interface RedditListingResponse {
-  data: {
-    children: Array<{ data: RedditPostData }>;
-    after?: string | null;
-  };
-}
+const RedditListingResponseSchema = z.object({
+  data: z.object({
+    children: z.array(z.object({ data: RedditPostDataSchema })),
+    after: z.string().trim().min(1).nullable().optional(),
+  }),
+});
 
 const BACKFILL_PAGE_LIMIT = 10;
 const BACKFILL_POSTS_PER_PAGE = 100;
@@ -65,8 +68,9 @@ async function getRedditAccessToken(): Promise<string> {
   if (!response.ok) {
     throw new Error(`Reddit OAuth token request returned ${response.status}`);
   }
-  const data = (await response.json()) as RedditTokenResponse;
-  return data.access_token;
+  const parsed = RedditTokenResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Reddit OAuth token response was invalid");
+  return parsed.data.access_token;
 }
 
 async function fetchSubredditPosts(
@@ -90,10 +94,11 @@ async function fetchSubredditPosts(
   if (!response.ok) {
     throw new Error(`Reddit API returned ${response.status} for r/${subreddit}`);
   }
-  const data = (await response.json()) as RedditListingResponse;
+  const parsed = RedditListingResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Reddit listing response was invalid");
   return {
-    posts: (data.data?.children ?? []).map((child) => child.data),
-    after: data.data?.after ?? null,
+    posts: parsed.data.data.children.map((child) => child.data),
+    after: parsed.data.data.after ?? null,
   };
 }
 
@@ -166,11 +171,7 @@ async function collectForCompetitor(
               raw_text: rawText,
             });
 
-            await withRetry(() =>
-              queues["pipeline-entity-extraction"].add("extract-entities", {
-                signal_id: signal.id,
-              })
-            );
+            await enqueueInitialSignalPipeline(signal.id);
           } catch (err) {
             logger.error("reddit collector failed to process one item — continuing with the rest", {
               competitor_id: competitor.id,

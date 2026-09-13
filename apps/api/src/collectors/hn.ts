@@ -1,9 +1,11 @@
 // BullMQ collector — pulls competitor mentions from the Algolia HN API every 6h.
 import type { Job } from "bullmq";
+import { z } from "zod";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
   getCompetitorById,
@@ -24,20 +26,21 @@ const SOURCE = "hn" as const;
 // reasonable initial window instead of the entire HN history.
 const INITIAL_WINDOW_SECONDS = 7 * 24 * 3600;
 
-interface AlgoliaHnHit {
-  objectID: string;
-  created_at_i: number;
-  comment_text?: string | null;
-  story_text?: string | null;
-  story_title?: string | null;
-  title?: string | null;
-}
+const AlgoliaHnHitSchema = z.object({
+  objectID: z.string().trim().min(1),
+  created_at_i: z.number().finite().nonnegative(),
+  comment_text: z.string().nullable().optional(),
+  story_text: z.string().nullable().optional(),
+  story_title: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+});
 
-interface AlgoliaHnResponse {
-  hits: AlgoliaHnHit[];
-  page?: number;
-  nbPages?: number;
-}
+const AlgoliaHnResponseSchema = z.object({
+  hits: z.array(AlgoliaHnHitSchema),
+  page: z.number().int().nonnegative().optional(),
+  nbPages: z.number().int().nonnegative().optional(),
+});
+type AlgoliaHnResponse = z.infer<typeof AlgoliaHnResponseSchema>;
 
 const BACKFILL_PAGE_LIMIT = 10;
 const BACKFILL_HITS_PER_PAGE = 100;
@@ -66,8 +69,9 @@ async function searchHn(
   if (!response.ok) {
     throw new Error(`Algolia HN API returned ${response.status} for query "${competitorName}"`);
   }
-  const data = (await response.json()) as AlgoliaHnResponse;
-  return data;
+  const parsed = AlgoliaHnResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Algolia HN response was invalid");
+  return parsed.data;
 }
 
 async function collectForCompetitor(
@@ -96,6 +100,7 @@ async function collectForCompetitor(
     advertisedPages = Math.max(response.nbPages ?? 1, 1);
 
     for (const hit of hits) {
+      if (hit.created_at_i <= sinceUnixSeconds) continue;
       if (untilUnixSeconds !== undefined && hit.created_at_i > untilUnixSeconds) continue;
       const rawText = hit.comment_text ?? hit.story_text ?? "";
       if (!rawText) continue;
@@ -119,9 +124,7 @@ async function collectForCompetitor(
           raw_text: rawText,
         });
 
-        await withRetry(() =>
-          queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-        );
+        await enqueueInitialSignalPipeline(signal.id);
       } catch (err) {
         logger.error("hn collector failed to process one item — continuing with the rest", {
           competitor_id: competitor.id,

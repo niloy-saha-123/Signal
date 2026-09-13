@@ -89,8 +89,14 @@ export function collectorSchedulerId(queueName: QueueName): string {
   return `signal:collector:${queueName}:v1`;
 }
 
+export const PIPELINE_RECOVERY_CRON = "*/2 * * * *";
+export const PIPELINE_RECOVERY_SCHEDULER_ID = "signal-pipeline-recovery-v1";
+
 export async function registerCollectorSchedules(
-  queueMap: Pick<typeof queues, (typeof COLLECTOR_QUEUE_NAMES)[number]> = queues
+  queueMap: Pick<
+    typeof queues,
+    (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery"
+  > = queues
 ): Promise<void> {
   const config = getCollectorScheduleConfig();
   await Promise.all(
@@ -103,5 +109,10 @@ export async function registerCollectorSchedules(
         { name: queueName, data: {} }
       );
     })
+  );
+  await queueMap["pipeline-recovery"].upsertJobScheduler(
+    PIPELINE_RECOVERY_SCHEDULER_ID,
+    { pattern: PIPELINE_RECOVERY_CRON },
+    { name: "pipeline-recovery", data: {} }
   );
 }

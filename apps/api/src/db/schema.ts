@@ -107,6 +107,37 @@ export const signalsTable = pgTable(
   ]
 );
 
+export const SIGNAL_PIPELINE_STAGES = [
+  "entity_extraction",
+  "quality_scoring",
+  "deduplication",
+] as const;
+export type SignalPipelineStage = (typeof SIGNAL_PIPELINE_STAGES)[number];
+
+// Durable intent for every persisted signal. The signal UUID is both the primary
+// key and the FK, enforcing exactly one pending pipeline position per signal.
+export const signalPipelineOutboxTable = pgTable(
+  "signal_pipeline_outbox",
+  {
+    signal_id: uuid("signal_id")
+      .primaryKey()
+      .references(() => signalsTable.id, { onDelete: "cascade" }),
+    stage: text("stage")
+      .$type<SignalPipelineStage>()
+      .notNull()
+      .default("entity_extraction"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "signal_pipeline_outbox_stage_check",
+      sql`${table.stage} IN ('entity_extraction', 'quality_scoring', 'deduplication')`
+    ),
+    index("signal_pipeline_outbox_created_at_idx").on(table.created_at),
+  ]
+);
+
 // ── signal_clusters ──────────────────────────────────────────────────────
 // Deduplicated signal groups. SemanticDeduplicator merges a new signal into
 // an existing cluster (>=0.88 cosine similarity) instead of creating one.

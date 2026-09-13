@@ -37,7 +37,7 @@ export type BackfillPlan = {
   dry_run: boolean;
 };
 
-type AddJob = (
+type EnsureBackfillJob = (
   name: string,
   data: CollectorJobData,
   options: { jobId: string }
@@ -47,8 +47,8 @@ export type BackfillDeps = {
   getCompetitorById: (
     id: string
   ) => Promise<{ id: string; is_active: boolean } | undefined>;
-  addRedditJob: AddJob;
-  addHnJob: AddJob;
+  ensureRedditJob: EnsureBackfillJob;
+  ensureHnJob: EnsureBackfillJob;
   now: () => Date;
 };
 
@@ -96,7 +96,12 @@ export function planBackfill(input: BackfillInput, now: Date): BackfillPlan {
 }
 
 async function loadDefaultDeps(): Promise<BackfillDeps> {
-  const [{ getCompetitorById }, { queues }, { closeDatabase }, { closeRedisConnections }] =
+  const [
+    { getCompetitorById },
+    { queues, ensureStableJob },
+    { closeDatabase },
+    { closeRedisConnections },
+  ] =
     await Promise.all([
       import("../src/db/queries.js"),
       import("../src/queues/registry.js"),
@@ -110,9 +115,18 @@ async function loadDefaultDeps(): Promise<BackfillDeps> {
   };
   return {
     getCompetitorById,
-    addRedditJob: (name, data, options) =>
-      queues["collect-reddit"].add(name, data, options),
-    addHnJob: (name, data, options) => queues["collect-hn"].add(name, data, options),
+    ensureRedditJob: (name, data, options) =>
+      ensureStableJob(queues["collect-reddit"], {
+        name,
+        data,
+        jobId: options.jobId,
+      }),
+    ensureHnJob: (name, data, options) =>
+      ensureStableJob(queues["collect-hn"], {
+        name,
+        data,
+        jobId: options.jobId,
+      }),
     now: () => new Date(),
   };
 }
@@ -140,8 +154,9 @@ export async function runBackfill(
 
   await Promise.all(
     plan.jobs.map((job) => {
-      const addJob = job.source === "reddit" ? deps.addRedditJob : deps.addHnJob;
-      return addJob(
+      const ensureJob =
+        job.source === "reddit" ? deps.ensureRedditJob : deps.ensureHnJob;
+      return ensureJob(
         "backfill",
         {
           backfill: {

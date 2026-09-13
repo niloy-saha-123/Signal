@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getSignalByIdMock, updateSignalEntitiesMock } = vi.hoisted(() => ({
+const { getSignalByIdMock, updateSignalEntitiesMock, advanceSignalPipelineOutboxMock } = vi.hoisted(() => ({
   getSignalByIdMock: vi.fn(),
   updateSignalEntitiesMock: vi.fn().mockResolvedValue(undefined),
+  advanceSignalPipelineOutboxMock: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("@/db/queries", () => ({
   getSignalById: getSignalByIdMock,
   updateSignalEntities: updateSignalEntitiesMock,
+  advanceSignalPipelineOutbox: advanceSignalPipelineOutboxMock,
 }));
 
 const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
@@ -18,6 +20,13 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-quality-scoring": { add: queueAddMock } },
+}));
+
+const { ensureSignalPipelineJobMock } = vi.hoisted(() => ({
+  ensureSignalPipelineJobMock: vi.fn(),
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  ensureSignalPipelineJob: ensureSignalPipelineJobMock,
 }));
 
 const { selectModelMock, getDailyBudgetMock } = vi.hoisted(() => ({
@@ -121,6 +130,11 @@ describe("pipeline/entity-extractor", () => {
     trackCostMock.mockResolvedValue(0);
     updateSignalEntitiesMock.mockResolvedValue(undefined);
     queueAddMock.mockResolvedValue(undefined);
+    advanceSignalPipelineOutboxMock.mockResolvedValue(true);
+    ensureSignalPipelineJobMock.mockImplementation(async (_stage: string, signalId: string) => {
+      await queueAddMock("score-quality", { signal_id: signalId });
+      return "added";
+    });
     invokeMock.mockResolvedValue(invokeResult());
     trackLatencyMock.mockImplementation((_a: string, _c: string, _r: string, fn: () => unknown) => fn());
   });
@@ -244,45 +258,62 @@ describe("pipeline/entity-extractor", () => {
     expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
   });
 
+  it("advances durable stage before attempting the next enqueue", async () => {
+    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(advanceSignalPipelineOutboxMock).toHaveBeenCalledWith(
+      "s1",
+      "entity_extraction",
+      "quality_scoring"
+    );
+    expect(advanceSignalPipelineOutboxMock.mock.invocationCallOrder[0]).toBeLessThan(
+      ensureSignalPipelineJobMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("leaves the advanced outbox recoverable when next-stage enqueue fails", async () => {
+    ensureSignalPipelineJobMock.mockRejectedValueOnce(new Error("Redis unavailable"));
+
+    await expect(
+      entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
+    ).rejects.toThrow("Redis unavailable");
+
+    expect(advanceSignalPipelineOutboxMock).toHaveBeenCalledWith(
+      "s1",
+      "entity_extraction",
+      "quality_scoring"
+    );
+  });
+
   // withStructuredOutput({ includeRaw: true }) resolves { parsed: null } on a Zod
   // validation failure rather than throwing, while the TS type still claims
   // SignalEntities — writing that through would set entities to NULL silently.
-  it("never writes a null parse to the signal, and logs it", async () => {
+  it("retains the entity-extraction stage when structured output is invalid", async () => {
     invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
 
     await expect(
       entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("schema validation");
 
     expect(updateSignalEntitiesMock).not.toHaveBeenCalled();
+    expect(advanceSignalPipelineOutboxMock).not.toHaveBeenCalled();
+    expect(ensureSignalPipelineJobMock).not.toHaveBeenCalled();
     expect(loggerMock.error).toHaveBeenCalledWith(
       expect.stringContaining("schema validation"),
       expect.objectContaining({ signal_id: "s1" })
     );
   });
 
-  it("still advances the pipeline after a null parse", async () => {
-    invokeMock.mockResolvedValue(invokeResult({ parsed: null }));
-
-    await entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
-
-    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
-  });
-
-  // Extraction is enrichment; quality-scoring and Pinecone indexing downstream are not.
-  it("logs and still enqueues quality-scoring when the LLM call throws", async () => {
+  it("retains the entity-extraction stage when the LLM call throws", async () => {
     invokeMock.mockRejectedValue(new Error("openai is down"));
 
     await expect(
       entityExtractorProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("openai is down");
 
     expect(updateSignalEntitiesMock).not.toHaveBeenCalled();
-    expect(queueAddMock).toHaveBeenCalledWith("score-quality", { signal_id: "s1" });
-    expect(loggerMock.error).toHaveBeenCalledWith(
-      expect.stringContaining("advancing pipeline"),
-      expect.objectContaining({ signal_id: "s1", error: "openai is down" })
-    );
+    expect(advanceSignalPipelineOutboxMock).not.toHaveBeenCalled();
+    expect(ensureSignalPipelineJobMock).not.toHaveBeenCalled();
   });
 
   it("skips the LLM entirely once the daily budget is spent, but still enqueues quality-scoring", async () => {
