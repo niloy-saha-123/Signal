@@ -28,6 +28,7 @@ export interface ChatRouterDeps {
   createAgentRun: typeof queries.createAgentRun;
   completeAgentRun: typeof queries.completeAgentRun;
   runChatAgent: typeof runChatAgentImpl;
+  finalizeRunTimeoutMs: number;
 }
 
 export const defaultChatRouterDeps: ChatRouterDeps = {
@@ -35,6 +36,7 @@ export const defaultChatRouterDeps: ChatRouterDeps = {
   createAgentRun: queries.createAgentRun,
   completeAgentRun: queries.completeAgentRun,
   runChatAgent: runChatAgentImpl,
+  finalizeRunTimeoutMs: 5_000,
 };
 
 const HEARTBEAT_MS = 15_000;
@@ -117,13 +119,32 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
       const settleRun = async (status: "completed" | "failed"): Promise<void> => {
         if (runSettled) return;
         runSettled = true;
-        try {
-          await deps.completeAgentRun(run.id, status);
-        } catch (err) {
+        let timeoutHandle: NodeJS.Timeout | undefined;
+        const finalization = deps.completeAgentRun(run.id, status).then(
+          () => ({ kind: "completed" as const }),
+          (error: unknown) => ({ kind: "failed" as const, error })
+        );
+        const deadline = new Promise<{ kind: "timed_out" }>((resolve) => {
+          timeoutHandle = setTimeout(
+            () => resolve({ kind: "timed_out" }),
+            deps.finalizeRunTimeoutMs
+          );
+          timeoutHandle.unref();
+        });
+        const outcome = await Promise.race([finalization, deadline]);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+
+        if (outcome.kind === "failed") {
           logger.error("chat: failed to finalize agent run", {
             run_id: run.id,
             status,
-            error: err instanceof Error ? err.message : String(err),
+            error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+          });
+        } else if (outcome.kind === "timed_out") {
+          logger.error("chat: agent run finalization timed out", {
+            run_id: run.id,
+            status,
+            timeout_ms: deps.finalizeRunTimeoutMs,
           });
         }
       };

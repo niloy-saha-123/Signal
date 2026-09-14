@@ -3,10 +3,18 @@ import type { AddressInfo } from "node:net";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 
-const { closeQueueMock, closeRedisMock, closeDatabaseMock } = vi.hoisted(() => ({
+const {
+  closeQueueMock,
+  closeRedisMock,
+  closeDatabaseMock,
+  checkDatabaseReadinessMock,
+  checkRedisReadinessMock,
+} = vi.hoisted(() => ({
   closeQueueMock: vi.fn().mockResolvedValue(undefined),
   closeRedisMock: vi.fn().mockResolvedValue(undefined),
   closeDatabaseMock: vi.fn().mockResolvedValue(undefined),
+  checkDatabaseReadinessMock: vi.fn().mockResolvedValue(undefined),
+  checkRedisReadinessMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/queues/registry", () => ({
@@ -15,8 +23,14 @@ vi.mock("@/queues/registry", () => ({
     "collect-reddit": { close: closeQueueMock },
   },
 }));
-vi.mock("@/lib/redis-client", () => ({ closeRedisConnections: closeRedisMock }));
-vi.mock("@/db/client", () => ({ closeDatabase: closeDatabaseMock }));
+vi.mock("@/lib/redis-client", () => ({
+  closeRedisConnections: closeRedisMock,
+  checkRedisReadiness: checkRedisReadinessMock,
+}));
+vi.mock("@/db/client", () => ({
+  closeDatabase: closeDatabaseMock,
+  checkDatabaseReadiness: checkDatabaseReadinessMock,
+}));
 vi.mock("@/api/competitors", () => ({ createCompetitorRouter: () => express.Router() }));
 vi.mock("@/api/signals", () => ({ createSignalRouter: () => express.Router() }));
 vi.mock("@/api/alerts", () => ({ createAlertRouter: () => express.Router() }));
@@ -26,7 +40,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { apiErrorHandler, createApiApp, createApiRuntime, validateApiEnvironment } from "@/api/index";
+import { apiErrorHandler, createApiApp, createApiRuntime, startApiFromEnvironment, validateApiEnvironment } from "@/api/index";
 
 class FakeServer extends EventEmitter {
   listening = false;
@@ -60,6 +74,16 @@ describe("API runtime", () => {
     ).toEqual({ port: 4100 });
   });
 
+  it("requires an exact production acknowledgement for the unauthenticated API", () => {
+    const base = { DATABASE_URL: "postgres://db", REDIS_URL: "redis://cache", NODE_ENV: "production" };
+    expect(() => validateApiEnvironment(base)).toThrow(/ALLOW_UNAUTHENTICATED_API/);
+    expect(() => validateApiEnvironment({ ...base, ALLOW_UNAUTHENTICATED_API: "TRUE" })).toThrow(
+      /ALLOW_UNAUTHENTICATED_API/
+    );
+    expect(validateApiEnvironment({ ...base, ALLOW_UNAUTHENTICATED_API: "true" })).toEqual({ port: 3000 });
+    expect(validateApiEnvironment({ ...base, NODE_ENV: "development" })).toEqual({ port: 3000 });
+  });
+
   it("mounts a bounded JSON parser and liveness route", () => {
     const app = createApiApp();
     expect(app).toBeDefined();
@@ -85,6 +109,114 @@ describe("API runtime", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("keeps liveness independent and reports bounded dependency readiness", async () => {
+    const app = createApiApp({
+      checkDatabase: vi.fn().mockResolvedValue(undefined),
+      checkRedis: vi.fn().mockRejectedValue(new Error("redis://secret@cache unavailable")),
+      readinessTimeoutMs: 10,
+    });
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      expect((await fetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
+      const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+      expect(ready.status).toBe(503);
+      expect(await ready.json()).toEqual({ status: "unavailable" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("reports ready only after both dependency probes succeed", async () => {
+    const checkDatabase = vi.fn().mockResolvedValue(undefined);
+    const checkRedis = vi.fn().mockResolvedValue(undefined);
+    const app = createApiApp({ checkDatabase, checkRedis, readinessTimeoutMs: 10 });
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+      expect(ready.status).toBe(200);
+      expect(await ready.json()).toEqual({ status: "ready" });
+      expect(checkDatabase).toHaveBeenCalledTimes(1);
+      expect(checkRedis).toHaveBeenCalledTimes(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("times readiness out instead of hanging", async () => {
+    let databaseAborted = false;
+    const app = createApiApp({
+      checkDatabase: ({ signal }) =>
+        new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            databaseAborted = true;
+            reject(signal.reason);
+          });
+        }),
+      checkRedis: vi.fn().mockResolvedValue(undefined),
+      readinessTimeoutMs: 5,
+    });
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+      expect(ready.status).toBe(503);
+      expect(databaseAborted).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("uses resource-owned bounded readiness probes by default", async () => {
+    const app = createApiApp({ readinessTimeoutMs: 25 });
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+      expect(ready.status).toBe(200);
+      expect(checkDatabaseReadinessMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 25, signal: expect.any(AbortSignal) })
+      );
+      expect(checkRedisReadinessMock).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutMs: 25, signal: expect.any(AbortSignal) })
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("closes an owned runtime when production validation fails", async () => {
+    const runtime = { start: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+    await expect(
+      startApiFromEnvironment(
+        { DATABASE_URL: "postgres://db", REDIS_URL: "redis://cache", NODE_ENV: "production" },
+        { createRuntime: () => runtime as never }
+      )
+    ).rejects.toThrow(/ALLOW_UNAUTHENTICATED_API/);
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runtime.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes an owned runtime when server startup fails", async () => {
+    const runtime = {
+      start: vi.fn().mockRejectedValue(new Error("listen failed")),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    await expect(
+      startApiFromEnvironment(
+        {
+          DATABASE_URL: "postgres://db",
+          REDIS_URL: "redis://cache",
+          NODE_ENV: "production",
+          ALLOW_UNAUTHENTICATED_API: "true",
+        },
+        { createRuntime: () => runtime as never }
+      )
+    ).rejects.toThrow("listen failed");
+    expect(runtime.close).toHaveBeenCalledTimes(1);
   });
 
   it("maps parser size and syntax failures without leaking internals", () => {

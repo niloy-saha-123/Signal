@@ -9,8 +9,8 @@
 // P50/P95 tracked via latency-tracker.ts.
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, PatternsResult } from "../../graph/state";
+import { PatternsSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getSignalVolumeByDay, getFirstSignalCollectedAt, type SignalVolumeByDay } from "../../db/queries";
@@ -43,11 +43,6 @@ const PHASE_2_MIN_HISTORY_MS = PHASE_2_MIN_HISTORY_DAYS * 24 * 60 * 60 * 1000;
 // hybridRetrieve's topK per the Part-10 spec — deliberately not reranked/truncated
 // downstream (see file header).
 const PHASE_2_RETRIEVAL_TOP_K = 150;
-
-const PatternsSchema = z.object({
-  summary: z.string(),
-  trend: z.enum(["increasing", "decreasing", "stable"]),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following signal volume trend for a competitor over the last 30 days. If " +
@@ -109,8 +104,10 @@ export async function patternDetectorNode(
     // paths can skip the LLM call while keeping Phase 1/2 inside the measured span.
     const outcome = await trackLatency(
       AGENT_NAME,
-      state.competitor_id,
-      state.run_id,
+      {
+        competitorId: state.competitor_id,
+        identity: { kind: "run", runId: state.run_id },
+      },
       async (): Promise<
         | { kind: "empty" }
         | { kind: "budget" }
@@ -180,8 +177,10 @@ export async function patternDetectorNode(
       outcome.model,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      {
+        competitorId: state.competitor_id,
+        identity: { kind: "run", runId: state.run_id },
+      }
     );
 
     // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
@@ -193,7 +192,7 @@ export async function patternDetectorNode(
       logger.error("pattern-detector: structured output failed schema validation", {
         competitor_id: state.competitor_id,
         run_id: state.run_id,
-        raw_content: (outcome.raw as AIMessage)?.content,
+        failure: "invalid_structured_output",
       });
       throw new Error(
         `pattern-detector: structured output failed schema validation for competitor ${state.competitor_id}`

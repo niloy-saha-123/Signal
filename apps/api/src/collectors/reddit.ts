@@ -1,15 +1,24 @@
 // BullMQ collector — pulls posts/comments from configured subreddits via Reddit's OAuth API every 6h.
 import type { Job } from "bullmq";
+import { z } from "zod";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
+  getCompetitorById,
   getLatestSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
 } from "../db/queries";
+import {
+  CollectorJobDataSchema,
+  resolveCollectorCompetitors,
+  type CollectorJobData,
+  type HistoricalCollectionWindow,
+} from "./job-data";
 
 const SERVICE_NAME = "reddit";
 const SOURCE = "reddit" as const;
@@ -18,23 +27,28 @@ const SOURCE = "reddit" as const;
 const INITIAL_WINDOW_SECONDS = 7 * 24 * 3600;
 const POSTS_PER_SUBREDDIT = 25;
 
-interface RedditTokenResponse {
-  access_token: string;
-}
+const RedditTokenResponseSchema = z.object({
+  access_token: z.string().trim().min(1),
+});
 
-interface RedditPostData {
-  id: string;
-  permalink: string;
-  title: string;
-  selftext: string;
-  created_utc: number;
-}
+const RedditPostDataSchema = z.object({
+  id: z.string().trim().min(1),
+  permalink: z.string().startsWith("/"),
+  title: z.string(),
+  selftext: z.string(),
+  created_utc: z.number().finite().nonnegative(),
+});
+type RedditPostData = z.infer<typeof RedditPostDataSchema>;
 
-interface RedditListingResponse {
-  data: {
-    children: Array<{ data: RedditPostData }>;
-  };
-}
+const RedditListingResponseSchema = z.object({
+  data: z.object({
+    children: z.array(z.object({ data: RedditPostDataSchema })),
+    after: z.string().trim().min(1).nullable().optional(),
+  }),
+});
+
+const BACKFILL_PAGE_LIMIT = 10;
+const BACKFILL_POSTS_PER_PAGE = 100;
 
 // Reddit tokens are valid for ~1 hour — the caller fetches this once per job
 // run and reuses it across every competitor/subreddit instead of re-auth'ing
@@ -54,12 +68,22 @@ async function getRedditAccessToken(): Promise<string> {
   if (!response.ok) {
     throw new Error(`Reddit OAuth token request returned ${response.status}`);
   }
-  const data = (await response.json()) as RedditTokenResponse;
-  return data.access_token;
+  const parsed = RedditTokenResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Reddit OAuth token response was invalid");
+  return parsed.data.access_token;
 }
 
-async function fetchSubredditPosts(subreddit: string, token: string): Promise<RedditPostData[]> {
-  const url = `https://oauth.reddit.com/r/${encodeURIComponent(subreddit)}/new.json?limit=${POSTS_PER_SUBREDDIT}`;
+async function fetchSubredditPosts(
+  subreddit: string,
+  token: string,
+  limit: number,
+  after?: string
+): Promise<{ posts: RedditPostData[]; after: string | null }> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    ...(after === undefined ? {} : { after }),
+  });
+  const url = `https://oauth.reddit.com/r/${encodeURIComponent(subreddit)}/new.json?${params.toString()}`;
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -70,20 +94,34 @@ async function fetchSubredditPosts(subreddit: string, token: string): Promise<Re
   if (!response.ok) {
     throw new Error(`Reddit API returned ${response.status} for r/${subreddit}`);
   }
-  const data = (await response.json()) as RedditListingResponse;
-  return (data.data?.children ?? []).map((child) => child.data);
+  const parsed = RedditListingResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Reddit listing response was invalid");
+  return {
+    posts: parsed.data.data.children.map((child) => child.data),
+    after: parsed.data.data.after ?? null,
+  };
 }
 
 async function collectForCompetitor(
   competitor: { id: string; name: string; subreddits: string[] },
-  token: string
+  token: string,
+  backfill?: HistoricalCollectionWindow
 ): Promise<void> {
   if (competitor.subreddits.length === 0) return;
 
-  const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, SOURCE);
-  const sinceUnixSeconds = lastCollectedAt
-    ? Math.floor(lastCollectedAt.getTime() / 1000)
-    : Math.floor(Date.now() / 1000) - INITIAL_WINDOW_SECONDS;
+  const lastCollectedAt = backfill
+    ? undefined
+    : await getLatestSignalCollectedAt(competitor.id, SOURCE);
+  const sinceUnixSeconds = backfill
+    ? Math.floor(Date.parse(backfill.since) / 1000)
+    : lastCollectedAt
+      ? Math.floor(lastCollectedAt.getTime() / 1000)
+      : Math.floor(Date.now() / 1000) - INITIAL_WINDOW_SECONDS;
+  const untilUnixSeconds = backfill
+    ? Math.floor(Date.parse(backfill.until) / 1000)
+    : undefined;
+  const pageLimit = backfill ? BACKFILL_PAGE_LIMIT : 1;
+  const postsPerPage = backfill ? BACKFILL_POSTS_PER_PAGE : POSTS_PER_SUBREDDIT;
 
   // subreddits is auto-discovered (per CLAUDE.md), so a stale/banned/private/
   // typo'd entry is a realistic failure mode — one bad subreddit must not
@@ -96,43 +134,66 @@ async function collectForCompetitor(
 
   for (const subreddit of competitor.subreddits) {
     try {
-      const posts = await withRetry(() => fetchSubredditPosts(subreddit, token));
+      let after: string | undefined;
+      let truncated = false;
 
-      for (const post of posts) {
-        if (post.created_utc <= sinceUnixSeconds) continue;
+      for (let page = 0; page < pageLimit; page += 1) {
+        const listing = await withRetry(() =>
+          fetchSubredditPosts(subreddit, token, postsPerPage, after)
+        );
+        const posts = listing.posts;
 
-        const rawText = post.selftext || post.title || "";
-        if (!rawText) continue;
+        for (const post of posts) {
+          if (post.created_utc <= sinceUnixSeconds) continue;
+          if (untilUnixSeconds !== undefined && post.created_utc > untilUnixSeconds) continue;
 
-        const sourceUrl = `https://www.reddit.com${post.permalink}`;
+          const rawText = post.selftext || post.title || "";
+          if (!rawText) continue;
 
-        // One post throwing (dedup check, insert, or enqueue) must not abort
-        // the rest of this subreddit's batch — same isolation one level up
-        // as the per-subreddit loop, just per-item here.
-        try {
-          const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
-          if (alreadyCollected) continue;
+          const sourceUrl = `https://www.reddit.com${post.permalink}`;
 
-          const signal = await createSignal({
-            competitor_id: competitor.id,
-            source: SOURCE,
-            source_url: sourceUrl,
-            title: post.title ?? null,
-            raw_text: rawText,
-          });
+          // One post throwing (dedup check, insert, or enqueue) must not abort
+          // the rest of this subreddit's batch — same isolation one level up
+          // as the per-subreddit loop, just per-item here.
+          try {
+            const alreadyCollected = await signalExistsBySourceUrl(
+              competitor.id,
+              SOURCE,
+              sourceUrl
+            );
+            if (alreadyCollected) continue;
 
-          await withRetry(() =>
-            queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-          );
-        } catch (err) {
-          logger.error("reddit collector failed to process one item — continuing with the rest", {
-            competitor_id: competitor.id,
-            competitor_name: competitor.name,
-            subreddit,
-            reddit_post_id: post.id,
-            error: err instanceof Error ? err.message : String(err),
-          });
+            const signal = await createSignal({
+              competitor_id: competitor.id,
+              source: SOURCE,
+              source_url: sourceUrl,
+              title: post.title ?? null,
+              raw_text: rawText,
+            });
+
+            await enqueueInitialSignalPipeline(signal.id);
+          } catch (err) {
+            logger.error("reddit collector failed to process one item — continuing with the rest", {
+              competitor_id: competitor.id,
+              competitor_name: competitor.name,
+              subreddit,
+              reddit_post_id: post.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
+
+        after = listing.after ?? undefined;
+        if (!after) break;
+        truncated = page + 1 === pageLimit;
+      }
+
+      if (truncated) {
+        logger.warn("Reddit backfill reached its page cap; results are truncated", {
+          competitor_id: competitor.id,
+          subreddit,
+          processed_pages: pageLimit,
+        });
       }
     } catch (err) {
       failedSubreddits.push(subreddit);
@@ -152,10 +213,6 @@ async function collectForCompetitor(
   }
 }
 
-interface RedditCollectJobData {
-  // No fields needed — every run sweeps all active competitors.
-}
-
 async function recordCircuitFailure(err: unknown): Promise<void> {
   try {
     await recordFailure(SERVICE_NAME, err instanceof Error ? err.message : String(err));
@@ -166,13 +223,19 @@ async function recordCircuitFailure(err: unknown): Promise<void> {
   }
 }
 
-export async function redditCollectorProcessor(_job: Job<RedditCollectJobData>): Promise<void> {
+export async function redditCollectorProcessor(_job: Job<CollectorJobData>): Promise<void> {
+  const jobData = CollectorJobDataSchema.parse(_job.data ?? {});
   if (await isCircuitOpen(SERVICE_NAME)) {
     throw new Error(`${SERVICE_NAME} circuit is open — skipping job`);
   }
 
+  let circuitFailureRecorded = false;
   try {
-    const competitors = (await listCompetitors()).filter((c) => c.is_active);
+    const competitors = await resolveCollectorCompetitors(
+      jobData,
+      listCompetitors,
+      getCompetitorById
+    );
     // Fetched once, outside the per-competitor loop, so a token-request
     // failure is a job-level failure (like listCompetitors() failing below)
     // rather than something silently retried per competitor.
@@ -206,7 +269,7 @@ export async function redditCollectorProcessor(_job: Job<RedditCollectJobData>):
       }
 
       try {
-        await collectForCompetitor(competitor, token);
+        await collectForCompetitor(competitor, token, jobData.backfill);
       } catch (err) {
         hadFailure = true;
         logger.error("reddit collector failed for one competitor — continuing with the rest", {
@@ -215,6 +278,11 @@ export async function redditCollectorProcessor(_job: Job<RedditCollectJobData>):
           error: err instanceof Error ? err.message : String(err),
         });
         await recordCircuitFailure(err);
+        circuitFailureRecorded = true;
+        // Scheduled sweeps retain their established per-competitor isolation.
+        // A scoped backfill has no other competitor to save, so rejecting is
+        // required for BullMQ to retry its bounded, idempotent work.
+        if (jobData.backfill) throw err;
       }
     }
 
@@ -225,7 +293,7 @@ export async function redditCollectorProcessor(_job: Job<RedditCollectJobData>):
     // Failure outside the per-competitor loop (e.g. listCompetitors() or the
     // OAuth token request itself) — a real job-level failure, not one
     // competitor's problem, so this one still rethrows.
-    await recordCircuitFailure(err);
+    if (!circuitFailureRecorded) await recordCircuitFailure(err);
     throw err;
   }
 }

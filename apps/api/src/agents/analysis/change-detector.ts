@@ -2,8 +2,8 @@
 // but short-circuits to a no-op (no DB call, no LLM call) unless state.has_pricing_diff is set.
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, PricingChangeResult } from "../../graph/state";
+import { PricingChangeSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getRecentPricingDiffs, type PricingDiff, type PricingSignificance } from "../../db/queries";
@@ -59,12 +59,6 @@ function narrowDiffPayload(diff: Record<string, unknown>): { added: string[]; re
     removed: isStringArray(diff.removed) ? diff.removed : [],
   };
 }
-
-const PricingChangeSchema = z.object({
-  summary: z.string(),
-  old_price: z.string().nullable(),
-  new_price: z.string().nullable(),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following pricing page diff for a competitor — lines added and removed " +
@@ -129,7 +123,11 @@ export async function changeDetectorNode(
       includeRaw: true,
     });
 
-    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+    const telemetryContext = {
+      competitorId: state.competitor_id,
+      identity: { kind: "run" as const, runId: state.run_id },
+    };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       structuredModel.invoke([
         ["system", systemPrompt],
         ["human", buildDiffText(diffPayload)],
@@ -143,8 +141,7 @@ export async function changeDetectorNode(
       model,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      telemetryContext
     );
 
     // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
@@ -156,7 +153,7 @@ export async function changeDetectorNode(
       logger.error("change-detector: structured output failed schema validation", {
         competitor_id: state.competitor_id,
         run_id: state.run_id,
-        raw_content: (raw as AIMessage)?.content,
+        failure: "invalid_structured_output",
       });
       throw new Error(
         `change-detector: structured output failed schema validation for competitor ${state.competitor_id}`

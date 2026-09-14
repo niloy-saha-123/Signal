@@ -17,6 +17,9 @@ const {
   updateWhereMock,
   updateReturningMock,
   transactionMock,
+  deleteMock,
+  deleteWhereMock,
+  deleteReturningMock,
 } = vi.hoisted(() => ({
   selectMock: vi.fn(),
   fromMock: vi.fn(),
@@ -34,6 +37,9 @@ const {
   updateWhereMock: vi.fn(),
   updateReturningMock: vi.fn(),
   transactionMock: vi.fn(),
+  deleteMock: vi.fn(),
+  deleteWhereMock: vi.fn(),
+  deleteReturningMock: vi.fn(),
 }));
 
 vi.mock("@/db/client", () => ({
@@ -41,6 +47,7 @@ vi.mock("@/db/client", () => ({
     select: selectMock,
     insert: insertMock,
     update: updateMock,
+    delete: deleteMock,
     transaction: transactionMock,
   },
 }));
@@ -61,6 +68,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
 
 import type { CompetitorDiscoveryResult } from "@signal/shared";
 import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
   competitorsTable,
   competitorDiscoveryLogTable,
@@ -73,6 +81,12 @@ import {
   companyProfileTable,
   pricingBaselinesTable,
   pricingDiffsTable,
+  llmCostsTable,
+  signalPipelineOutboxTable,
+  promptVersionsTable,
+  agentTestCasesTable,
+  ragEvalDatasetTable,
+  ragEvalRunsTable,
 } from "@/db/schema";
 import {
   createCompetitor,
@@ -88,6 +102,8 @@ import {
   getLatestSignalScores,
   createSignalScore,
   getLatencyPercentiles,
+  getAgentLatencyReport,
+  getCostByCompetitorDay,
   getCompanyProfile,
   upsertCompanyProfile,
   getLatestSignalCollectedAt,
@@ -104,6 +120,7 @@ import {
   getSignalById,
   updateSignalEntities,
   updateSignalQualityScore,
+  scoreSignalAndAdvanceOutbox,
   createClusterForSignalPair,
   getSignalClusterById,
   mergeSignalIntoCluster,
@@ -111,6 +128,19 @@ import {
   failRunIfRunning,
   createAgentRun,
   finalizeDiscovery,
+  listPendingSignalPipelineOutbox,
+  advanceSignalPipelineOutbox,
+  completeSignalPipelineOutbox,
+  getPromptVersion,
+  listAgentTestCases,
+  promotePromptVersion,
+  seedRagEvalDataset,
+  RagEvalSeedConflictError,
+  RagEvalSeedReferenceError,
+  listRagEvalCases,
+  getRagEvalCitationSignals,
+  persistRagEvaluation,
+  RagEvalDatasetIntegrityError,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -265,6 +295,592 @@ describe("db/queries — competitors", () => {
       expect(whereMock).toHaveBeenCalled();
       expect(orderByMock).toHaveBeenCalledWith(competitorDiscoveryLogTable.discovered_at);
       expect(result).toEqual(rows);
+    });
+  });
+});
+
+describe("db/queries — curated RAG seed ingestion", () => {
+  const input = {
+    id: "11111111-1111-4111-8111-111111111111",
+    competitor_id: "22222222-2222-4222-8222-222222222222",
+    category: "general" as const,
+    question: "Exact curator question",
+    expected_answer: "Exact curator answer",
+    supporting_signal_ids: ["33333333-3333-4333-8333-333333333333"],
+    confidence_level: "low" as const,
+  };
+
+  function arrangeExisting(persistedOverride: Record<string, unknown>) {
+    const persisted = {
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+      ...persistedOverride,
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn((_rows: Array<{ id: string }>) => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => [persisted]);
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+  }
+
+  it("inserts only seed-owned fields after locked, set-based reference validation", async () => {
+    const persisted = {
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+    };
+    const returning = vi.fn(async () => [{ id: input.id }]);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn(() => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => [persisted]);
+    const where = vi.fn(() => ({ orderBy }));
+    const from = vi.fn(() => ({ where }));
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).resolves.toEqual({ inserted: 1, unchanged: 0 });
+
+    expect(transactionMock).toHaveBeenCalledOnce();
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+    expect(tx.insert).toHaveBeenCalledWith(ragEvalDatasetTable);
+    expect(values).toHaveBeenCalledWith([{
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+    }]);
+    expect(onConflictDoNothing).toHaveBeenCalledWith({ target: ragEvalDatasetTable.id });
+    expect(orderBy).toHaveBeenCalledWith(asc(ragEvalDatasetTable.id));
+    const dialect = new PgDialect();
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[0]![0]).params).toEqual([[input.competitor_id]]);
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[1]![0]).params).toEqual([
+      [input.supporting_signal_ids[0]],
+    ]);
+    const referenceSql = tx.execute.mock.calls.map((call) => dialect.sqlToQuery(call[0]).sql);
+    expect(referenceSql).toHaveLength(2);
+    expect(referenceSql.every((statement) => statement.includes("ORDER BY") && statement.includes("FOR KEY SHARE"))).toBe(true);
+    expect(referenceSql.join(" ")).toContain("ANY($1::uuid[])");
+  });
+
+  it("binds multiple reference IDs as uuid arrays and sorts insert rows by stable case ID", async () => {
+    const second = {
+      ...input,
+      id: "00000000-0000-4000-8000-000000000000",
+      competitor_id: "44444444-4444-4444-8444-444444444444",
+      supporting_signal_ids: ["55555555-5555-4555-8555-555555555555"],
+    };
+    const persisted = [input, second].map((seedCase) => ({
+      ...seedCase,
+      supporting_chunk_ids: seedCase.supporting_signal_ids,
+    }));
+    const returning = vi.fn(async () => [{ id: input.id }, { id: second.id }]);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn((_rows: Array<{ id: string }>) => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => persisted);
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: second.competitor_id }, { id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [
+          { id: second.supporting_signal_ids[0], competitor_id: second.competitor_id },
+          { id: input.supporting_signal_ids[0], competitor_id: input.competitor_id },
+        ] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input, second])).resolves.toEqual({ inserted: 2, unchanged: 0 });
+
+    const dialect = new PgDialect();
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[0]![0]).params).toEqual([
+      [second.competitor_id, input.competitor_id].sort(),
+    ]);
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[1]![0]).params).toEqual([
+      [input.supporting_signal_ids[0], second.supporting_signal_ids[0]].sort(),
+    ]);
+    expect(values.mock.calls[0]![0].map((row: { id: string }) => row.id)).toEqual([second.id, input.id]);
+  });
+
+  it("rejects missing or cross-competitor references before any insert", async () => {
+    const insert = vi.fn();
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: "99999999-9999-4999-8999-999999999999" }] }),
+      insert,
+      select: vi.fn(),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).rejects.toEqual(expect.objectContaining({
+      name: "RagEvalSeedReferenceError", caseIds: [input.id],
+    }));
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing competitor", { competitors: [], signals: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }],
+    ["missing signal", { competitors: [{ id: input.competitor_id }], signals: [] }],
+  ])("rejects %s without inserting", async (_label, rows) => {
+    const insert = vi.fn();
+    const tx = {
+      execute: vi.fn().mockResolvedValueOnce({ rows: rows.competitors }).mockResolvedValueOnce({ rows: rows.signals }),
+      insert,
+      select: vi.fn(),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).rejects.toBeInstanceOf(RagEvalSeedReferenceError);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["competitor", { competitor_id: "99999999-9999-4999-8999-999999999999" }],
+    ["nullable legacy competitor", { competitor_id: null }],
+    ["category", { category: "pricing_history" }],
+    ["question", { question: "Changed question" }],
+    ["expected answer", { expected_answer: "Changed answer" }],
+    ["nullable legacy support IDs", { supporting_chunk_ids: null }],
+    ["confidence", { confidence_level: "high" }],
+  ])("treats a changed %s as a no-overwrite conflict", async (_label, persistedOverride) => {
+    arrangeExisting(persistedOverride);
+    await expect(seedRagEvalDataset([input])).rejects.toMatchObject({
+      name: "RagEvalSeedConflictError",
+      conflictingIds: [input.id],
+    });
+  });
+
+  it("treats an absent post-insert row as a conflict", async () => {
+    const orderedInput = {
+      ...input,
+      supporting_signal_ids: [
+        input.supporting_signal_ids[0],
+        "44444444-4444-4444-8444-444444444444",
+      ],
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: orderedInput.supporting_signal_ids.map((id) => ({ id, competitor_id: input.competitor_id })) }),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing })) })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(async () => []) })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+    await expect(seedRagEvalDataset([orderedInput])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
+  });
+
+  it("treats support-ID order as seed-owned content", async () => {
+    const orderedInput = {
+      ...input,
+      supporting_signal_ids: [
+        input.supporting_signal_ids[0],
+        "44444444-4444-4444-8444-444444444444",
+      ],
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const persisted = {
+      ...orderedInput,
+      supporting_chunk_ids: [...orderedInput.supporting_signal_ids].reverse(),
+    };
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: orderedInput.supporting_signal_ids.map((id) => ({ id, competitor_id: input.competitor_id })) }),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing })) })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(async () => [persisted]) })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+    await expect(seedRagEvalDataset([orderedInput])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
+  });
+
+  it("reports deterministic conflicts while ignoring database-owned evaluation metadata", async () => {
+    const persisted = {
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+      created_at: new Date("2026-01-01T00:00:00.000Z"),
+      last_evaluated_at: new Date("2026-02-01T00:00:00.000Z"),
+      last_faithfulness_score: 0.99,
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn(() => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => [persisted]);
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).resolves.toEqual({ inserted: 0, unchanged: 1 });
+  });
+
+  it("rolls back a preceding insert when a later stable ID conflicts", async () => {
+    const conflicting = { ...input, id: "44444444-4444-4444-8444-444444444444", question: "Different stored question" };
+    let committed: Array<Record<string, unknown>> = [
+      {
+        id: conflicting.id, competitor_id: conflicting.competitor_id, category: conflicting.category,
+        question: "Previously persisted question", expected_answer: conflicting.expected_answer,
+        supporting_chunk_ids: conflicting.supporting_signal_ids, confidence_level: conflicting.confidence_level,
+      },
+    ];
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
+      const working = structuredClone(committed);
+      const orderBy = vi.fn(async () => working.sort((left, right) => String(left.id).localeCompare(String(right.id))));
+      const returning = vi.fn(async () => {
+        const rows = pending.filter((row) => !working.some((stored) => stored.id === row.id));
+        working.push(...rows);
+        return rows.map((row) => ({ id: row.id }));
+      });
+      const onConflictDoNothing = vi.fn(() => ({ returning }));
+      let pending: Array<Record<string, unknown>> = [];
+      const tx = {
+        execute: vi.fn()
+          .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+          .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+        insert: vi.fn(() => ({ values: vi.fn((rows) => { pending = rows; return { onConflictDoNothing }; }) })),
+        select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+      };
+      const result = await callback(tx);
+      committed = working;
+      return result;
+    });
+    const before = structuredClone(committed);
+
+    await expect(seedRagEvalDataset([input, conflicting])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
+    expect(committed).toEqual(before);
+  });
+
+  it("waits for both locked reference reads before inserting and reads back only after insert", async () => {
+    let resolveCompetitor: ((value: { rows: Array<{ id: string }> }) => void) | undefined;
+    let resolveSignal: ((value: { rows: Array<{ id: string; competitor_id: string }> }) => void) | undefined;
+    const competitorRead = new Promise<{ rows: Array<{ id: string }> }>((resolve) => { resolveCompetitor = resolve; });
+    const signalRead = new Promise<{ rows: Array<{ id: string; competitor_id: string }> }>((resolve) => { resolveSignal = resolve; });
+    const events: string[] = [];
+    const returning = vi.fn(async () => [{ id: input.id }]);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn(() => ({ onConflictDoNothing }));
+    const tx = {
+      execute: vi.fn()
+        .mockImplementationOnce(() => { events.push("competitor-read"); return competitorRead; })
+        .mockImplementationOnce(() => { events.push("signal-read"); return signalRead; }),
+      insert: vi.fn(() => { events.push("insert"); return { values }; }),
+      select: vi.fn(() => {
+        events.push("post-read");
+        return { from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(async () => [{
+          id: input.id,
+          competitor_id: input.competitor_id,
+          category: input.category,
+          question: input.question,
+          expected_answer: input.expected_answer,
+          supporting_chunk_ids: input.supporting_signal_ids,
+          confidence_level: input.confidence_level,
+        }]) })) })) };
+      }),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    const seed = seedRagEvalDataset([input]);
+    await Promise.resolve();
+    expect(events).toEqual(["competitor-read", "signal-read"]);
+    resolveCompetitor?.({ rows: [{ id: input.competitor_id }] });
+    await Promise.resolve();
+    expect(events).toEqual(["competitor-read", "signal-read"]);
+    resolveSignal?.({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] });
+    await expect(seed).resolves.toEqual({ inserted: 1, unchanged: 0 });
+    expect(events).toEqual(["competitor-read", "signal-read", "insert", "post-read"]);
+  });
+
+  it.each(["insert", "post-read"] as const)(
+    "propagates a %s failure and leaves the transaction's committed state unchanged",
+    async (failurePoint) => {
+      let committed: Array<Record<string, unknown>> = [];
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
+        const working = structuredClone(committed);
+        const returning = vi.fn(async () => {
+          if (failurePoint === "insert") throw new Error("insert failure");
+          working.push({ id: input.id });
+          return [{ id: input.id }];
+        });
+        const onConflictDoNothing = vi.fn(() => ({ returning }));
+        const tx = {
+          execute: vi.fn()
+            .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+            .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+          insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing })) })),
+          select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({
+            orderBy: vi.fn(async () => {
+              if (failurePoint === "post-read") throw new Error("post-read failure");
+              return [];
+            }),
+          })) })) })),
+        };
+        const result = await callback(tx);
+        committed = working;
+        return result;
+      });
+      const before = structuredClone(committed);
+
+      await expect(seedRagEvalDataset([input])).rejects.toThrow(
+        failurePoint === "insert" ? "insert failure" : "post-read failure"
+      );
+      expect(committed).toEqual(before);
+    }
+  );
+});
+
+describe("db/queries — RAG faithfulness evaluation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+  });
+
+  const datasetRow = {
+    id: "11111111-1111-4111-8111-111111111111",
+    competitor_id: "22222222-2222-4222-8222-222222222222",
+    category: "general" as const,
+    question: "Exact curator question",
+    expected_answer: "Exact curator answer",
+    supporting_signal_ids: ["33333333-3333-4333-8333-333333333333"],
+    confidence_level: "low" as const,
+    created_at: new Date("2026-01-01T00:00:00.000Z"),
+  };
+
+  describe("listRagEvalCases", () => {
+    it("orders by created_at then id and maps the legacy support column honestly", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([datasetRow]);
+
+      const result = await listRagEvalCases();
+
+      expect(fromMock).toHaveBeenCalledWith(ragEvalDatasetTable);
+      expect(orderByMock).toHaveBeenCalledWith(
+        asc(ragEvalDatasetTable.created_at),
+        asc(ragEvalDatasetTable.id)
+      );
+      expect(result).toEqual([datasetRow]);
+    });
+
+    it("filters by the exact competitor UUID when provided", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([datasetRow]);
+
+      await listRagEvalCases(datasetRow.competitor_id);
+
+      expect(eq).toHaveBeenCalledWith(ragEvalDatasetTable.competitor_id, datasetRow.competitor_id);
+      expect(whereMock).toHaveBeenCalledWith(eq(ragEvalDatasetTable.competitor_id, datasetRow.competitor_id));
+    });
+
+    it.each([
+      ["null competitor_id", { competitor_id: null }],
+      ["null support list", { supporting_signal_ids: null }],
+      ["empty support list", { supporting_signal_ids: [] }],
+      ["structural example question", { question: "STRUCTURAL EXAMPLE ONLY - placeholder" }],
+      ["structural example expected answer", { expected_answer: "STRUCTURAL EXAMPLE ONLY - placeholder" }],
+      ["invalid confidence level", { confidence_level: "extreme" }],
+      ["non-UUID support id", { supporting_signal_ids: ["not-a-uuid"] }],
+    ])("throws RagEvalDatasetIntegrityError for %s", async (_label, override) => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([{ ...datasetRow, ...override }]);
+
+      await expect(listRagEvalCases()).rejects.toBeInstanceOf(RagEvalDatasetIntegrityError);
+    });
+  });
+
+  describe("getRagEvalCitationSignals", () => {
+    it("returns [] without querying for an empty id list", async () => {
+      const result = await getRagEvalCitationSignals([]);
+      expect(result).toEqual([]);
+      expect(selectMock).not.toHaveBeenCalled();
+    });
+
+    it("hydrates via one set-based WHERE id IN (...) query and dedupes requested ids", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([
+        { id: "s1", competitor_id: "c1", source: "reddit", title: "A title", raw_text: "raw text" },
+        { id: "s2", competitor_id: "c1", source: "pricing", title: null, raw_text: "other text" },
+      ]);
+
+      const result = await getRagEvalCitationSignals(["s1", "s2", "s1"]);
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(inArray).toHaveBeenCalledWith(signalsTable.id, ["s1", "s2"]);
+      expect(result).toEqual([
+        { id: "s1", competitor_id: "c1", source: "reddit", title: "A title", raw_text: "raw text" },
+        { id: "s2", competitor_id: "c1", source: "pricing", title: "", raw_text: "other text" },
+      ]);
+    });
+  });
+
+  describe("persistRagEvaluation", () => {
+    const runAt = new Date("2026-03-01T00:00:00.000Z");
+    const answerResult = {
+      response_type: "answer" as const,
+      question_id: "11111111-1111-4111-8111-111111111111",
+      question: "What is Acme's pricing?",
+      category: "pricing_history" as const,
+      answer: "Acme charges $10/month.",
+      faithfulness_score: 1,
+      passed: true,
+      chunks_used: ["33333333-3333-4333-8333-333333333333"],
+      failure_code: "none" as const,
+      reasoning: "fully grounded",
+    };
+    const refusalResult = {
+      response_type: "refusal" as const,
+      question_id: "44444444-4444-4444-8444-444444444444",
+      question: "What did Acme ship last week?",
+      category: "product_change" as const,
+      refusal_reason: "No evidence.",
+      faithfulness_score: 0,
+      passed: false,
+      chunks_used: [] as [],
+      failure_code: "unexpected_refusal" as const,
+      reasoning: "seeded case incorrectly refused",
+    };
+
+    it("rejects an empty result set before starting a transaction", async () => {
+      await expect(persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: true, git_commit: "abc123", results: [],
+      })).rejects.toThrow();
+      expect(transactionMock).not.toHaveBeenCalled();
+    });
+
+    it("recomputes totals/mean from validated results, updates case metadata set-based, and inserts one run", async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        rows: [{ id: answerResult.question_id }, { id: refusalResult.question_id }],
+      });
+      const insertReturning = vi.fn(async () => [{ id: "run-id-1" }]);
+      const insertValues = vi.fn(() => ({ returning: insertReturning }));
+      const tx = { execute: executeMock, insert: vi.fn(() => ({ values: insertValues })) };
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+      const result = await persistRagEvaluation({
+        run_at: runAt,
+        threshold: 0.75,
+        ci_triggered: true,
+        git_commit: "abc123",
+        results: [answerResult, refusalResult],
+      });
+
+      expect(transactionMock).toHaveBeenCalledOnce();
+      expect(executeMock).toHaveBeenCalledOnce();
+      expect(tx.insert).toHaveBeenCalledWith(ragEvalRunsTable);
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run_at: runAt,
+          total_questions: 2,
+          passed: 1,
+          failed: 1,
+          faithfulness_score: 0.5,
+          threshold: 0.75,
+          ci_triggered: true,
+          git_commit: "abc123",
+        })
+      );
+      expect(result).toEqual({
+        id: "run-id-1",
+        summary: {
+          run_at: runAt.toISOString(),
+          total_questions: 2,
+          passed: 1,
+          failed: 1,
+          faithfulness_score: 0.5,
+          threshold: 0.75,
+          ci_triggered: true,
+          git_commit: "abc123",
+        },
+      });
+    });
+
+    it("ignores caller-supplied aggregates — an inconsistent passed flag never reaches the insert", async () => {
+      const executeMock = vi.fn().mockResolvedValue({ rows: [{ id: answerResult.question_id }] });
+      const insertReturning = vi.fn(async () => [{ id: "run-id-2" }]);
+      const insertValues = vi.fn(() => ({ returning: insertReturning }));
+      const tx = { execute: executeMock, insert: vi.fn(() => ({ values: insertValues })) };
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+      await persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: false, git_commit: null,
+        results: [{ ...answerResult, faithfulness_score: 0.9 }],
+      });
+
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ total_questions: 1, passed: 1, failed: 0, faithfulness_score: 0.9 })
+      );
+    });
+
+    it("throws and does not insert when a requested case id was deleted mid-evaluation", async () => {
+      const executeMock = vi.fn().mockResolvedValue({ rows: [] });
+      const insert = vi.fn();
+      const tx = { execute: executeMock, insert };
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+      await expect(persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: true, git_commit: null, results: [answerResult],
+      })).rejects.toThrow();
+      expect(insert).not.toHaveBeenCalled();
+    });
+
+    it("rolls back the metadata update when the run insert fails", async () => {
+      let committed: Array<{ id: string; score: number }> = [];
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
+        const working = structuredClone(committed);
+        working.push({ id: answerResult.question_id, score: answerResult.faithfulness_score });
+        const executeMock = vi.fn().mockResolvedValue({ rows: [{ id: answerResult.question_id }] });
+        const insertReturning = vi.fn(async () => { throw new Error("insert failure"); });
+        const tx = {
+          execute: executeMock,
+          insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: insertReturning })) })),
+        };
+        const result = await callback(tx);
+        committed = working;
+        return result;
+      });
+      const before = structuredClone(committed);
+
+      await expect(persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: true, git_commit: null, results: [answerResult],
+      })).rejects.toThrow("insert failure");
+      expect(committed).toEqual(before);
     });
   });
 });
@@ -574,7 +1190,7 @@ describe("db/queries — hn collector support", () => {
   });
 
   describe("createSignal", () => {
-    it("inserts the given fields and returns the created row", async () => {
+    it("inserts the signal and initial outbox row in one transaction", async () => {
       const input = {
         competitor_id: "c1",
         source: "hn" as const,
@@ -583,13 +1199,51 @@ describe("db/queries — hn collector support", () => {
         raw_text: "Acme just raised a Series B",
       };
       const row = { id: "s1", ...input, quality_score: 0, collected_at: new Date(), created_at: new Date() };
-      insertReturningMock.mockResolvedValue([row]);
+      const signalValues = vi.fn(() => ({ returning: vi.fn(async () => [row]) }));
+      const outboxValues = vi.fn(async () => undefined);
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) => {
+        if (table === signalsTable) {
+          return { values: signalValues };
+        }
+        return { values: outboxValues };
+      });
 
       const result = await createSignal(input);
 
-      expect(insertMock).toHaveBeenCalledWith(signalsTable);
-      expect(insertValuesMock).toHaveBeenCalledWith(input);
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(insertMock).toHaveBeenNthCalledWith(1, signalsTable);
+      expect(insertMock).toHaveBeenNthCalledWith(2, signalPipelineOutboxTable);
+      expect(signalValues).toHaveBeenCalledWith(input);
+      expect(outboxValues).toHaveBeenCalledWith({ signal_id: "s1" });
       expect(result).toEqual(row);
+    });
+
+    it("rejects the transaction when the initial outbox write fails", async () => {
+      const input = {
+        competitor_id: "c1",
+        source: "hn" as const,
+        raw_text: "Acme changed",
+      };
+      const row = { id: "s1", ...input };
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) => {
+        if (table === signalsTable) {
+          return { values: vi.fn(() => ({ returning: vi.fn(async () => [row]) })) };
+        }
+        return {
+          values: vi.fn(async () => {
+            throw new Error("outbox insert failed");
+          }),
+        };
+      });
+
+      await expect(createSignal(input)).rejects.toThrow("outbox insert failed");
+      expect(transactionMock).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -837,6 +1491,64 @@ describe("db/queries — latency percentiles", () => {
   });
 });
 
+describe("db/queries — operational reporting", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ groupBy: groupByMock });
+  });
+
+  it("gets latency distribution and failure counts for every agent in one grouped query", async () => {
+    const rows = [
+      {
+        agent_name: "synthesis",
+        p50: 100,
+        p95: 240,
+        p99: 300,
+        mean: 125.5,
+        sample_count: 5,
+        failed_count: 1,
+        run_count: 5,
+      },
+    ];
+    groupByMock.mockResolvedValue(rows);
+
+    await expect(getAgentLatencyReport(14)).resolves.toEqual(rows);
+
+    expect(fromMock).toHaveBeenCalledWith(agentLatenciesTable);
+    expect(groupByMock).toHaveBeenCalledWith(agentLatenciesTable.agent_name);
+    const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const rawTexts = sqlCalls.map(rawSqlText);
+    expect(rawTexts.some((text) => text.includes("PERCENTILE_CONT(0.99)"))).toBe(true);
+    expect(rawTexts.some((text) => text.includes("AVG("))).toBe(true);
+    expect(rawTexts.some((text) => text.includes("FILTER (WHERE"))).toBe(true);
+    const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+    expect(intervalCall!.at(-1)).toBe(14);
+  });
+
+  it("groups LLM cost by competitor and UTC day in one bounded query", async () => {
+    const rows = [
+      { competitor_id: "c1", day: "2026-09-10", cost_usd: 0.125 },
+    ];
+    groupByMock.mockResolvedValue(rows);
+
+    await expect(getCostByCompetitorDay()).resolves.toEqual(rows);
+
+    expect(fromMock).toHaveBeenCalledWith(llmCostsTable);
+    expect(groupByMock).toHaveBeenCalledWith(
+      llmCostsTable.competitor_id,
+      expect.anything()
+    );
+    const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const rawTexts = sqlCalls.map(rawSqlText);
+    expect(rawTexts.some((text) => text.includes("AT TIME ZONE 'UTC'"))).toBe(true);
+    expect(rawTexts.some((text) => text.includes("SUM("))).toBe(true);
+    const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
+    expect(intervalCall!.at(-1)).toBe(7);
+  });
+});
+
 describe("db/queries — company profile", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -941,6 +1653,109 @@ describe("db/queries — signal pipeline", () => {
     updateMock.mockReturnValue({ set: updateSetMock });
     updateSetMock.mockReturnValue({ where: updateWhereMock });
     updateWhereMock.mockResolvedValue(undefined);
+    deleteMock.mockReturnValue({ where: deleteWhereMock });
+    deleteWhereMock.mockReturnValue({ returning: deleteReturningMock });
+  });
+
+  describe("signal pipeline outbox", () => {
+    it("lists a bounded oldest-first batch", async () => {
+      const rows = [{ signal_id: "s1", stage: "entity_extraction" }];
+      fromMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue(rows);
+
+      await expect(listPendingSignalPipelineOutbox(25)).resolves.toEqual(rows);
+
+      expect(fromMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+      expect(orderByMock).toHaveBeenCalledWith(asc(signalPipelineOutboxTable.created_at));
+      expect(limitMock).toHaveBeenCalledWith(25);
+    });
+
+    it("clamps malformed and oversized recovery batch limits", async () => {
+      fromMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockReturnValue({ limit: limitMock });
+      limitMock.mockResolvedValue([]);
+
+      await listPendingSignalPipelineOutbox(Number.NaN);
+      await listPendingSignalPipelineOutbox(10_000);
+
+      expect(limitMock).toHaveBeenNthCalledWith(1, 100);
+      expect(limitMock).toHaveBeenNthCalledWith(2, 500);
+    });
+
+    it("advances only from the expected stage with compare-and-set", async () => {
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([{ signal_id: "s1" }]);
+
+      await expect(
+        advanceSignalPipelineOutbox("s1", "entity_extraction", "quality_scoring")
+      ).resolves.toBe(true);
+
+      expect(updateMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+      expect(updateSetMock).toHaveBeenCalledWith({
+        stage: "quality_scoring",
+        updated_at: expect.any(Date),
+      });
+      expect(and).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.signal_id, "s1");
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.stage, "entity_extraction");
+    });
+
+    it("reports a lost compare-and-set without pretending to advance", async () => {
+      updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValue([]);
+
+      await expect(
+        advanceSignalPipelineOutbox("s1", "entity_extraction", "quality_scoring")
+      ).resolves.toBe(false);
+    });
+
+    it("writes the quality score only when it atomically owns and advances the stage", async () => {
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ update: updateMock })
+      );
+      updateWhereMock
+        .mockReturnValueOnce({ returning: updateReturningMock })
+        .mockResolvedValueOnce(undefined);
+      updateReturningMock.mockResolvedValueOnce([{ signal_id: "s1" }]);
+
+      await expect(scoreSignalAndAdvanceOutbox("s1", 0.72)).resolves.toBe(true);
+
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(updateMock).toHaveBeenNthCalledWith(1, signalPipelineOutboxTable);
+      expect(updateSetMock).toHaveBeenNthCalledWith(1, {
+        stage: "deduplication",
+        updated_at: expect.any(Date),
+      });
+      expect(updateMock).toHaveBeenNthCalledWith(2, signalsTable);
+      expect(updateSetMock).toHaveBeenNthCalledWith(2, { quality_score: 0.72 });
+    });
+
+    it("does not overwrite the score when a retry has lost stage ownership", async () => {
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ update: updateMock })
+      );
+      updateWhereMock.mockReturnValueOnce({ returning: updateReturningMock });
+      updateReturningMock.mockResolvedValueOnce([]);
+
+      await expect(scoreSignalAndAdvanceOutbox("s1", 0.81)).resolves.toBe(false);
+
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect(updateMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+    });
+
+    it("completes only from the expected terminal stage", async () => {
+      deleteReturningMock.mockResolvedValue([{ signal_id: "s1" }]);
+
+      await expect(
+        completeSignalPipelineOutbox("s1", "deduplication")
+      ).resolves.toBe(true);
+
+      expect(deleteMock).toHaveBeenCalledWith(signalPipelineOutboxTable);
+      expect(and).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.signal_id, "s1");
+      expect(eq).toHaveBeenCalledWith(signalPipelineOutboxTable.stage, "deduplication");
+    });
   });
 
   describe("getSignalById", () => {
@@ -1477,5 +2292,396 @@ describe("db/queries — competitor discovery write-back", () => {
 
     expect(eq).toHaveBeenCalledWith(competitorsTable.id, "c1");
     expect(updateWhereMock).toHaveBeenCalled();
+  });
+});
+
+describe("db/queries — prompt evaluation and promotion", () => {
+  const activePrompt = {
+    id: "11111111-1111-4111-8111-111111111111",
+    agent_name: "intent_analyzer",
+    version: 1,
+    prompt_text: "Active prompt",
+    is_active: true,
+    accuracy: 0.7,
+    promoted_at: new Date("2026-09-01T00:00:00.000Z"),
+    created_at: new Date("2026-08-01T00:00:00.000Z"),
+  };
+  const candidatePrompt = {
+    id: "22222222-2222-4222-8222-222222222222",
+    agent_name: "intent_analyzer",
+    version: 2,
+    prompt_text: "Candidate prompt",
+    is_active: false,
+    accuracy: null,
+    promoted_at: null,
+    created_at: new Date("2026-09-02T00:00:00.000Z"),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+    updateReturningMock.mockResolvedValue([{ id: "updated" }]);
+  });
+
+  it("loads a candidate by both agent name and version", async () => {
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ limit: limitMock });
+    limitMock.mockResolvedValue([candidatePrompt]);
+
+    await expect(getPromptVersion("intent_analyzer", 2)).resolves.toEqual(candidatePrompt);
+
+    expect(fromMock).toHaveBeenCalledWith(promptVersionsTable);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.agent_name, "intent_analyzer");
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.version, 2);
+    expect(and).toHaveBeenCalled();
+    expect(limitMock).toHaveBeenCalledWith(1);
+  });
+
+  it("loads same-agent cases in deterministic created-at and id order", async () => {
+    const rows = [
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        agent_name: "intent_analyzer",
+        input: { context: "x" },
+        expected_output: { summary: "x", intent_level: "high" },
+        created_at: new Date("2026-09-03T00:00:00.000Z"),
+      },
+    ];
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ orderBy: orderByMock });
+    orderByMock.mockResolvedValue(rows);
+
+    await expect(listAgentTestCases("intent_analyzer")).resolves.toEqual(rows);
+
+    expect(fromMock).toHaveBeenCalledWith(agentTestCasesTable);
+    expect(eq).toHaveBeenCalledWith(agentTestCasesTable.agent_name, "intent_analyzer");
+    expect(orderByMock).toHaveBeenCalledWith(
+      asc(agentTestCasesTable.created_at),
+      asc(agentTestCasesTable.id)
+    );
+  });
+
+  it("locks the complete agent prompt set with a bound agent value and stable order", async () => {
+    const execute = vi.fn(async () => ({ rows: [activePrompt, candidatePrompt] }));
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: updateMock })
+    );
+
+    await promotePromptVersion({
+      agentName: "intent_analyzer",
+      candidateVersion: 2,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    });
+
+    const lockCall = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls.find((call) =>
+      rawSqlText(call).includes("FOR UPDATE")
+    );
+    expect(lockCall).toBeDefined();
+    const lockText = rawSqlText(lockCall!);
+    expect(lockText).toContain("ORDER BY");
+    expect(lockText).toContain("ASC");
+    expect(lockText).not.toContain("intent_analyzer");
+    expect(lockCall).toContain("intent_analyzer");
+    expect(lockCall!.slice(-2)).toEqual([
+      promptVersionsTable.version,
+      promptVersionsTable.id,
+    ]);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(transactionMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [70, "not-better"],
+    [60, "not-better"],
+    [71, "not-significant"],
+  ] as const)(
+    "returns %s/100 as %s without issuing any update",
+    async (candidatePassed, reason) => {
+    const execute = vi.fn(async () => ({ rows: [activePrompt, candidatePrompt] }));
+    const txUpdate = vi.fn();
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: txUpdate })
+    );
+
+    await expect(
+      promotePromptVersion({
+        agentName: "intent_analyzer",
+        candidateVersion: 2,
+        activeVersion: 1,
+        candidate: { passed: candidatePassed, total: 100 },
+        active: { passed: 70, total: 100 },
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        promoted: false,
+        reason,
+        active_version: 1,
+      })
+    );
+    expect(txUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects missing, already-active, and ambiguous candidate state without updating", async () => {
+    const txUpdate = vi.fn();
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [activePrompt] })
+      .mockResolvedValueOnce({ rows: [{ ...candidatePrompt, is_active: true }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { ...activePrompt, id: "44444444-4444-4444-8444-444444444444" },
+          { ...activePrompt, version: 3, id: "55555555-5555-4555-8555-555555555555" },
+          candidatePrompt,
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [candidatePrompt] });
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: txUpdate })
+    );
+    const baseInput = {
+      agentName: "intent_analyzer" as const,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    };
+
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("not found");
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("already active");
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("expected exactly one active version");
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("expected exactly one active version");
+    expect(txUpdate).not.toHaveBeenCalled();
+  });
+
+  it("validates audit counts before opening a transaction", async () => {
+    await expect(
+      promotePromptVersion({
+        agentName: "intent_analyzer",
+        candidateVersion: 2,
+        activeVersion: 1,
+        candidate: { passed: 11, total: 10 },
+        active: { passed: 7, total: 10 },
+      })
+    ).rejects.toThrow();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("deactivates the locked active row before activating only the locked candidate", async () => {
+    const execute = vi.fn(async () => ({ rows: [activePrompt, candidatePrompt] }));
+    const txReturning = vi.fn().mockResolvedValue([{ id: "updated" }]);
+    const txWhere = vi.fn(() => ({ returning: txReturning }));
+    const txSet = vi.fn((_value: Record<string, unknown>) => ({ where: txWhere }));
+    const txUpdate = vi.fn(() => ({ set: txSet }));
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: txUpdate })
+    );
+
+    const result = await promotePromptVersion({
+      agentName: "intent_analyzer",
+      candidateVersion: 2,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    });
+
+    expect(txUpdate).toHaveBeenCalledTimes(2);
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(txSet.mock.calls[0][0]).toEqual({ is_active: false });
+    expect(txSet.mock.calls[1][0]).toEqual({
+      is_active: true,
+      accuracy: 0.95,
+      promoted_at: expect.any(Date),
+    });
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.id, activePrompt.id);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.id, candidatePrompt.id);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.agent_name, "intent_analyzer");
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.version, 2);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.is_active, true);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.is_active, false);
+    expect(result).toEqual(
+      expect.objectContaining({
+        promoted: true,
+        reason: "promoted",
+        candidate_version: 2,
+        active_version: 1,
+        candidate_counts: { passed: 95, total: 100 },
+        active_counts: { passed: 70, total: 100 },
+      })
+    );
+  });
+
+  it.each(["deactivation", "activation"] as const)(
+    "keeps committed prompt state unchanged when %s throws",
+    async (failurePoint) => {
+    let committed = structuredClone([activePrompt, candidatePrompt]);
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const working = structuredClone(committed);
+      let pendingSet: Record<string, unknown> = {};
+      const returning = vi.fn(async () => {
+        if (pendingSet.is_active === false) {
+          if (failurePoint === "deactivation") {
+            throw new Error("active deactivation failed");
+          }
+          const active = working.find((row) => row.is_active);
+          if (!active) return [];
+          active.is_active = false;
+          return [{ id: active.id }];
+        }
+        throw new Error("candidate activation failed");
+      });
+      const where = vi.fn(() => ({ returning }));
+      const set = vi.fn((value: Record<string, unknown>) => {
+        pendingSet = value;
+        return { where };
+      });
+      const tx = {
+        execute: vi.fn(async () => ({ rows: working })),
+        update: vi.fn(() => ({ set })),
+      };
+      const result = await callback(tx);
+      committed = working;
+      return result;
+    });
+    const before = structuredClone(committed);
+
+    await expect(
+      promotePromptVersion({
+        agentName: "intent_analyzer",
+        candidateVersion: 2,
+        activeVersion: 1,
+        candidate: { passed: 95, total: 100 },
+        active: { passed: 70, total: 100 },
+      })
+    ).rejects.toThrow(
+      failurePoint === "deactivation"
+        ? "active deactivation failed"
+        : "candidate activation failed"
+    );
+
+    expect(committed).toEqual(before);
+    }
+  );
+
+  it("rejects a waiting different-candidate promotion when its audited active version is stale", async () => {
+    const secondCandidatePrompt = {
+      ...candidatePrompt,
+      id: "66666666-6666-4666-8666-666666666666",
+      version: 3,
+      prompt_text: "Second candidate prompt",
+    };
+    let committed = structuredClone([
+      activePrompt,
+      candidatePrompt,
+      secondCandidatePrompt,
+    ]);
+    let previousTransaction = Promise.resolve();
+    let firstLockAcquired: (() => void) | undefined;
+    const firstLocked = new Promise<void>((resolve) => {
+      firstLockAcquired = resolve;
+    });
+    let allowFirstToContinue: (() => void) | undefined;
+    const firstMayContinue = new Promise<void>((resolve) => {
+      allowFirstToContinue = resolve;
+    });
+    let transactionNumber = 0;
+
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const waitForPrevious = previousTransaction;
+      let releaseCurrentTransaction: (() => void) | undefined;
+      previousTransaction = new Promise<void>((resolve) => {
+        releaseCurrentTransaction = resolve;
+      });
+      await waitForPrevious;
+
+      const currentTransaction = transactionNumber++;
+      const working = structuredClone(committed);
+      let pendingSet: Record<string, unknown> = {};
+      const returning = vi.fn(async () => {
+        if (pendingSet.is_active === false) {
+          const row = working.find((prompt) => prompt.is_active);
+          if (!row) return [];
+          row.is_active = false;
+          return [{ id: row.id }];
+        }
+        const row = working.find((prompt) => prompt.version === currentTransaction + 2);
+        if (!row || row.is_active) return [];
+        Object.assign(row, pendingSet);
+        return [{ id: row.id }];
+      });
+      const where = vi.fn(() => ({ returning }));
+      const set = vi.fn((value: Record<string, unknown>) => {
+        pendingSet = value;
+        return { where };
+      });
+      const tx = {
+        execute: vi.fn(async () => {
+          if (currentTransaction === 0) {
+            firstLockAcquired?.();
+            await firstMayContinue;
+          }
+          return { rows: working };
+        }),
+        update: vi.fn(() => ({ set })),
+      };
+
+      try {
+        const result = await callback(tx);
+        committed = working;
+        return result;
+      } finally {
+        releaseCurrentTransaction?.();
+      }
+    });
+
+    const firstInput = {
+      agentName: "intent_analyzer" as const,
+      candidateVersion: 2,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    };
+    const secondInput = {
+      agentName: "intent_analyzer" as const,
+      candidateVersion: 3,
+      activeVersion: 1,
+      candidate: { passed: 80, total: 100 },
+      active: { passed: 70, total: 100 },
+    };
+    const first = promotePromptVersion(firstInput);
+    await firstLocked;
+    const second = promotePromptVersion(secondInput);
+    let secondSettled = false;
+    void second.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      }
+    );
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    allowFirstToContinue?.();
+    await expect(first).resolves.toEqual(expect.objectContaining({ promoted: true }));
+    await expect(second).rejects.toThrow("Active prompt version changed since evaluation");
+    expect(committed.map(({ version, is_active }) => ({ version, is_active }))).toEqual([
+      { version: 1, is_active: false },
+      { version: 2, is_active: true },
+      { version: 3, is_active: false },
+    ]);
   });
 });

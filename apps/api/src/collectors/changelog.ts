@@ -5,7 +5,8 @@ import Parser from "rss-parser";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
   getLatestSignalCollectedAt,
@@ -122,9 +123,7 @@ async function collectForCompetitor(competitor: {
         raw_text: rawText,
       });
 
-      await withRetry(() =>
-        queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-      );
+      await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
       logger.error("changelog collector failed to process one item — continuing with the rest", {
         competitor_id: competitor.id,

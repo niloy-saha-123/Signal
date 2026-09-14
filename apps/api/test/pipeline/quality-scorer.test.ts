@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getSignalByIdMock, updateSignalQualityScoreMock } = vi.hoisted(() => ({
+const { getSignalByIdMock, scoreSignalAndAdvanceOutboxMock } = vi.hoisted(() => ({
   getSignalByIdMock: vi.fn(),
-  updateSignalQualityScoreMock: vi.fn().mockResolvedValue(undefined),
+  scoreSignalAndAdvanceOutboxMock: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("@/db/queries", () => ({
   getSignalById: getSignalByIdMock,
-  updateSignalQualityScore: updateSignalQualityScoreMock,
+  scoreSignalAndAdvanceOutbox: scoreSignalAndAdvanceOutboxMock,
 }));
 
 const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
@@ -18,6 +18,12 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-deduplication": { add: queueAddMock } },
+}));
+const { ensureSignalPipelineJobMock } = vi.hoisted(() => ({
+  ensureSignalPipelineJobMock: vi.fn(),
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  ensureSignalPipelineJob: ensureSignalPipelineJobMock,
 }));
 
 import {
@@ -184,8 +190,12 @@ describe("pipeline/quality-scorer — qualityScorerProcessor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getSignalByIdMock.mockResolvedValue(baseSignal);
-    updateSignalQualityScoreMock.mockResolvedValue(undefined);
     queueAddMock.mockResolvedValue(undefined);
+    scoreSignalAndAdvanceOutboxMock.mockResolvedValue(true);
+    ensureSignalPipelineJobMock.mockImplementation(async (_stage: string, signalId: string) => {
+      await queueAddMock("deduplicate", { signal_id: signalId });
+      return "added";
+    });
   });
 
   it("returns early without writing or enqueuing when the signal is not found", async () => {
@@ -195,15 +205,15 @@ describe("pipeline/quality-scorer — qualityScorerProcessor", () => {
       qualityScorerProcessor({ id: "job1", data: { signal_id: "missing" } } as never)
     ).resolves.toBeUndefined();
 
-    expect(updateSignalQualityScoreMock).not.toHaveBeenCalled();
+    expect(scoreSignalAndAdvanceOutboxMock).not.toHaveBeenCalled();
     expect(queueAddMock).not.toHaveBeenCalled();
   });
 
-  it("writes a clamped [0,1] score via updateSignalQualityScore", async () => {
+  it("atomically writes a clamped score and advances the owned outbox stage", async () => {
     await qualityScorerProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
 
-    expect(updateSignalQualityScoreMock).toHaveBeenCalledTimes(1);
-    const [id, score] = updateSignalQualityScoreMock.mock.calls[0];
+    expect(scoreSignalAndAdvanceOutboxMock).toHaveBeenCalledTimes(1);
+    const [id, score] = scoreSignalAndAdvanceOutboxMock.mock.calls[0];
     expect(id).toBe("s1");
     expect(score).toBeGreaterThanOrEqual(0);
     expect(score).toBeLessThanOrEqual(1);
@@ -213,6 +223,32 @@ describe("pipeline/quality-scorer — qualityScorerProcessor", () => {
     await qualityScorerProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
 
     expect(queueAddMock).toHaveBeenCalledWith("deduplicate", { signal_id: "s1" });
+  });
+
+  it("commits score and stage before attempting the next enqueue", async () => {
+    await qualityScorerProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(scoreSignalAndAdvanceOutboxMock.mock.invocationCallOrder[0]).toBeLessThan(
+      ensureSignalPipelineJobMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("leaves deduplication recoverable when immediate enqueue fails", async () => {
+    ensureSignalPipelineJobMock.mockRejectedValueOnce(new Error("Redis unavailable"));
+
+    await expect(
+      qualityScorerProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
+    ).rejects.toThrow("Redis unavailable");
+    expect(scoreSignalAndAdvanceOutboxMock).toHaveBeenCalledWith("s1", expect.any(Number));
+  });
+
+  it("does not enqueue when a retry no longer owns the quality-scoring stage", async () => {
+    scoreSignalAndAdvanceOutboxMock.mockResolvedValueOnce(false);
+
+    await qualityScorerProcessor({ id: "job1", data: { signal_id: "s1" } } as never);
+
+    expect(scoreSignalAndAdvanceOutboxMock).toHaveBeenCalledTimes(1);
+    expect(ensureSignalPipelineJobMock).not.toHaveBeenCalled();
   });
 
   it("registers the pipeline-quality-scoring worker via initQualityScorerWorker without registering at import time", () => {

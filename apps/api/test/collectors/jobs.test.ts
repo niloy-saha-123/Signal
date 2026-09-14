@@ -22,10 +22,16 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   queueAddMock: vi.fn().mockResolvedValue(undefined),
   registerWorkerMock: vi.fn(),
 }));
+const { enqueueInitialSignalPipelineMock } = vi.hoisted(() => ({
+  enqueueInitialSignalPipelineMock: vi.fn(),
+}));
 
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
 import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
@@ -97,6 +103,10 @@ describe("collectors/jobs", () => {
       throw new Error(`unexpected fetch url: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    enqueueInitialSignalPipelineMock.mockImplementation(async (signalId: string) => {
+      await queueAddMock("extract-entities", { signal_id: signalId });
+      return "added";
+    });
   });
 
   afterEach(() => {
@@ -398,6 +408,40 @@ describe("collectors/jobs", () => {
       expect(options.signal).toBeInstanceOf(AbortSignal);
     }
   });
+
+  it("rejects malformed Greenhouse payloads before writing signals", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("boards-api.greenhouse.io")) {
+        return { ok: true, status: 200, json: async () => ({ jobs: [{ id: "wrong" }] }) };
+      }
+      return leverResponse([]);
+    });
+
+    await expect(jobsCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      "greenhouse",
+      expect.stringContaining("Greenhouse response was invalid")
+    );
+    expect(createSignalMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("rejects malformed Lever payloads before writing signals", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("api.lever.co")) {
+        return { ok: true, status: 200, json: async () => ({ postings: [] }) };
+      }
+      return greenhouseResponse([]);
+    });
+
+    await expect(jobsCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      "lever",
+      expect.stringContaining("Lever response was invalid")
+    );
+    expect(createSignalMock).not.toHaveBeenCalled();
+  }, 10000);
 
   it("stops attempting Greenhouse for remaining competitors once the greenhouse circuit trips mid-run, without affecting Lever", async () => {
     const secondGhCompetitor = {

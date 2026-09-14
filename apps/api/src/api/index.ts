@@ -7,17 +7,20 @@ import { createAlertRouter } from "./alerts";
 import { createChatRouter } from "./chat";
 import { createCompanyProfileRouter } from "./company-profile";
 import { queues } from "../queues/registry";
-import { closeRedisConnections } from "../lib/redis-client";
-import { closeDatabase } from "../db/client";
+import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
+import { checkDatabaseReadiness, closeDatabase } from "../db/client";
 import { logger } from "../lib/logger";
 
 const JSON_BODY_LIMIT = "100kb";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+const READINESS_TIMEOUT_MS = 2_000;
 
 export interface ApiEnvironment {
   DATABASE_URL?: string;
   REDIS_URL?: string;
   PORT?: string;
+  NODE_ENV?: string;
+  ALLOW_UNAUTHENTICATED_API?: string;
 }
 
 export function validateApiEnvironment(env: ApiEnvironment = process.env): { port: number } {
@@ -26,6 +29,11 @@ export function validateApiEnvironment(env: ApiEnvironment = process.env): { por
   );
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
+  }
+  if (env.NODE_ENV === "production" && env.ALLOW_UNAUTHENTICATED_API !== "true") {
+    throw new Error(
+      "ALLOW_UNAUTHENTICATED_API must be exactly true when NODE_ENV=production"
+    );
   }
 
   const port = Number(env.PORT ?? 3000);
@@ -53,11 +61,57 @@ export const apiErrorHandler: ErrorRequestHandler = (error, _req, res, _next) =>
   res.status(500).json({ error: "internal" });
 };
 
-export function createApiApp(): Express {
+export interface ApiAppDependencies {
+  checkDatabase?: (options: ReadinessProbeOptions) => Promise<unknown>;
+  checkRedis?: (options: ReadinessProbeOptions) => Promise<unknown>;
+  readinessTimeoutMs?: number;
+}
+
+export interface ReadinessProbeOptions {
+  timeoutMs: number;
+  signal: AbortSignal;
+}
+
+async function runReadinessChecks(dependencies: ApiAppDependencies): Promise<void> {
+  const checkDatabase = dependencies.checkDatabase ?? checkDatabaseReadiness;
+  const checkRedis = dependencies.checkRedis ?? checkRedisReadiness;
+  const timeoutMs = dependencies.readinessTimeoutMs ?? READINESS_TIMEOUT_MS;
+  const controller = new AbortController();
+  const options = { timeoutMs, signal: controller.signal };
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      Promise.all([checkDatabase(options), checkRedis(options)]),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          const error = new Error("readiness check timed out");
+          controller.abort(error);
+          reject(error);
+        }, timeoutMs);
+        timeout.unref();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
+  // Compatibility liveness endpoint: process-only by design. Infrastructure
+  // health belongs to /ready so an outage does not trigger restart loops.
   app.get("/health", (_req, res) => res.status(200).json({ status: "ok" }));
+  app.get("/ready", async (_req, res) => {
+    try {
+      await runReadinessChecks(dependencies);
+      res.status(200).json({ status: "ready" });
+    } catch {
+      logger.warn("API readiness check failed");
+      res.status(503).json({ status: "unavailable" });
+    }
+  });
   app.use("/api/competitors", createCompetitorRouter());
   app.use("/api/signals", createSignalRouter());
   app.use("/api/alerts", createAlertRouter());
@@ -159,8 +213,15 @@ export function createApiRuntime(overrides: ApiRuntimeOverrides = {}) {
   };
 }
 
-export async function startApiFromEnvironment(env: ApiEnvironment = process.env) {
-  const runtime = createApiRuntime();
+export interface ApiStartupOverrides {
+  createRuntime?: () => ReturnType<typeof createApiRuntime>;
+}
+
+export async function startApiFromEnvironment(
+  env: ApiEnvironment = process.env,
+  overrides: ApiStartupOverrides = {}
+) {
+  const runtime = (overrides.createRuntime ?? createApiRuntime)();
   try {
     const { port } = validateApiEnvironment(env);
     await runtime.start(port);

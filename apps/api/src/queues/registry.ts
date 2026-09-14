@@ -21,9 +21,10 @@
 //   No retry — a missed re-run just means agents use slightly stale
 //     context until the next scheduled analysis, not a correctness bug.
 //
-// All other queues (5 collectors, 3 pipeline stages, analysis): concurrency 2,
+// All other queues (5 collectors, 3 pipeline stages, pipeline recovery, analysis): concurrency 2,
 // 3 attempts with exponential backoff from 5s. Inferred, not stub-sourced —
-// no per-queue spec exists for these yet.
+// no per-queue spec exists for these yet. Recovery is the exception at
+// concurrency 1 because every pass is a bounded serial reconciler.
 import { Queue, Worker, type ConnectionOptions, type Job, type Processor } from "bullmq";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -62,6 +63,7 @@ export type QueueName =
   | "pipeline-entity-extraction"
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
+  | "pipeline-recovery"
   | "analysis";
 
 export interface QueueConfig {
@@ -70,6 +72,76 @@ export interface QueueConfig {
   backoff?: { type: "fixed" | "exponential"; delay: number };
   lockDuration?: number;
   limiter?: { max: number; duration: number };
+}
+
+type StableJobState =
+  | "completed"
+  | "failed"
+  | "active"
+  | "delayed"
+  | "prioritized"
+  | "waiting"
+  | "waiting-children"
+  | "unknown";
+
+export interface StableJobQueue {
+  getJob(jobId: string): Promise<
+    | undefined
+    | {
+        getState(): Promise<string>;
+        retry(
+          state: "failed" | "completed",
+          options: { resetAttemptsMade: boolean; resetAttemptsStarted: boolean }
+        ): Promise<void>;
+      }
+  >;
+  add(name: string, data: unknown, options: { jobId: string }): Promise<unknown>;
+}
+
+export interface EnsureStableJobInput {
+  name: string;
+  data: unknown;
+  jobId: string;
+  repairCompleted?: boolean;
+}
+
+export type EnsureStableJobResult = "added" | "existing" | "retried";
+
+const HEALTHY_JOB_STATES = new Set<StableJobState>([
+  "active",
+  "delayed",
+  "prioritized",
+  "waiting",
+  "waiting-children",
+]);
+
+const RETRY_OPTIONS = {
+  resetAttemptsMade: true,
+  resetAttemptsStarted: true,
+} as const;
+
+export async function ensureStableJob(
+  queue: StableJobQueue,
+  input: EnsureStableJobInput
+): Promise<EnsureStableJobResult> {
+  const job = await queue.getJob(input.jobId);
+  if (!job) {
+    await queue.add(input.name, input.data, { jobId: input.jobId });
+    return "added";
+  }
+
+  const state = await job.getState();
+  if (state === "unknown") {
+    await queue.add(input.name, input.data, { jobId: input.jobId });
+    return "added";
+  }
+  if (HEALTHY_JOB_STATES.has(state as StableJobState)) return "existing";
+  if (state === "completed" && !input.repairCompleted) return "existing";
+  if (state === "failed" || state === "completed") {
+    await job.retry(state, RETRY_OPTIONS);
+    return "retried";
+  }
+  throw new Error(`Unexpected BullMQ job state "${state}" for job "${input.jobId}"`);
 }
 
 const DEFAULT_CONFIG: QueueConfig = {
@@ -102,6 +174,7 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,
+  "pipeline-recovery": { ...DEFAULT_CONFIG, concurrency: 1 },
   analysis: DEFAULT_CONFIG,
 };
 
@@ -151,7 +224,7 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
 
   // Without this a failed job lands in Redis's failed-job hash and nowhere else,
   // which makes a stuck signal undebuggable from logs. Wired here rather than per
-  // worker so all 11 queues get it and no future worker has to remember. Fires on
+  // worker so all 12 queues get it and no future worker has to remember. Fires on
   // every attempt, including retryable ones — attempts_made/attempts_allowed tell
   // them apart. Additional per-queue 'failed' listeners (competitor-discovery has
   // one) still run; EventEmitter allows many.

@@ -1,16 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getSignalByIdMock, createClusterForSignalPairMock, mergeSignalIntoClusterMock } =
+const { getSignalByIdMock, createClusterForSignalPairMock, mergeSignalIntoClusterMock, completeSignalPipelineOutboxMock } =
   vi.hoisted(() => ({
     getSignalByIdMock: vi.fn(),
     createClusterForSignalPairMock: vi.fn(),
     mergeSignalIntoClusterMock: vi.fn(),
+    completeSignalPipelineOutboxMock: vi.fn().mockResolvedValue(true),
   }));
 
 vi.mock("@/db/queries", () => ({
   getSignalById: getSignalByIdMock,
   createClusterForSignalPair: createClusterForSignalPairMock,
   mergeSignalIntoCluster: mergeSignalIntoClusterMock,
+  completeSignalPipelineOutbox: completeSignalPipelineOutboxMock,
 }));
 
 const { loggerMock } = vi.hoisted(() => ({
@@ -23,7 +25,7 @@ const { trackLatencyMock } = vi.hoisted(() => ({
   // Mirrors the real trackLatency's pass-through contract (same as
   // entity-extractor.test.ts) so the wrapped I/O still runs.
   trackLatencyMock: vi.fn(
-    (_agentName: string, _competitorId: string, _runId: string, fn: () => unknown) => fn()
+    (_agentName: string, _context: unknown, fn: () => unknown) => fn()
   ),
 }));
 
@@ -106,7 +108,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
     pineconeUpsertMock.mockResolvedValue(undefined);
     pineconeQueryMock.mockResolvedValue([]);
     trackLatencyMock.mockImplementation(
-      (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
+      (_a: string, _context: unknown, fn: () => unknown) => fn()
     );
     createClusterForSignalPairMock.mockResolvedValue({
       id: "cluster1",
@@ -128,6 +130,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
       last_updated: new Date(),
       created_at: new Date(),
     });
+    completeSignalPipelineOutboxMock.mockResolvedValue(true);
   });
 
   it("returns early without embedding or upserting when the signal is not found", async () => {
@@ -166,6 +169,25 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
 
     expect(createClusterForSignalPairMock).not.toHaveBeenCalled();
     expect(mergeSignalIntoClusterMock).not.toHaveBeenCalled();
+    expect(completeSignalPipelineOutboxMock).toHaveBeenCalledWith("s1", "deduplication");
+  });
+
+  it("does not complete the outbox when Pinecone processing fails", async () => {
+    pineconeUpsertMock.mockRejectedValueOnce(new Error("Pinecone unavailable"));
+
+    await expect(
+      deduplicatorProcessor({ id: "job1", data: { signal_id: "s1" } } as never)
+    ).rejects.toThrow("Pinecone unavailable");
+
+    expect(completeSignalPipelineOutboxMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing signal as terminal and clears any surviving outbox row", async () => {
+    getSignalByIdMock.mockResolvedValue(undefined);
+
+    await deduplicatorProcessor({ id: "job1", data: { signal_id: "missing" } } as never);
+
+    expect(completeSignalPipelineOutboxMock).toHaveBeenCalledWith("missing", "deduplication");
   });
 
   it("filters out the signal's own id even when it comes back as a perfect self-match", async () => {
@@ -317,8 +339,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "deduplicator",
-      "c1",
-      "job1",
+      { competitorId: "c1", identity: { kind: "job", jobId: "job1" } },
       expect.any(Function)
     );
   });
@@ -328,8 +349,7 @@ describe("pipeline/deduplicator — deduplicatorProcessor", () => {
 
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "deduplicator",
-      "c1",
-      "s1",
+      { competitorId: "c1", identity: { kind: "job", jobId: "s1" } },
       expect.any(Function)
     );
   });

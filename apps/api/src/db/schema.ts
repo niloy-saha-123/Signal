@@ -107,6 +107,37 @@ export const signalsTable = pgTable(
   ]
 );
 
+export const SIGNAL_PIPELINE_STAGES = [
+  "entity_extraction",
+  "quality_scoring",
+  "deduplication",
+] as const;
+export type SignalPipelineStage = (typeof SIGNAL_PIPELINE_STAGES)[number];
+
+// Durable intent for every persisted signal. The signal UUID is both the primary
+// key and the FK, enforcing exactly one pending pipeline position per signal.
+export const signalPipelineOutboxTable = pgTable(
+  "signal_pipeline_outbox",
+  {
+    signal_id: uuid("signal_id")
+      .primaryKey()
+      .references(() => signalsTable.id, { onDelete: "cascade" }),
+    stage: text("stage")
+      .$type<SignalPipelineStage>()
+      .notNull()
+      .default("entity_extraction"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "signal_pipeline_outbox_stage_check",
+      sql`${table.stage} IN ('entity_extraction', 'quality_scoring', 'deduplication')`
+    ),
+    index("signal_pipeline_outbox_created_at_idx").on(table.created_at),
+  ]
+);
+
 // ── signal_clusters ──────────────────────────────────────────────────────
 // Deduplicated signal groups. SemanticDeduplicator merges a new signal into
 // an existing cluster (>=0.88 cosine similarity) instead of creating one.
@@ -185,6 +216,7 @@ export const pricingDiffsTable = pgTable(
       sql`${table.significance} IN ('minor', 'moderate', 'critical')`
     ),
     index("pricing_diffs_competitor_detected_idx").on(table.competitor_id, table.detected_at),
+    index("pricing_diffs_baseline_id_idx").on(table.baseline_id),
     // Critical diffs bypass the weekly queue — this is the escalation lookup.
     index("pricing_diffs_critical_idx")
       .on(table.detected_at)
@@ -226,21 +258,21 @@ export const agentRunsTable = pgTable(
       sql`${table.outcome} IS NULL OR ${table.outcome} IN ('alert', 'digest', 'suppress')`
     ),
     index("agent_runs_competitor_started_idx").on(table.competitor_id, table.started_at),
+    index("agent_runs_prompt_version_id_idx").on(table.prompt_version_id),
     index("agent_runs_status_idx").on(table.status),
   ]
 );
 
 // ── agent_latencies ──────────────────────────────────────────────────────
-// Per-agent-node timing for every analysis graph run, for P50/P95
-// computation. Written by lib/latency-tracker.ts; read by
-// scripts/latency-report.ts. Pure telemetry, so CASCADE with its run.
+// Per-agent-node timing for analysis/chat runs and queue pipeline jobs, for
+// P50/P95 computation. Run-attributed rows keep an FK and CASCADE with their
+// run; job-attributed rows use job_id and never place a BullMQ ID in run_id.
 export const agentLatenciesTable = pgTable(
   "agent_latencies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    run_id: uuid("run_id")
-      .notNull()
-      .references(() => agentRunsTable.id, { onDelete: "cascade" }),
+    run_id: uuid("run_id").references(() => agentRunsTable.id, { onDelete: "cascade" }),
+    job_id: text("job_id"),
     competitor_id: uuid("competitor_id").notNull(),
     agent_name: text("agent_name").notNull(),
     started_at: timestamp("started_at", { withTimezone: true }).notNull(),
@@ -259,7 +291,12 @@ export const agentLatenciesTable = pgTable(
       sql`${table.agent_name} IN ('intent_analyzer', 'sentiment_clusterer', 'change_detector', 'pattern_detector', 'vulnerability_detector', 'synthesis', 'chat_agent', 'quality_scorer', 'deduplicator', 'entity_extractor')`
     ),
     check("agent_latencies_status_check", sql`${table.status} IN ('success', 'failed', 'skipped')`),
+    check(
+      "agent_latencies_identity_check",
+      sql`${table.run_id} IS NOT NULL OR ${table.job_id} IS NOT NULL`
+    ),
     index("agent_latencies_run_id_idx").on(table.run_id),
+    index("agent_latencies_job_id_idx").on(table.job_id),
     // scripts/latency-report.ts: percentile duration per agent over 7 days.
     index("agent_latencies_agent_created_idx").on(table.agent_name, table.created_at),
     // getLatencyPercentiles (db/queries.ts) filters on created_at alone (no
@@ -334,6 +371,7 @@ export const llmCostsTable = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     run_id: uuid("run_id").references(() => agentRunsTable.id, { onDelete: "set null" }),
+    job_id: text("job_id"),
     competitor_id: uuid("competitor_id").references(() => competitorsTable.id, {
       onDelete: "set null",
     }),
@@ -346,6 +384,8 @@ export const llmCostsTable = pgTable(
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    index("llm_costs_run_id_idx").on(table.run_id),
+    index("llm_costs_job_id_idx").on(table.job_id),
     index("llm_costs_competitor_created_idx").on(table.competitor_id, table.created_at),
     index("llm_costs_agent_name_idx").on(table.agent_name),
     index("llm_costs_created_at_idx").on(table.created_at),
@@ -384,6 +424,7 @@ export const alertsTable = pgTable(
       sql`${table.confidence} >= 0 AND ${table.confidence} <= 1`
     ),
     index("alerts_competitor_created_idx").on(table.competitor_id, table.created_at),
+    index("alerts_run_id_idx").on(table.run_id),
   ]
 );
 
@@ -525,6 +566,7 @@ export const ragEvalDatasetTable = pgTable(
       "rag_eval_dataset_confidence_level_check",
       sql`${table.confidence_level} IN ('high', 'medium', 'low')`
     ),
+    index("rag_eval_dataset_competitor_id_idx").on(table.competitor_id),
   ]
 );
 

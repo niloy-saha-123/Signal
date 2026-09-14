@@ -1,9 +1,21 @@
 // Typed Drizzle query functions used by the API routes and agents.
 import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
 import type {
+  AgentName,
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
+  RagEvalResult,
+  RagEvalRunSummary,
+  RagEvalCategory,
+  RagEvalConfidenceLevel,
+} from "@signal/shared";
+import {
+  RagEvalResultSchema,
+  RagEvalRunSummarySchema,
+  RagEvalCategorySchema,
+  RagEvalConfidenceLevelSchema,
 } from "@signal/shared";
 import { db } from "./client";
 import {
@@ -18,22 +30,77 @@ import {
   pricingBaselinesTable,
   pricingDiffsTable,
   alertsTable,
+  llmCostsTable,
+  signalPipelineOutboxTable,
+  promptVersionsTable,
+  agentTestCasesTable,
+  ragEvalDatasetTable,
+  ragEvalRunsTable,
+  type SignalPipelineStage,
 } from "./schema";
+import {
+  AgentTestCaseSchema,
+  PromotePromptVersionInputSchema,
+  PromptVersionCandidateSchema,
+  passesPromotionGate,
+  twoProportionZTest,
+  type AgentTestCase,
+  type PromotePromptVersionInput,
+  type PromptVersionCandidate,
+  type PromotionResult,
+} from "../evaluation/prompt-contracts";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
 export type Signal = typeof signalsTable.$inferSelect;
+export type SignalPipelineOutbox = typeof signalPipelineOutboxTable.$inferSelect;
 export type SignalCluster = typeof signalClustersTable.$inferSelect;
 export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
 export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
 export type CompanyProfile = typeof companyProfileTable.$inferSelect;
 export type AgentRun = typeof agentRunsTable.$inferSelect;
+export type AgentLatency = typeof agentLatenciesTable.$inferSelect;
+export type LlmCost = typeof llmCostsTable.$inferSelect;
 export type Alert = typeof alertsTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
 >;
+
+export type RagEvalSeedCaseInput = {
+  id: string;
+  competitor_id: string;
+  category: RagEvalCategory;
+  question: string;
+  expected_answer: string;
+  supporting_signal_ids: string[];
+  confidence_level: RagEvalConfidenceLevel;
+};
+
+export type RagEvalSeedResult = { inserted: number; unchanged: number };
+
+export class RagEvalSeedConflictError extends Error {
+  readonly conflictingIds: string[];
+
+  constructor(conflictingIds: readonly string[]) {
+    const sorted = [...conflictingIds].sort();
+    super(`RAG eval seed conflicts: ${sorted.join(", ")}`);
+    this.name = "RagEvalSeedConflictError";
+    this.conflictingIds = sorted;
+  }
+}
+
+export class RagEvalSeedReferenceError extends Error {
+  readonly caseIds: string[];
+
+  constructor(caseIds: readonly string[]) {
+    const sorted = [...caseIds].sort();
+    super(`RAG eval seed references are invalid for cases: ${sorted.join(", ")}`);
+    this.name = "RagEvalSeedReferenceError";
+    this.caseIds = sorted;
+  }
+}
 
 export type SignalVolumeByDay = {
   day: string;
@@ -50,9 +117,462 @@ export type LatencyPercentiles = {
   p95: number | null;
 };
 
+export type AgentLatencyReportRow = {
+  agent_name: string;
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  mean: number | null;
+  sample_count: number;
+  failed_count: number;
+  // Historical output name: this counts completed telemetry spans, whether
+  // attributed to an agent run or a queue job.
+  run_count: number;
+};
+
+export type CostByCompetitorDayRow = {
+  competitor_id: string | null;
+  day: string;
+  cost_usd: number;
+};
+
 // Matches competitors_discovery_status_check in schema.ts.
 type DiscoveryStatus = "pending" | "in_progress" | "complete" | "failed";
 
+// ── prompt evaluation and promotion ─────────────────────────────────────
+
+export async function getPromptVersion(
+  agentName: AgentName,
+  version: number
+): Promise<PromptVersionCandidate | undefined> {
+  const [row] = await db
+    .select()
+    .from(promptVersionsTable)
+    .where(
+      and(
+        eq(promptVersionsTable.agent_name, agentName),
+        eq(promptVersionsTable.version, version)
+      )
+    )
+    .limit(1);
+  return row === undefined ? undefined : PromptVersionCandidateSchema.parse(row);
+}
+
+export async function listAgentTestCases(agentName: AgentName): Promise<AgentTestCase[]> {
+  const rows = await db
+    .select()
+    .from(agentTestCasesTable)
+    .where(eq(agentTestCasesTable.agent_name, agentName))
+    .orderBy(asc(agentTestCasesTable.created_at), asc(agentTestCasesTable.id));
+  return rows.map((row) => AgentTestCaseSchema.parse(row));
+}
+
+export async function promotePromptVersion(
+  input: PromotePromptVersionInput
+): Promise<PromotionResult> {
+  const parsedInput = PromotePromptVersionInputSchema.parse(input);
+
+  return db.transaction(async (tx) => {
+    // Lock the complete per-agent version set in one deterministic order. This
+    // serializes concurrent promotions for the same agent before either request
+    // reads the active row or evaluates its gate, and avoids the non-deferrable
+    // one-active partial-index race.
+    const lockedResult = await tx.execute(sql`
+      SELECT
+        ${promptVersionsTable.id} AS id,
+        ${promptVersionsTable.agent_name} AS agent_name,
+        ${promptVersionsTable.version} AS version,
+        ${promptVersionsTable.prompt_text} AS prompt_text,
+        ${promptVersionsTable.is_active} AS is_active,
+        ${promptVersionsTable.accuracy} AS accuracy,
+        ${promptVersionsTable.promoted_at} AS promoted_at,
+        ${promptVersionsTable.created_at} AS created_at
+      FROM ${promptVersionsTable}
+      WHERE ${promptVersionsTable.agent_name} = ${parsedInput.agentName}
+      ORDER BY ${promptVersionsTable.version} ASC, ${promptVersionsTable.id} ASC
+      FOR UPDATE
+    `);
+    const lockedPrompts = lockedResult.rows.map((row) =>
+      PromptVersionCandidateSchema.parse(row)
+    );
+    const candidate = lockedPrompts.find(
+      (prompt) => prompt.version === parsedInput.candidateVersion
+    );
+    if (!candidate) {
+      throw new Error(
+        `Prompt candidate ${parsedInput.agentName} version ${parsedInput.candidateVersion} not found`
+      );
+    }
+    if (candidate.is_active) {
+      throw new Error("Prompt candidate is already active");
+    }
+
+    const activePrompts = lockedPrompts.filter((prompt) => prompt.is_active);
+    if (activePrompts.length !== 1) {
+      throw new Error(
+        `Prompt-version invariant violated for ${parsedInput.agentName}: expected exactly one active version`
+      );
+    }
+    const active = activePrompts[0];
+    if (active.version !== parsedInput.activeVersion) {
+      throw new Error(
+        `Active prompt version changed since evaluation: expected ${parsedInput.activeVersion}, found ${active.version}`
+      );
+    }
+
+    const statistics = twoProportionZTest(
+      parsedInput.candidate.passed,
+      parsedInput.candidate.total,
+      parsedInput.active.passed,
+      parsedInput.active.total
+    );
+    const baseResult = {
+      agent_name: parsedInput.agentName,
+      candidate_version: candidate.version,
+      active_version: active.version,
+      candidate_counts: parsedInput.candidate,
+      active_counts: parsedInput.active,
+      statistics,
+    };
+
+    if (!passesPromotionGate(statistics)) {
+      return {
+        ...baseResult,
+        promoted: false,
+        reason:
+          statistics.candidate_accuracy <= statistics.active_accuracy
+            ? "not-better"
+            : "not-significant",
+      };
+    }
+
+    const [deactivated] = await tx
+      .update(promptVersionsTable)
+      .set({ is_active: false })
+      .where(
+        and(
+          eq(promptVersionsTable.id, active.id),
+          eq(promptVersionsTable.agent_name, parsedInput.agentName),
+          eq(promptVersionsTable.is_active, true)
+        )
+      )
+      .returning({ id: promptVersionsTable.id });
+    if (!deactivated) {
+      throw new Error("Active prompt changed while promotion locks were held");
+    }
+
+    const promotedAt = new Date();
+    const [activated] = await tx
+      .update(promptVersionsTable)
+      .set({
+        is_active: true,
+        accuracy: statistics.candidate_accuracy,
+        promoted_at: promotedAt,
+      })
+      .where(
+        and(
+          eq(promptVersionsTable.id, candidate.id),
+          eq(promptVersionsTable.agent_name, parsedInput.agentName),
+          eq(promptVersionsTable.version, parsedInput.candidateVersion),
+          eq(promptVersionsTable.is_active, false)
+        )
+      )
+      .returning({ id: promptVersionsTable.id });
+    if (!activated) {
+      throw new Error("Prompt candidate changed while promotion locks were held");
+    }
+
+    return { ...baseResult, promoted: true, reason: "promoted" };
+  });
+}
+
+function sameStringArray(left: readonly string[] | null, right: readonly string[]): boolean {
+  return left !== null && left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export async function seedRagEvalDataset(
+  cases: readonly RagEvalSeedCaseInput[]
+): Promise<RagEvalSeedResult> {
+  return db.transaction(async (tx) => {
+    const competitorIds = [...new Set(cases.map((seedCase) => seedCase.competitor_id))].sort();
+    const signalIds = [...new Set(cases.flatMap((seedCase) => seedCase.supporting_signal_ids))].sort();
+    const [competitorResult, signalResult] = await Promise.all([
+      tx.execute(sql`
+        SELECT ${competitorsTable.id} AS id
+        FROM ${competitorsTable}
+        WHERE ${competitorsTable.id} = ANY(${sql.param(competitorIds)}::uuid[])
+        ORDER BY ${competitorsTable.id} ASC
+        FOR KEY SHARE
+      `),
+      tx.execute(sql`
+        SELECT ${signalsTable.id} AS id, ${signalsTable.competitor_id} AS competitor_id
+        FROM ${signalsTable}
+        WHERE ${signalsTable.id} = ANY(${sql.param(signalIds)}::uuid[])
+        ORDER BY ${signalsTable.id} ASC
+        FOR KEY SHARE
+      `),
+    ]);
+    const foundCompetitorIds = new Set(competitorResult.rows.map((row) => String(row.id)));
+    const signalCompetitorIds = new Map(
+      signalResult.rows.map((row) => [String(row.id), String(row.competitor_id)])
+    );
+    const invalidReferenceCaseIds = cases.flatMap((seedCase) =>
+      !foundCompetitorIds.has(seedCase.competitor_id) ||
+      seedCase.supporting_signal_ids.some(
+        (signalId) => signalCompetitorIds.get(signalId) !== seedCase.competitor_id
+      )
+        ? [seedCase.id]
+        : []
+    );
+    if (invalidReferenceCaseIds.length > 0) throw new RagEvalSeedReferenceError(invalidReferenceCaseIds);
+
+    const insertRows = cases
+      .map((seedCase) => ({
+        id: seedCase.id,
+        competitor_id: seedCase.competitor_id,
+        category: seedCase.category,
+        question: seedCase.question,
+        expected_answer: seedCase.expected_answer,
+        supporting_chunk_ids: seedCase.supporting_signal_ids,
+        confidence_level: seedCase.confidence_level,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const inserted = await tx
+      .insert(ragEvalDatasetTable)
+      .values(insertRows)
+      .onConflictDoNothing({ target: ragEvalDatasetTable.id })
+      .returning({ id: ragEvalDatasetTable.id });
+
+    const requestedIds = cases.map((seedCase) => seedCase.id).sort();
+    const persisted = await tx
+      .select({
+        id: ragEvalDatasetTable.id,
+        competitor_id: ragEvalDatasetTable.competitor_id,
+        category: ragEvalDatasetTable.category,
+        question: ragEvalDatasetTable.question,
+        expected_answer: ragEvalDatasetTable.expected_answer,
+        supporting_chunk_ids: ragEvalDatasetTable.supporting_chunk_ids,
+        confidence_level: ragEvalDatasetTable.confidence_level,
+      })
+      .from(ragEvalDatasetTable)
+      .where(inArray(ragEvalDatasetTable.id, requestedIds))
+      .orderBy(asc(ragEvalDatasetTable.id));
+    const persistedById = new Map(persisted.map((row) => [row.id, row]));
+    const conflicts = cases.flatMap((seedCase) => {
+      const row = persistedById.get(seedCase.id);
+      return !row ||
+        row.competitor_id !== seedCase.competitor_id ||
+        row.category !== seedCase.category ||
+        row.question !== seedCase.question ||
+        row.expected_answer !== seedCase.expected_answer ||
+        !sameStringArray(row.supporting_chunk_ids, seedCase.supporting_signal_ids) ||
+        row.confidence_level !== seedCase.confidence_level
+        ? [seedCase.id]
+        : [];
+    });
+    if (conflicts.length > 0) throw new RagEvalSeedConflictError(conflicts);
+    return { inserted: inserted.length, unchanged: cases.length - inserted.length };
+  });
+}
+
+// ── RAG faithfulness evaluation ────────────────────────────────────────────
+
+export type RagEvalCase = {
+  id: string;
+  competitor_id: string;
+  category: RagEvalCategory;
+  question: string;
+  expected_answer: string;
+  supporting_signal_ids: string[];
+  confidence_level: RagEvalConfidenceLevel;
+  created_at: Date;
+};
+
+export type RagEvalCitationSignal = {
+  id: string;
+  competitor_id: string;
+  source: SignalSource;
+  title: string;
+  raw_text: string;
+};
+
+export class RagEvalDatasetIntegrityError extends Error {
+  readonly caseId: string;
+
+  constructor(caseId: string, reason: string) {
+    super(`RAG eval dataset row ${caseId} failed integrity validation: ${reason}`);
+    this.name = "RagEvalDatasetIntegrityError";
+    this.caseId = caseId;
+  }
+}
+
+// scripts/rag-eval.ts must never send a curator placeholder or a legacy-invalid row to a
+// paid ChatAgent/judge call — this is a runtime boundary against the raw select, not just
+// the seed-time schema which already enforces most of this for freshly seeded rows.
+const RagEvalDatasetRowSchema = z
+  .object({
+    id: z.string().uuid(),
+    competitor_id: z.string().uuid(),
+    category: RagEvalCategorySchema,
+    question: z.string().min(1),
+    expected_answer: z.string().min(1),
+    supporting_signal_ids: z.array(z.string().uuid()).min(1),
+    confidence_level: RagEvalConfidenceLevelSchema,
+    created_at: z.date(),
+  })
+  .superRefine((row, context) => {
+    if (row.question.startsWith("STRUCTURAL EXAMPLE ONLY") ||
+      row.expected_answer.startsWith("STRUCTURAL EXAMPLE ONLY")) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Structural example rows cannot be evaluated",
+      });
+    }
+  });
+
+export async function listRagEvalCases(competitorId?: string): Promise<RagEvalCase[]> {
+  const rows = await db
+    .select({
+      id: ragEvalDatasetTable.id,
+      competitor_id: ragEvalDatasetTable.competitor_id,
+      category: ragEvalDatasetTable.category,
+      question: ragEvalDatasetTable.question,
+      expected_answer: ragEvalDatasetTable.expected_answer,
+      supporting_signal_ids: ragEvalDatasetTable.supporting_chunk_ids,
+      confidence_level: ragEvalDatasetTable.confidence_level,
+      created_at: ragEvalDatasetTable.created_at,
+    })
+    .from(ragEvalDatasetTable)
+    .where(competitorId === undefined ? undefined : eq(ragEvalDatasetTable.competitor_id, competitorId))
+    .orderBy(asc(ragEvalDatasetTable.created_at), asc(ragEvalDatasetTable.id));
+
+  return rows.map((row) => {
+    const validated = RagEvalDatasetRowSchema.safeParse(row);
+    if (!validated.success) {
+      throw new RagEvalDatasetIntegrityError(
+        String(row.id),
+        validated.error.issues.map((issue) => issue.message).join("; ")
+      );
+    }
+    return validated.data;
+  });
+}
+
+// One set-based `WHERE id IN (...)` lookup — never called per-case. `title` is
+// nullable in the signals table; RagEvalCitationSignal keeps the field honestly
+// present but empty rather than surfacing null through the evaluator/judge boundary.
+export async function getRagEvalCitationSignals(
+  ids: readonly string[]
+): Promise<RagEvalCitationSignal[]> {
+  if (ids.length === 0) return [];
+  const uniqueIds = [...new Set(ids)];
+  const rows = await db
+    .select({
+      id: signalsTable.id,
+      competitor_id: signalsTable.competitor_id,
+      source: signalsTable.source,
+      title: signalsTable.title,
+      raw_text: signalsTable.raw_text,
+    })
+    .from(signalsTable)
+    .where(inArray(signalsTable.id, uniqueIds));
+
+  return rows.map((row) => ({
+    id: row.id,
+    competitor_id: row.competitor_id,
+    source: row.source,
+    title: row.title ?? "",
+    raw_text: row.raw_text,
+  }));
+}
+
+export type PersistRagEvaluationInput = {
+  run_at: Date;
+  threshold: number;
+  ci_triggered: boolean;
+  git_commit: string | null;
+  results: readonly RagEvalResult[];
+};
+
+export async function persistRagEvaluation(
+  input: PersistRagEvaluationInput
+): Promise<{ id: string; summary: RagEvalRunSummary }> {
+  if (input.results.length === 0) {
+    throw new Error("RAG evaluation persistence requires at least one result");
+  }
+  // Independently recompute totals/mean from validated results rather than trusting
+  // caller-supplied aggregates — the persisted row is the source of truth.
+  const parsedResults = input.results.map((result) => RagEvalResultSchema.parse(result));
+  const total = parsedResults.length;
+  const passed = parsedResults.filter((result) => result.passed).length;
+  const failed = total - passed;
+  const faithfulnessScore =
+    parsedResults.reduce((sum, result) => sum + result.faithfulness_score, 0) / total;
+
+  const runId = await db.transaction(async (tx) => {
+    const caseIds = [...new Set(parsedResults.map((result) => result.question_id))].sort();
+    const scoreValues = sql.join(
+      parsedResults.map(
+        (result) => sql`(${result.question_id}::uuid, ${result.faithfulness_score}::real)`
+      ),
+      sql`, `
+    );
+    // A single CASE per column: every requested id is matched and returned by the
+    // WHERE, but a case whose stored last_evaluated_at is already newer than this
+    // run keeps its existing value — a slower concurrent old run cannot clobber a
+    // newer one. No per-case UPDATE loop.
+    const updateResult = await tx.execute(sql`
+      UPDATE ${ragEvalDatasetTable} AS d
+      SET
+        last_evaluated_at = CASE
+          WHEN d.last_evaluated_at IS NULL OR d.last_evaluated_at <= ${input.run_at}
+          THEN ${input.run_at}
+          ELSE d.last_evaluated_at
+        END,
+        last_faithfulness_score = CASE
+          WHEN d.last_evaluated_at IS NULL OR d.last_evaluated_at <= ${input.run_at}
+          THEN v.score
+          ELSE d.last_faithfulness_score
+        END
+      FROM (VALUES ${scoreValues}) AS v(id, score)
+      WHERE d.id = v.id
+      RETURNING d.id
+    `);
+    const updatedIds = new Set(updateResult.rows.map((row) => String(row.id)));
+    if (updatedIds.size !== caseIds.length || caseIds.some((id) => !updatedIds.has(id))) {
+      throw new Error("RAG evaluation dataset case was deleted during evaluation");
+    }
+
+    const [inserted] = await tx
+      .insert(ragEvalRunsTable)
+      .values({
+        run_at: input.run_at,
+        total_questions: total,
+        passed,
+        failed,
+        faithfulness_score: faithfulnessScore,
+        threshold: input.threshold,
+        ci_triggered: input.ci_triggered,
+        git_commit: input.git_commit,
+        results: parsedResults,
+      })
+      .returning({ id: ragEvalRunsTable.id });
+    if (!inserted) throw new Error("RAG evaluation run insert returned no row");
+    return inserted.id;
+  });
+
+  const summary = RagEvalRunSummarySchema.parse({
+    run_at: input.run_at.toISOString(),
+    total_questions: total,
+    passed,
+    failed,
+    faithfulness_score: faithfulnessScore,
+    threshold: input.threshold,
+    ci_triggered: input.ci_triggered,
+    git_commit: input.git_commit,
+  });
+  return { id: runId, summary };
+}
 
 export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
   const [row] = await db
@@ -253,8 +773,11 @@ export type CreateSignalInput = {
 };
 
 export async function createSignal(input: CreateSignalInput): Promise<Signal> {
-  const [row] = await db.insert(signalsTable).values(input).returning();
-  return row;
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(signalsTable).values(input).returning();
+    await tx.insert(signalPipelineOutboxTable).values({ signal_id: row.id });
+    return row;
+  });
 }
 
 export interface FeedCursor {
@@ -489,6 +1012,42 @@ export async function getLatencyPercentiles(days = 7): Promise<LatencyPercentile
     .groupBy(agentLatenciesTable.agent_name);
 }
 
+// Operational report source — one set-based aggregation for every agent,
+// across both run- and job-attributed spans.
+// Failure rate excludes skipped samples because a deliberate no-op is neither
+// success nor failure. Percentiles ignore NULL duration_ms by PostgreSQL design.
+export async function getAgentLatencyReport(days = 7): Promise<AgentLatencyReportRow[]> {
+  return db
+    .select({
+      agent_name: agentLatenciesTable.agent_name,
+      p50: sql<number | null>`PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      p95: sql<number | null>`PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      p99: sql<number | null>`PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY ${agentLatenciesTable.duration_ms})`,
+      mean: sql<number | null>`AVG(${agentLatenciesTable.duration_ms})::float8`,
+      sample_count: sql<number>`COUNT(${agentLatenciesTable.duration_ms})::int`,
+      failed_count: sql<number>`COUNT(*) FILTER (WHERE ${agentLatenciesTable.status} = 'failed')::int`,
+      run_count: sql<number>`COUNT(*) FILTER (WHERE ${agentLatenciesTable.status} IN ('success', 'failed'))::int`,
+    })
+    .from(agentLatenciesTable)
+    .where(sql`${agentLatenciesTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
+    .groupBy(agentLatenciesTable.agent_name);
+}
+
+// LLM cost is stored as NUMERIC for exact accounting. The report converts the
+// six-decimal aggregate to float8 only at this display boundary.
+export async function getCostByCompetitorDay(days = 7): Promise<CostByCompetitorDayRow[]> {
+  const utcDay = sql<string>`DATE_TRUNC('day', ${llmCostsTable.created_at} AT TIME ZONE 'UTC')::date::text`;
+  return db
+    .select({
+      competitor_id: llmCostsTable.competitor_id,
+      day: utcDay,
+      cost_usd: sql<number>`SUM(${llmCostsTable.cost_usd})::float8`,
+    })
+    .from(llmCostsTable)
+    .where(sql`${llmCostsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
+    .groupBy(llmCostsTable.competitor_id, utcDay);
+}
+
 // company_profile is single-row (no natural unique key beyond its own id —
 // see schema.ts). `.limit(1)` matches lib/company-context.ts's existing
 // direct read of this table. `.orderBy(asc(created_at))` makes a stray
@@ -520,6 +1079,89 @@ export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<
 // ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
 // Collectors (Part 6) only INSERT raw signal rows; these UPDATE the columns each
 // pipeline stage populates as a signal moves through it.
+
+const DEFAULT_OUTBOX_BATCH_LIMIT = 100;
+const MAX_OUTBOX_BATCH_LIMIT = 500;
+
+function outboxBatchLimit(value: number): number {
+  const floored = Math.floor(value);
+  return Number.isFinite(floored)
+    ? Math.max(1, Math.min(MAX_OUTBOX_BATCH_LIMIT, floored))
+    : DEFAULT_OUTBOX_BATCH_LIMIT;
+}
+
+export async function listPendingSignalPipelineOutbox(
+  limit = DEFAULT_OUTBOX_BATCH_LIMIT
+): Promise<SignalPipelineOutbox[]> {
+  return db
+    .select()
+    .from(signalPipelineOutboxTable)
+    .orderBy(asc(signalPipelineOutboxTable.created_at))
+    .limit(outboxBatchLimit(limit));
+}
+
+export async function advanceSignalPipelineOutbox(
+  signalId: string,
+  expectedStage: SignalPipelineStage,
+  nextStage: SignalPipelineStage
+): Promise<boolean> {
+  const rows = await db
+    .update(signalPipelineOutboxTable)
+    .set({ stage: nextStage, updated_at: new Date() })
+    .where(
+      and(
+        eq(signalPipelineOutboxTable.signal_id, signalId),
+        eq(signalPipelineOutboxTable.stage, expectedStage)
+      )
+    )
+    .returning({ signal_id: signalPipelineOutboxTable.signal_id });
+  return rows.length > 0;
+}
+
+// Score persistence and stage ownership are one transaction. If a worker advances
+// the outbox but cannot enqueue deduplication, a retry/recovery job observes the lost
+// compare-and-set and cannot replace the already-committed time-sensitive score.
+export async function scoreSignalAndAdvanceOutbox(
+  signalId: string,
+  qualityScore: number
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const advancedRows = await tx
+      .update(signalPipelineOutboxTable)
+      .set({ stage: "deduplication", updated_at: new Date() })
+      .where(
+        and(
+          eq(signalPipelineOutboxTable.signal_id, signalId),
+          eq(signalPipelineOutboxTable.stage, "quality_scoring")
+        )
+      )
+      .returning({ signal_id: signalPipelineOutboxTable.signal_id });
+
+    if (advancedRows.length === 0) return false;
+
+    await tx
+      .update(signalsTable)
+      .set({ quality_score: qualityScore })
+      .where(eq(signalsTable.id, signalId));
+    return true;
+  });
+}
+
+export async function completeSignalPipelineOutbox(
+  signalId: string,
+  expectedStage: "deduplication"
+): Promise<boolean> {
+  const rows = await db
+    .delete(signalPipelineOutboxTable)
+    .where(
+      and(
+        eq(signalPipelineOutboxTable.signal_id, signalId),
+        eq(signalPipelineOutboxTable.stage, expectedStage)
+      )
+    )
+    .returning({ signal_id: signalPipelineOutboxTable.signal_id });
+  return rows.length > 0;
+}
 
 export async function getSignalById(id: string): Promise<Signal | undefined> {
   const [row] = await db.select().from(signalsTable).where(eq(signalsTable.id, id));

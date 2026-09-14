@@ -1,15 +1,24 @@
 // BullMQ collector — pulls competitor mentions from the Algolia HN API every 6h.
 import type { Job } from "bullmq";
+import { z } from "zod";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
+  getCompetitorById,
   getLatestSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
 } from "../db/queries";
+import {
+  CollectorJobDataSchema,
+  resolveCollectorCompetitors,
+  type CollectorJobData,
+  type HistoricalCollectionWindow,
+} from "./job-data";
 
 const SERVICE_NAME = "hn";
 const SOURCE = "hn" as const;
@@ -17,79 +26,125 @@ const SOURCE = "hn" as const;
 // reasonable initial window instead of the entire HN history.
 const INITIAL_WINDOW_SECONDS = 7 * 24 * 3600;
 
-interface AlgoliaHnHit {
-  objectID: string;
-  created_at_i: number;
-  comment_text?: string | null;
-  story_text?: string | null;
-  story_title?: string | null;
-  title?: string | null;
-}
+const AlgoliaHnHitSchema = z.object({
+  objectID: z.string().trim().min(1),
+  created_at_i: z.number().finite().nonnegative(),
+  comment_text: z.string().nullable().optional(),
+  story_text: z.string().nullable().optional(),
+  story_title: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+});
 
-interface AlgoliaHnResponse {
-  hits: AlgoliaHnHit[];
-}
+const AlgoliaHnResponseSchema = z.object({
+  hits: z.array(AlgoliaHnHitSchema),
+  page: z.number().int().nonnegative().optional(),
+  nbPages: z.number().int().nonnegative().optional(),
+});
+type AlgoliaHnResponse = z.infer<typeof AlgoliaHnResponseSchema>;
 
-async function searchHn(competitorName: string, sinceUnixSeconds: number): Promise<AlgoliaHnHit[]> {
-  const url =
-    `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(competitorName)}` +
-    `&tags=comment&numericFilters=created_at_i>${sinceUnixSeconds}`;
+const BACKFILL_PAGE_LIMIT = 10;
+const BACKFILL_HITS_PER_PAGE = 100;
+
+async function searchHn(
+  competitorName: string,
+  sinceUnixSeconds: number,
+  untilUnixSeconds: number | undefined,
+  page: number
+): Promise<AlgoliaHnResponse> {
+  const numericFilters = [
+    `created_at_i>${sinceUnixSeconds}`,
+    ...(untilUnixSeconds === undefined ? [] : [`created_at_i<=${untilUnixSeconds}`]),
+  ].join(",");
+  const params = new URLSearchParams({
+    query: competitorName,
+    tags: "comment",
+    numericFilters,
+    ...(page === 0 ? {} : { page: String(page) }),
+    ...(untilUnixSeconds === undefined ? {} : { hitsPerPage: String(BACKFILL_HITS_PER_PAGE) }),
+  });
+  const endpoint = untilUnixSeconds === undefined ? "search" : "search_by_date";
+  const url = `https://hn.algolia.com/api/v1/${endpoint}?${params.toString()}`;
 
   const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
   if (!response.ok) {
     throw new Error(`Algolia HN API returned ${response.status} for query "${competitorName}"`);
   }
-  const data = (await response.json()) as AlgoliaHnResponse;
-  return data.hits ?? [];
+  const parsed = AlgoliaHnResponseSchema.safeParse(await response.json());
+  if (!parsed.success) throw new Error("Algolia HN response was invalid");
+  return parsed.data;
 }
 
-async function collectForCompetitor(competitor: { id: string; name: string }): Promise<void> {
-  const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, SOURCE);
-  const sinceUnixSeconds = lastCollectedAt
-    ? Math.floor(lastCollectedAt.getTime() / 1000)
-    : Math.floor(Date.now() / 1000) - INITIAL_WINDOW_SECONDS;
+async function collectForCompetitor(
+  competitor: { id: string; name: string },
+  backfill?: HistoricalCollectionWindow
+): Promise<void> {
+  const lastCollectedAt = backfill
+    ? undefined
+    : await getLatestSignalCollectedAt(competitor.id, SOURCE);
+  const sinceUnixSeconds = backfill
+    ? Math.floor(Date.parse(backfill.since) / 1000)
+    : lastCollectedAt
+      ? Math.floor(lastCollectedAt.getTime() / 1000)
+      : Math.floor(Date.now() / 1000) - INITIAL_WINDOW_SECONDS;
+  const untilUnixSeconds = backfill
+    ? Math.floor(Date.parse(backfill.until) / 1000)
+    : undefined;
+  const pageLimit = backfill ? BACKFILL_PAGE_LIMIT : 1;
+  let advertisedPages = 1;
 
-  const hits = await withRetry(() => searchHn(competitor.name, sinceUnixSeconds));
+  for (let page = 0; page < pageLimit; page += 1) {
+    const response = await withRetry(() =>
+      searchHn(competitor.name, sinceUnixSeconds, untilUnixSeconds, page)
+    );
+    const hits = response.hits ?? [];
+    advertisedPages = Math.max(response.nbPages ?? 1, 1);
 
-  for (const hit of hits) {
-    const rawText = hit.comment_text ?? hit.story_text ?? "";
-    if (!rawText) continue;
+    for (const hit of hits) {
+      if (hit.created_at_i <= sinceUnixSeconds) continue;
+      if (untilUnixSeconds !== undefined && hit.created_at_i > untilUnixSeconds) continue;
+      const rawText = hit.comment_text ?? hit.story_text ?? "";
+      if (!rawText) continue;
 
-    // Permalink to the comment itself — the stable per-hit identity used
-    // for dedup, since the schema has no source_id column.
-    const sourceUrl = `https://news.ycombinator.com/item?id=${hit.objectID}`;
+      // Permalink to the comment itself — the stable per-hit identity used
+      // for dedup, since the schema has no source_id column.
+      const sourceUrl = `https://news.ycombinator.com/item?id=${hit.objectID}`;
 
-    // One hit throwing (dedup check, insert, or enqueue) must not abort the
-    // rest of this competitor's batch — same isolation one level up as the
-    // per-competitor loop, just per-item here.
-    try {
-      const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
-      if (alreadyCollected) continue;
+      // One hit throwing (dedup check, insert, or enqueue) must not abort the
+      // rest of this competitor's batch — same isolation one level up as the
+      // per-competitor loop, just per-item here.
+      try {
+        const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
+        if (alreadyCollected) continue;
 
-      const signal = await createSignal({
-        competitor_id: competitor.id,
-        source: SOURCE,
-        source_url: sourceUrl,
-        title: hit.story_title ?? hit.title ?? null,
-        raw_text: rawText,
-      });
+        const signal = await createSignal({
+          competitor_id: competitor.id,
+          source: SOURCE,
+          source_url: sourceUrl,
+          title: hit.story_title ?? hit.title ?? null,
+          raw_text: rawText,
+        });
 
-      await withRetry(() =>
-        queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-      );
-    } catch (err) {
-      logger.error("hn collector failed to process one item — continuing with the rest", {
-        competitor_id: competitor.id,
-        competitor_name: competitor.name,
-        hn_object_id: hit.objectID,
-        error: err instanceof Error ? err.message : String(err),
-      });
+        await enqueueInitialSignalPipeline(signal.id);
+      } catch (err) {
+        logger.error("hn collector failed to process one item — continuing with the rest", {
+          competitor_id: competitor.id,
+          competitor_name: competitor.name,
+          hn_object_id: hit.objectID,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
-  }
-}
 
-interface HnCollectJobData {
-  // No fields needed — every run sweeps all active competitors.
+    if (page + 1 >= advertisedPages) break;
+  }
+
+  if (backfill && advertisedPages > pageLimit) {
+    logger.warn("HN backfill reached its page cap; results are truncated", {
+      competitor_id: competitor.id,
+      requested_pages: advertisedPages,
+      processed_pages: pageLimit,
+    });
+  }
 }
 
 async function recordCircuitFailure(err: unknown): Promise<void> {
@@ -102,13 +157,19 @@ async function recordCircuitFailure(err: unknown): Promise<void> {
   }
 }
 
-export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise<void> {
+export async function hnCollectorProcessor(_job: Job<CollectorJobData>): Promise<void> {
+  const jobData = CollectorJobDataSchema.parse(_job.data ?? {});
   if (await isCircuitOpen(SERVICE_NAME)) {
     throw new Error(`${SERVICE_NAME} circuit is open — skipping job`);
   }
 
+  let circuitFailureRecorded = false;
   try {
-    const competitors = (await listCompetitors()).filter((c) => c.is_active);
+    const competitors = await resolveCollectorCompetitors(
+      jobData,
+      listCompetitors,
+      getCompetitorById
+    );
 
     // One competitor's Algolia fetch failing (after withRetry exhausts its
     // attempts) must not abort collection for every other competitor in
@@ -138,7 +199,7 @@ export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise
       }
 
       try {
-        await collectForCompetitor(competitor);
+        await collectForCompetitor(competitor, jobData.backfill);
       } catch (err) {
         hadFailure = true;
         logger.error("hn collector failed for one competitor — continuing with the rest", {
@@ -147,6 +208,11 @@ export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise
           error: err instanceof Error ? err.message : String(err),
         });
         await recordCircuitFailure(err);
+        circuitFailureRecorded = true;
+        // Scheduled sweeps retain their established per-competitor isolation.
+        // A scoped backfill has no other competitor to save, so rejecting is
+        // required for BullMQ to retry its bounded, idempotent work.
+        if (jobData.backfill) throw err;
       }
     }
 
@@ -157,7 +223,7 @@ export async function hnCollectorProcessor(_job: Job<HnCollectJobData>): Promise
     // Failure outside the per-competitor loop (e.g. listCompetitors()
     // itself) — a real job-level failure, not one competitor's problem, so
     // this one still rethrows.
-    await recordCircuitFailure(err);
+    if (!circuitFailureRecorded) await recordCircuitFailure(err);
     throw err;
   }
 }

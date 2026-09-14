@@ -66,7 +66,7 @@ vi.mock("@/llm/prompt-registry", () => ({ getActivePrompt: getActivePromptMock }
 
 const { trackLatencyMock } = vi.hoisted(() => ({
   trackLatencyMock: vi.fn(
-    (_a: string, _c: string, _r: string, fn: () => unknown) => fn()
+    (_a: string, _context: unknown, fn: () => unknown) => fn()
   ),
 }));
 
@@ -153,7 +153,7 @@ describe("agents/analysis/synthesis", () => {
     getDailyBudgetMock.mockReturnValue(100);
     getActivePromptMock.mockResolvedValue(null);
     anthropicInvokeMock.mockResolvedValue(anthropicResult());
-    trackLatencyMock.mockImplementation((_a: string, _c: string, _r: string, fn: () => unknown) => fn());
+    trackLatencyMock.mockImplementation((_a: string, _context: unknown, fn: () => unknown) => fn());
   });
 
   it("full happy path: computes components, persists a sane score, closes the run, returns state", async () => {
@@ -187,7 +187,13 @@ describe("agents/analysis/synthesis", () => {
       expect.objectContaining({ model: "claude-sonnet-5", maxRetries: 2 })
     );
     expect(selectModelMock).toHaveBeenCalledWith("claude-sonnet", true);
-    expect(trackCostMock).toHaveBeenCalledWith("synthesis", "claude-sonnet", 40, 12, "run1", "c1");
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "synthesis",
+      "claude-sonnet",
+      40,
+      12,
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } }
+    );
 
     expect(completeAgentRunMock).toHaveBeenCalledWith("run1", "completed", "alert");
     // completeAgentRun is the last write — after the score is persisted.
@@ -325,6 +331,12 @@ describe("agents/analysis/synthesis", () => {
     expect(chatAnthropicMock).toHaveBeenCalledWith(
       expect.objectContaining({ model: "claude-haiku-4-5-20251001" })
     );
-    expect(trackCostMock).toHaveBeenCalledWith("synthesis", "claude-haiku", 40, 12, "run1", "c1");
+    expect(trackCostMock).toHaveBeenCalledWith(
+      "synthesis",
+      "claude-haiku",
+      40,
+      12,
+      { competitorId: "c1", identity: { kind: "run", runId: "run1" } }
+    );
   });
 });

@@ -6,9 +6,10 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
+const { listCompetitorsMock, getCompetitorByIdMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
   vi.hoisted(() => ({
     listCompetitorsMock: vi.fn(),
+    getCompetitorByIdMock: vi.fn(),
     getLatestSignalCollectedAtMock: vi.fn(),
     signalExistsBySourceUrlMock: vi.fn(),
     createSignalMock: vi.fn(),
@@ -16,6 +17,7 @@ const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourc
 
 vi.mock("@/db/queries", () => ({
   listCompetitors: listCompetitorsMock,
+  getCompetitorById: getCompetitorByIdMock,
   getLatestSignalCollectedAt: getLatestSignalCollectedAtMock,
   signalExistsBySourceUrl: signalExistsBySourceUrlMock,
   createSignal: createSignalMock,
@@ -25,10 +27,16 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   queueAddMock: vi.fn().mockResolvedValue(undefined),
   registerWorkerMock: vi.fn(),
 }));
+const { enqueueInitialSignalPipelineMock } = vi.hoisted(() => ({
+  enqueueInitialSignalPipelineMock: vi.fn(),
+}));
 
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
 import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
@@ -36,6 +44,7 @@ import { hnCollectorProcessor, initHnWorker } from "@/collectors/hn";
 
 const activeCompetitor = { id: "c1", name: "Acme", is_active: true };
 const inactiveCompetitor = { id: "c2", name: "Zeta", is_active: false };
+const backfillCompetitorId = "11111111-1111-4111-8111-111111111111";
 
 function algoliaResponse(hits: unknown[]) {
   return {
@@ -52,6 +61,7 @@ describe("collectors/hn", () => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([activeCompetitor, inactiveCompetitor]);
+    getCompetitorByIdMock.mockResolvedValue(activeCompetitor);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
     signalExistsBySourceUrlMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -60,6 +70,10 @@ describe("collectors/hn", () => {
     }));
     fetchMock = vi.fn().mockResolvedValue(algoliaResponse([]));
     vi.stubGlobal("fetch", fetchMock);
+    enqueueInitialSignalPipelineMock.mockImplementation(async (signalId: string) => {
+      await queueAddMock("extract-entities", { signal_id: signalId });
+      return "added";
+    });
   });
 
   afterEach(() => {
@@ -91,9 +105,9 @@ describe("collectors/hn", () => {
     await hnCollectorProcessor({} as never);
 
     const [url] = fetchMock.mock.calls[0];
-    const match = url.match(/numericFilters=created_at_i>(\d+)/);
-    expect(match).not.toBeNull();
-    const since = Number(match![1]);
+    const filter = new URL(url).searchParams.get("numericFilters");
+    expect(filter).not.toBeNull();
+    const since = Number(filter!.match(/created_at_i>(\d+)/)![1]);
     expect(since).toBeGreaterThanOrEqual(before - 5);
     expect(since).toBeLessThanOrEqual(before + 5);
   });
@@ -105,7 +119,71 @@ describe("collectors/hn", () => {
     await hnCollectorProcessor({} as never);
 
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain(`numericFilters=created_at_i>${Math.floor(lastCollectedAt.getTime() / 1000)}`);
+    expect(new URL(url).searchParams.get("numericFilters")).toBe(
+      `created_at_i>${Math.floor(lastCollectedAt.getTime() / 1000)}`
+    );
+  });
+
+  it("scopes a backfill to one active competitor and uses both requested time bounds", async () => {
+    const since = "2026-08-12T15:30:00.000Z";
+    const until = "2026-09-11T15:30:00.000Z";
+
+    await hnCollectorProcessor({
+      data: { backfill: { competitor_id: backfillCompetitorId, since, until } },
+    } as never);
+
+    expect(getCompetitorByIdMock).toHaveBeenCalledWith(backfillCompetitorId);
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getLatestSignalCollectedAtMock).not.toHaveBeenCalled();
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/search_by_date?");
+    expect(decodeURIComponent(url)).toContain(
+      `numericFilters=created_at_i>${Math.floor(Date.parse(since) / 1000)},created_at_i<=${Math.floor(Date.parse(until) / 1000)}`
+    );
+  });
+
+  it("paginates bounded HN backfill results using page and nbPages", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const page = Number(new URL(url).searchParams.get("page") ?? "0");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          hits: [
+            {
+              objectID: `${page}`,
+              created_at_i: Math.floor(Date.parse("2026-09-01T00:00:00.000Z") / 1000),
+              comment_text: `page ${page}`,
+            },
+          ],
+          page,
+          nbPages: 2,
+        }),
+      };
+    });
+
+    await hnCollectorProcessor({
+      data: {
+        backfill: {
+          competitor_id: backfillCompetitorId,
+          since: "2026-08-12T15:30:00.000Z",
+          until: "2026-09-11T15:30:00.000Z",
+        },
+      },
+    } as never);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toContain("page=1");
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed backfill job data before database or network work", async () => {
+    await expect(
+      hnCollectorProcessor({ data: { backfill: { competitor_id: "bad" } } } as never)
+    ).rejects.toThrow();
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getCompetitorByIdMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("inserts a new signal per hit, deduped by source_url, and enqueues entity extraction", async () => {
@@ -113,7 +191,7 @@ describe("collectors/hn", () => {
       algoliaResponse([
         {
           objectID: "111",
-          created_at_i: 1700000000,
+          created_at_i: Math.floor(Date.now() / 1000),
           comment_text: "Acme just shipped a new feature",
           story_title: "Acme launches thing",
         },
@@ -142,7 +220,7 @@ describe("collectors/hn", () => {
   it("skips a hit whose source_url already exists for this competitor+source", async () => {
     fetchMock.mockResolvedValue(
       algoliaResponse([
-        { objectID: "111", created_at_i: 1700000000, comment_text: "Acme mention" },
+        { objectID: "111", created_at_i: Math.floor(Date.now() / 1000), comment_text: "Acme mention" },
       ])
     );
     signalExistsBySourceUrlMock.mockResolvedValue(true);
@@ -171,6 +249,25 @@ describe("collectors/hn", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 
+  it("rejects a scoped backfill when its competitor fetch fails so BullMQ can retry", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+
+    await expect(
+      hnCollectorProcessor({
+        data: {
+          backfill: {
+            competitor_id: backfillCompetitorId,
+            since: "2026-08-12T15:30:00.000Z",
+            until: "2026-09-11T15:30:00.000Z",
+          },
+        },
+      } as never)
+    ).rejects.toThrow("Algolia HN API returned 500");
+
+    expect(recordFailure).toHaveBeenCalledTimes(1);
+    expect(recordSuccess).not.toHaveBeenCalled();
+  }, 10000);
+
   it("keeps processing subsequent competitors when an earlier one's fetch keeps failing", async () => {
     const failingCompetitor = { id: "c-fail", name: "FailCo", is_active: true };
     listCompetitorsMock.mockResolvedValue([failingCompetitor, activeCompetitor]);
@@ -179,7 +276,7 @@ describe("collectors/hn", () => {
         throw new Error("network down");
       }
       return algoliaResponse([
-        { objectID: "222", created_at_i: 1700000000, comment_text: "Acme mention" },
+        { objectID: "222", created_at_i: Math.floor(Date.now() / 1000), comment_text: "Acme mention" },
       ]);
     });
 
@@ -205,11 +302,53 @@ describe("collectors/hn", () => {
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("validates the provider payload before reading hits or writing signals", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ hits: [{ objectID: 42, created_at_i: "yesterday" }] }),
+    });
+
+    await expect(hnCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      "hn",
+      expect.stringContaining("Algolia HN response was invalid")
+    );
+    expect(createSignalMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("enforces both backfill boundaries client-side, excluding the exact lower bound", async () => {
+    const since = "2026-08-12T15:30:00.000Z";
+    const until = "2026-09-11T15:30:00.000Z";
+    const lower = Math.floor(Date.parse(since) / 1000);
+    const upper = Math.floor(Date.parse(until) / 1000);
+    fetchMock.mockResolvedValue(
+      algoliaResponse([
+        { objectID: "before", created_at_i: lower - 1, comment_text: "before" },
+        { objectID: "lower", created_at_i: lower, comment_text: "lower" },
+        { objectID: "inside", created_at_i: lower + 1, comment_text: "inside" },
+        { objectID: "upper", created_at_i: upper, comment_text: "upper" },
+        { objectID: "after", created_at_i: upper + 1, comment_text: "after" },
+      ])
+    );
+
+    await hnCollectorProcessor({
+      data: { backfill: { competitor_id: backfillCompetitorId, since, until } },
+    } as never);
+
+    const urls = createSignalMock.mock.calls.map((call) => call[0].source_url);
+    expect(urls).toEqual([
+      "https://news.ycombinator.com/item?id=inside",
+      "https://news.ycombinator.com/item?id=upper",
+    ]);
+  });
+
   it("keeps processing subsequent hits in the same competitor's batch when an earlier hit fails", async () => {
     fetchMock.mockResolvedValue(
       algoliaResponse([
-        { objectID: "bad", created_at_i: 1700000000, comment_text: "bad hit" },
-        { objectID: "good", created_at_i: 1700000000, comment_text: "good hit" },
+        { objectID: "bad", created_at_i: Math.floor(Date.now() / 1000), comment_text: "bad hit" },
+        { objectID: "good", created_at_i: Math.floor(Date.now() / 1000), comment_text: "good hit" },
       ])
     );
     createSignalMock

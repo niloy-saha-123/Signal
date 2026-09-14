@@ -5,7 +5,8 @@ import { chromium } from "playwright";
 import { withRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
+import { registerWorker } from "../queues/registry";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
   getLatestPricingBaseline,
@@ -180,9 +181,7 @@ async function collectForCompetitor(competitor: {
     raw_text: summarizeDiff(diff, significance),
   });
 
-  await withRetry(() =>
-    queues["pipeline-entity-extraction"].add("extract-entities", { signal_id: signal.id })
-  );
+  await enqueueInitialSignalPipeline(signal.id);
 }
 
 interface PricingCollectJobData {

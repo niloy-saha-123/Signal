@@ -1,8 +1,8 @@
 // LangGraph node — clusters sentiment signals into new vs. chronic complaints (Claude Haiku).
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, SentimentClustersResult } from "../../graph/state";
+import { SentimentClustersSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getRecentSignalsByCompetitorAndSource, type Signal } from "../../db/queries";
@@ -28,12 +28,6 @@ const LLM_MAX_RETRIES = 2;
 // Same "don't blow the context window" reasoning as intent-analyzer.ts's
 // INTENT_ANALYZER_INPUT_MAX_LENGTH / deduplicator.ts's EMBEDDING_TEXT_MAX_LENGTH.
 export const SENTIMENT_CLUSTERER_INPUT_MAX_LENGTH = 24_000;
-
-const SentimentClustersSchema = z.object({
-  summary: z.string(),
-  new_complaints: z.array(z.string()),
-  chronic_complaints: z.array(z.string()),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following recent Reddit and Hacker News discussion about a competitor. " +
@@ -88,7 +82,11 @@ export async function sentimentClustererNode(
       includeRaw: true,
     });
 
-    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+    const telemetryContext = {
+      competitorId: state.competitor_id,
+      identity: { kind: "run" as const, runId: state.run_id },
+    };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       structuredModel.invoke([
         ["system", systemPrompt],
         ["human", buildSignalsText(signals)],
@@ -102,8 +100,7 @@ export async function sentimentClustererNode(
       model,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      telemetryContext
     );
 
     // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
@@ -115,7 +112,7 @@ export async function sentimentClustererNode(
       logger.error("sentiment-clusterer: structured output failed schema validation", {
         competitor_id: state.competitor_id,
         run_id: state.run_id,
-        raw_content: (raw as AIMessage)?.content,
+        failure: "invalid_structured_output",
       });
       throw new Error(
         `sentiment-clusterer: structured output failed schema validation for competitor ${state.competitor_id}`

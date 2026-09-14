@@ -1,6 +1,6 @@
 // Runtime model selection — downgrades eligible tasks to cheaper models under budget pressure.
 import { getDailySpend } from "./cost-tracker";
-import { logger } from "../lib/logger";
+import { parseNumericSetting } from "../lib/numeric-config";
 
 const DOWNGRADE_MAP: Record<string, string> = {
   "gpt-4.1": "gpt-4o-mini",
@@ -20,27 +20,14 @@ export const ANTHROPIC_MODEL_IDS: Record<string, string> = {
 
 const DEFAULT_DAILY_BUDGET_USD = 2.0;
 
-let warnedBadBudgetEnv = false;
-
 // Exported so callers whose preferred model has no downgrade target (the whole
 // DOWNGRADE_MAP miss path below) can still enforce the budget as a hard stop —
 // otherwise DAILY_BUDGET_USD is unenforced for them.
 export function getDailyBudget(): number {
-  const raw = process.env.DAILY_BUDGET_USD;
-  const parsed = Number(raw ?? DEFAULT_DAILY_BUDGET_USD);
-
-  if (Number.isNaN(parsed)) {
-    if (!warnedBadBudgetEnv) {
-      logger.warn("DAILY_BUDGET_USD is not a valid number, falling back to default", {
-        value: raw,
-        default: DEFAULT_DAILY_BUDGET_USD,
-      });
-      warnedBadBudgetEnv = true;
-    }
-    return DEFAULT_DAILY_BUDGET_USD;
-  }
-
-  return parsed;
+  return parseNumericSetting("DAILY_BUDGET_USD", process.env.DAILY_BUDGET_USD, {
+    defaultValue: DEFAULT_DAILY_BUDGET_USD,
+    min: 0,
+  });
 }
 
 export async function selectModel(

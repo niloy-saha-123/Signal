@@ -2,7 +2,7 @@
 // analysis stay outside Express so Playwright/LLM work cannot block HTTP.
 import type { Worker } from "bullmq";
 import { initWorkers, queues } from "./src/queues/registry";
-import { registerCollectorSchedules } from "./src/queues/scheduler";
+import { registerQueueSchedules } from "./src/queues/scheduler";
 import { initRedditWorker } from "./src/collectors/reddit";
 import { initHnWorker } from "./src/collectors/hn";
 import { initJobsWorker } from "./src/collectors/jobs";
@@ -11,6 +11,7 @@ import { initPricingWorker } from "./src/collectors/pricing";
 import { initEntityExtractorWorker } from "./src/pipeline/entity-extractor";
 import { initQualityScorerWorker } from "./src/pipeline/quality-scorer";
 import { initDeduplicatorWorker } from "./src/pipeline/deduplicator";
+import { initPipelineRecoveryWorker } from "./src/pipeline/recovery";
 import { initAnalysisWorker } from "./src/agents/analysis/analysis-worker";
 import { closeRedisConnections } from "./src/lib/redis-client";
 import { closeDatabase } from "./src/db/client";
@@ -41,7 +42,7 @@ export interface WorkerRuntimeDeps {
 }
 
 const defaultDeps: WorkerRuntimeDeps = {
-  registerSchedules: registerCollectorSchedules,
+  registerSchedules: registerQueueSchedules,
   initAllWorkers: async () => {
     const initialized: ClosableWorker[] = [];
     try {
@@ -59,6 +60,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initEntityExtractorWorker,
         initQualityScorerWorker,
         initDeduplicatorWorker,
+        initPipelineRecoveryWorker,
         initAnalysisWorker,
       ]) {
         initialized.push(initialize());

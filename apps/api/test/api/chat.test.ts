@@ -15,7 +15,18 @@ const C1 = "11111111-1111-4111-8111-111111111111";
 const C2 = "22222222-2222-4222-8222-222222222222";
 const RUN_ID = "99999999-9999-4999-8999-999999999999";
 
-const ANSWER: ChatAgentResult = { refused: false, answer: "They shipped SSO in March.", citations: [] };
+const ANSWER: ChatAgentResult = {
+  refused: false,
+  answer: "They shipped SSO in March.",
+  citations: [
+    {
+      claim: "They shipped SSO in March.",
+      chunk_id: "signal-1",
+      source: "changelog",
+      similarity_score: 0.92,
+    },
+  ],
+};
 const REFUSAL: ChatAgentResult = {
   refused: true,
   reason: "No stored signals matched this question.",
@@ -38,6 +49,7 @@ function makeDeps(over: Partial<ChatRouterDeps> = {}): ChatRouterDeps {
     createAgentRun: vi.fn(async () => ({ id: RUN_ID })) as any,
     completeAgentRun: vi.fn(async () => undefined) as any,
     runChatAgent: vi.fn(async () => ANSWER) as any,
+    finalizeRunTimeoutMs: 5_000,
     ...over,
   };
 }
@@ -262,5 +274,21 @@ describe("POST /api/chat", () => {
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }
+  });
+
+  it("closes the stream after the finalization deadline when the database never settles", async () => {
+    const deps = makeDeps({
+      completeAgentRun: vi.fn(() => new Promise<void>(() => undefined)) as any,
+      finalizeRunTimeoutMs: 10,
+    });
+
+    const res = await call(buildApp(deps).app, {
+      query: "hi",
+      competitor_ids: [C1],
+    });
+
+    expect(res.text).toContain("event: result");
+    expect(res.text).toContain("event: done");
+    expect(deps.completeAgentRun).toHaveBeenCalledOnce();
   });
 });

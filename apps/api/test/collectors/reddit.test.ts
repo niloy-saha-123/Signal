@@ -6,9 +6,10 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
+const { listCompetitorsMock, getCompetitorByIdMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
   vi.hoisted(() => ({
     listCompetitorsMock: vi.fn(),
+    getCompetitorByIdMock: vi.fn(),
     getLatestSignalCollectedAtMock: vi.fn(),
     signalExistsBySourceUrlMock: vi.fn(),
     createSignalMock: vi.fn(),
@@ -16,6 +17,7 @@ const { listCompetitorsMock, getLatestSignalCollectedAtMock, signalExistsBySourc
 
 vi.mock("@/db/queries", () => ({
   listCompetitors: listCompetitorsMock,
+  getCompetitorById: getCompetitorByIdMock,
   getLatestSignalCollectedAt: getLatestSignalCollectedAtMock,
   signalExistsBySourceUrl: signalExistsBySourceUrlMock,
   createSignal: createSignalMock,
@@ -25,10 +27,16 @@ const { queueAddMock, registerWorkerMock } = vi.hoisted(() => ({
   queueAddMock: vi.fn().mockResolvedValue(undefined),
   registerWorkerMock: vi.fn(),
 }));
+const { enqueueInitialSignalPipelineMock } = vi.hoisted(() => ({
+  enqueueInitialSignalPipelineMock: vi.fn().mockResolvedValue("added"),
+}));
 
 vi.mock("@/queues/registry", () => ({
   registerWorker: registerWorkerMock,
   queues: { "pipeline-entity-extraction": { add: queueAddMock } },
+}));
+vi.mock("@/pipeline/recovery", () => ({
+  enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
 import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
@@ -37,16 +45,19 @@ import { redditCollectorProcessor, initRedditWorker } from "@/collectors/reddit"
 const activeCompetitor = { id: "c1", name: "Acme", is_active: true, subreddits: ["acme"] };
 const noSubredditsCompetitor = { id: "c2", name: "NoSubs", is_active: true, subreddits: [] };
 const inactiveCompetitor = { id: "c3", name: "Zeta", is_active: false, subreddits: ["zeta"] };
+const backfillCompetitorId = "11111111-1111-4111-8111-111111111111";
 
 function tokenResponse(token = "test-token") {
   return { ok: true, status: 200, json: async () => ({ access_token: token }) };
 }
 
-function listingResponse(posts: unknown[]) {
+function listingResponse(posts: unknown[], after: string | null = null) {
   return {
     ok: true,
     status: 200,
-    json: async () => ({ data: { children: posts.map((data) => ({ kind: "t3", data })) } }),
+    json: async () => ({
+      data: { children: posts.map((data) => ({ kind: "t3", data })), after },
+    }),
   };
 }
 
@@ -57,6 +68,7 @@ describe("collectors/reddit", () => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([activeCompetitor, inactiveCompetitor]);
+    getCompetitorByIdMock.mockResolvedValue(activeCompetitor);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
     signalExistsBySourceUrlMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -68,6 +80,10 @@ describe("collectors/reddit", () => {
       return listingResponse([]);
     });
     vi.stubGlobal("fetch", fetchMock);
+    enqueueInitialSignalPipelineMock.mockImplementation(async (signalId: string) => {
+      await queueAddMock("extract-entities", { signal_id: signalId });
+      return "added";
+    });
   });
 
   afterEach(() => {
@@ -179,6 +195,88 @@ describe("collectors/reddit", () => {
     );
   });
 
+  it("scopes a backfill to one active competitor and ignores the scheduled watermark", async () => {
+    getLatestSignalCollectedAtMock.mockResolvedValue(new Date("2026-09-10T00:00:00.000Z"));
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return listingResponse([
+        {
+          id: "historical",
+          name: "t3_historical",
+          permalink: "/r/acme/comments/historical/post/",
+          title: "Historical Acme post",
+          selftext: "historical body",
+          created_utc: Math.floor(Date.parse("2026-09-01T00:00:00.000Z") / 1000),
+        },
+      ]);
+    });
+
+    await redditCollectorProcessor({
+      data: {
+        backfill: {
+          competitor_id: backfillCompetitorId,
+          since: "2026-08-12T15:30:00.000Z",
+          until: "2026-09-11T15:30:00.000Z",
+        },
+      },
+    } as never);
+
+    expect(getCompetitorByIdMock).toHaveBeenCalledWith(backfillCompetitorId);
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getLatestSignalCollectedAtMock).not.toHaveBeenCalled();
+    expect(createSignalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ source_url: expect.stringContaining("historical") })
+    );
+  });
+
+  it("paginates Reddit backfill with official after cursors and stops when exhausted", async () => {
+    let page = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      page += 1;
+      return listingResponse(
+        [
+          {
+            id: `${page}`,
+            name: `t3_${page}`,
+            permalink: `/r/acme/comments/${page}/post/`,
+            title: `Page ${page}`,
+            selftext: `page ${page}`,
+            created_utc: Math.floor(Date.parse("2026-09-01T00:00:00.000Z") / 1000),
+          },
+        ],
+        page === 1 ? "t3_next" : null
+      );
+    });
+
+    await redditCollectorProcessor({
+      data: {
+        backfill: {
+          competitor_id: backfillCompetitorId,
+          since: "2026-08-12T15:30:00.000Z",
+          until: "2026-09-11T15:30:00.000Z",
+        },
+      },
+    } as never);
+
+    const listingCalls = fetchMock.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes("oauth.reddit.com")
+    );
+    expect(listingCalls).toHaveLength(2);
+    expect(listingCalls[0][0]).toContain("limit=100");
+    expect(listingCalls[1][0]).toContain("after=t3_next");
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed backfill job data before OAuth or database work", async () => {
+    await expect(
+      redditCollectorProcessor({ data: { backfill: { competitor_id: "bad" } } } as never)
+    ).rejects.toThrow();
+    expect(listCompetitorsMock).not.toHaveBeenCalled();
+    expect(getCompetitorByIdMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("inserts a new signal per post, deduped by source_url, and enqueues entity extraction", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes("access_token")) return tokenResponse();
@@ -275,6 +373,28 @@ describe("collectors/reddit", () => {
     expect(recordSuccess).not.toHaveBeenCalled();
   }, 10000);
 
+  it("rejects a scoped backfill when its subreddit fetch fails so BullMQ can retry", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return { ok: false, status: 500, json: async () => ({}) };
+    });
+
+    await expect(
+      redditCollectorProcessor({
+        data: {
+          backfill: {
+            competitor_id: backfillCompetitorId,
+            since: "2026-08-12T15:30:00.000Z",
+            until: "2026-09-11T15:30:00.000Z",
+          },
+        },
+      } as never)
+    ).rejects.toThrow("Failed to collect 1 subreddit");
+
+    expect(recordFailure).toHaveBeenCalledTimes(1);
+    expect(recordSuccess).not.toHaveBeenCalled();
+  }, 10000);
+
   it("keeps processing subsequent competitors when an earlier one's fetch keeps failing", async () => {
     const failingCompetitor = { id: "c-fail", name: "FailCo", is_active: true, subreddits: ["failco"] };
     listCompetitorsMock.mockResolvedValue([failingCompetitor, activeCompetitor]);
@@ -358,6 +478,43 @@ describe("collectors/reddit", () => {
     }
   });
 
+  it("rejects an invalid OAuth token payload without exposing its body or touching signal data", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "" , secret_debug: "must-not-leak" }),
+    });
+
+    await expect(redditCollectorProcessor({} as never)).rejects.toThrow(
+      "Reddit OAuth token response was invalid"
+    );
+
+    expect(signalExistsBySourceUrlMock).not.toHaveBeenCalled();
+    expect(createSignalMock).not.toHaveBeenCalled();
+    expect(JSON.stringify((recordFailure as ReturnType<typeof vi.fn>).mock.calls)).not.toContain(
+      "must-not-leak"
+    );
+  }, 10000);
+
+  it("rejects a malformed listing payload before any signal write", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { children: [{ data: { id: 42 } }] } }),
+      };
+    });
+
+    await expect(redditCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(recordFailure).toHaveBeenCalledWith(
+      "reddit",
+      expect.stringContaining("Failed to collect 1 subreddit")
+    );
+    expect(createSignalMock).not.toHaveBeenCalled();
+  }, 10000);
+
   it("keeps processing subsequent posts in the same subreddit's batch when an earlier post fails", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes("access_token")) return tokenResponse();
@@ -392,6 +549,29 @@ describe("collectors/reddit", () => {
     expect(queueAddMock).toHaveBeenCalledWith(expect.any(String), { signal_id: "s2" });
     // A single item's failure is logged and skipped — it's not a
     // subreddit/competitor-level failure, so the run still records success.
+    expect(recordSuccess).toHaveBeenCalledWith("reddit");
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps a persisted signal recoverable when immediate Redis enqueue fails", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("access_token")) return tokenResponse();
+      return listingResponse([
+        {
+          id: "111",
+          permalink: "/r/acme/comments/111/thing/",
+          title: "Thing",
+          selftext: "body",
+          created_utc: Math.floor(Date.now() / 1000),
+        },
+      ]);
+    });
+    enqueueInitialSignalPipelineMock.mockResolvedValue("deferred");
+
+    await expect(redditCollectorProcessor({} as never)).resolves.toBeUndefined();
+
+    expect(createSignalMock).toHaveBeenCalledTimes(1);
+    expect(enqueueInitialSignalPipelineMock).toHaveBeenCalledWith("s1");
     expect(recordSuccess).toHaveBeenCalledWith("reddit");
     expect(recordFailure).not.toHaveBeenCalled();
   });

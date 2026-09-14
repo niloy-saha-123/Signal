@@ -1,8 +1,8 @@
 // LangGraph node — infers competitor hiring intent from recent job postings (GPT-4o).
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, HiringIntentResult } from "../../graph/state";
+import { HiringIntentSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getRecentSignalsByCompetitorAndSource, type Signal } from "../../db/queries";
@@ -25,11 +25,6 @@ const LLM_MAX_RETRIES = 2;
 // EMBEDDING_TEXT_MAX_LENGTH — this is a chat-completion input rather than an embedding,
 // but concatenated Greenhouse/Lever job postings can still run arbitrarily long.
 export const INTENT_ANALYZER_INPUT_MAX_LENGTH = 24_000;
-
-const HiringIntentSchema = z.object({
-  summary: z.string(),
-  intent_level: z.enum(["low", "medium", "high"]),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following recent job postings from a competitor and infer their hiring " +
@@ -74,7 +69,11 @@ export async function intentAnalyzerNode(
       includeRaw: true,
     });
 
-    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+    const telemetryContext = {
+      competitorId: state.competitor_id,
+      identity: { kind: "run" as const, runId: state.run_id },
+    };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       structuredModel.invoke([
         ["system", systemPrompt],
         ["human", buildPostingsText(postings)],
@@ -88,8 +87,7 @@ export async function intentAnalyzerNode(
       model,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      telemetryContext
     );
 
     // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
@@ -101,7 +99,7 @@ export async function intentAnalyzerNode(
       logger.error("intent-analyzer: structured output failed schema validation", {
         competitor_id: state.competitor_id,
         run_id: state.run_id,
-        raw_content: (raw as AIMessage)?.content,
+        failure: "invalid_structured_output",
       });
       throw new Error(
         `intent-analyzer: structured output failed schema validation for competitor ${state.competitor_id}`

@@ -3,10 +3,15 @@ import type { Job } from "bullmq";
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
 import { SignalEntitiesSchema } from "@signal/shared";
-import { withRetry } from "../lib/retry";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
-import { getSignalById, updateSignalEntities, type Signal } from "../db/queries";
+import { registerWorker } from "../queues/registry";
+import {
+  advanceSignalPipelineOutbox,
+  getSignalById,
+  updateSignalEntities,
+  type Signal,
+} from "../db/queries";
+import { ensureSignalPipelineJob } from "./recovery";
 import { selectModel, getDailyBudget } from "../llm/adaptive-router";
 import { getActivePrompt } from "../llm/prompt-registry";
 import { trackCost, getDailySpend } from "../llm/cost-tracker";
@@ -76,7 +81,11 @@ async function extractEntities(signal: Signal, runId: string): Promise<void> {
     includeRaw: true,
   });
 
-  const { raw, parsed } = await trackLatency(AGENT_NAME, signal.competitor_id, runId, () =>
+  const telemetryContext = {
+    competitorId: signal.competitor_id,
+    identity: { kind: "job" as const, jobId: runId },
+  };
+  const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
     structuredModel.invoke([
       ["system", promptText],
       ["human", signal.raw_text],
@@ -90,8 +99,7 @@ async function extractEntities(signal: Signal, runId: string): Promise<void> {
     model,
     usage?.input_tokens ?? 0,
     usage?.output_tokens ?? 0,
-    runId,
-    signal.competitor_id
+    telemetryContext
   );
 
   // withStructuredOutput({ includeRaw: true }) does NOT throw on a Zod validation
@@ -102,7 +110,7 @@ async function extractEntities(signal: Signal, runId: string): Promise<void> {
     logger.error("entity-extractor: structured output failed schema validation", {
       signal_id: signal.id,
       model,
-      raw_content: (raw as AIMessage)?.content,
+      failure: "invalid_structured_output",
     });
     throw new Error(
       `entity-extractor: structured output failed schema validation for signal ${signal.id}`
@@ -128,24 +136,18 @@ export async function entityExtractorProcessor(
   // so trackLatency/trackCost's required/optional runId params stay honest.
   const runId = job.id ?? signal.id;
 
-  // Entity extraction is enrichment; quality-scoring and Pinecone indexing (the
-  // deduplicator is the only place a signal ever gets embedded) are not. An OpenAI
-  // outage must not strand the signal before those, so a failure here is logged and
-  // the chain advances with entities left empty. There's no reconciliation sweeper —
-  // that is deliberate: coverage of entities matters less than every signal being
-  // scored and retrievable.
-  try {
-    await extractEntities(signal, runId);
-  } catch (err) {
-    logger.error("entity-extractor: extraction failed — advancing pipeline without entities", {
-      signal_id: signal.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  // Provider and schema failures must leave the durable outbox at this stage so
+  // BullMQ/recovery can retry them. Budget exhaustion is handled explicitly inside
+  // extractEntities as a policy skip and therefore still advances the signal.
+  await extractEntities(signal, runId);
 
-  await withRetry(() =>
-    queues["pipeline-quality-scoring"].add("score-quality", { signal_id: signal.id })
+  const advanced = await advanceSignalPipelineOutbox(
+    signal.id,
+    "entity_extraction",
+    "quality_scoring"
   );
+  if (!advanced) return;
+  await ensureSignalPipelineJob("quality_scoring", signal.id, { repairCompleted: true });
 }
 
 // Extension point — must only be called from the standalone worker process

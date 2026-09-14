@@ -17,8 +17,44 @@ redis.on("error", (err) => logger.error("Redis client error", { error: err }));
 // fast instead of hanging the caller indefinitely.
 export const cacheRedis = new Redis(REDIS_URL, {
   maxRetriesPerRequest: 2,
+  connectTimeout: 2_000,
+  commandTimeout: 2_000,
+  enableOfflineQueue: false,
 });
 cacheRedis.on("error", (err) => logger.error("Redis client error", { error: err }));
+
+export interface RedisReadinessProbeOptions {
+  timeoutMs: number;
+  signal: AbortSignal;
+}
+
+// The probe owns its connection. Timeout/abort always disconnects it, so a
+// dead Redis socket or queued command cannot outlive the readiness request.
+export async function checkRedisReadiness({
+  timeoutMs,
+  signal,
+}: RedisReadinessProbeOptions): Promise<void> {
+  signal.throwIfAborted();
+  const probe = cacheRedis.duplicate({
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 0,
+    connectTimeout: timeoutMs,
+    commandTimeout: timeoutMs,
+  });
+  // The route emits one sanitized readiness warning. Prevent ioredis from
+  // printing its raw unhandled-error fallback (which may include host details).
+  probe.on("error", () => {});
+  const onAbort = () => probe.disconnect();
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await probe.connect();
+    await probe.ping();
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    probe.disconnect();
+  }
+}
 
 export async function closeRedisConnections(): Promise<void> {
   const clients = [redis, cacheRedis];

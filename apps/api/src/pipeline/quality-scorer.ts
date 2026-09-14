@@ -4,10 +4,14 @@
 // math, no LLM, no external call — same precedent as PatternDetector keeping count/math work
 // out of the LLM layer.
 import type { Job } from "bullmq";
-import { withRetry } from "../lib/retry";
 import { logger } from "../lib/logger";
-import { registerWorker, queues } from "../queues/registry";
-import { getSignalById, updateSignalQualityScore, type Signal } from "../db/queries";
+import { registerWorker } from "../queues/registry";
+import {
+  getSignalById,
+  scoreSignalAndAdvanceOutbox,
+  type Signal,
+} from "../db/queries";
+import { ensureSignalPipelineJob } from "./recovery";
 
 // First-party channels (the competitor's own site) outrank third-party/community mentions of
 // the same fact. pricing/changelog are both first-party and directly competitive; changelog
@@ -59,9 +63,9 @@ const AUTHORITY_WEIGHT = 0.5;
 const RECENCY_WEIGHT = 0.4;
 const COMPLETENESS_WEIGHT = 0.1;
 
-// Ingest-time snapshot, not a live value: recency is measured from `now` at the moment
-// the job runs and is never recomputed, so a processing backlog bakes the delay into the
-// score. Accepted tradeoff — scores are used comparatively within a recent window.
+// Ingest-time snapshot, not a live value: recency is measured from `now` when this stage
+// first commits. Retries may recompute locally, but stage ownership prevents them from
+// overwriting the committed score. A processing backlog therefore bakes delay into the score.
 export function computeQualityScore(
   signal: Pick<Signal, "source" | "collected_at" | "title" | "raw_text">,
   now: Date = new Date()
@@ -88,11 +92,9 @@ export async function qualityScorerProcessor(job: Job<QualityScoringJobData>): P
   }
 
   const score = computeQualityScore(signal);
-  await updateSignalQualityScore(signal.id, score);
-
-  await withRetry(() =>
-    queues["pipeline-deduplication"].add("deduplicate", { signal_id: signal.id })
-  );
+  const advanced = await scoreSignalAndAdvanceOutbox(signal.id, score);
+  if (!advanced) return;
+  await ensureSignalPipelineJob("deduplication", signal.id, { repairCompleted: true });
 }
 
 // Extension point — must only be called from the standalone worker process

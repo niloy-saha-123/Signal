@@ -9,7 +9,6 @@
 // components are stored as JSONB in competitor_signal_scores alongside the composite score.
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { SignalScore } from "@signal/shared";
 import type {
   AnalysisDecision,
@@ -35,6 +34,7 @@ import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { isLlmBudgetExhausted } from "./branch-node";
+import { AnalysisDecisionSchema } from "./contracts";
 
 const AGENT_NAME = "synthesis" as const;
 // "claude-sonnet" IS a DOWNGRADE_MAP key — selectModel can hand back either "claude-sonnet"
@@ -97,11 +97,6 @@ const INTENT_LEVEL_TO_MOMENTUM: Record<"low" | "medium" | "high", number> = {
   medium: 0.5,
   high: 1,
 };
-
-const DecisionSchema = z.object({
-  action: z.enum(["alert", "digest", "suppress"]),
-  reason: z.string(),
-});
 
 const SYSTEM_PROMPT_BASE =
   "You decide how to surface a competitor's daily competitive-intelligence update to a " +
@@ -318,9 +313,13 @@ export async function synthesisNode(
       clientOptions: { timeout: LLM_TIMEOUT_MS },
       maxRetries: LLM_MAX_RETRIES,
     });
-    const structuredModel = chatModel.withStructuredOutput(DecisionSchema, { includeRaw: true });
+    const structuredModel = chatModel.withStructuredOutput(AnalysisDecisionSchema, { includeRaw: true });
 
-    const { raw, parsed } = await trackLatency(AGENT_NAME, state.competitor_id, state.run_id, () =>
+    const telemetryContext = {
+      competitorId: state.competitor_id,
+      identity: { kind: "run" as const, runId: state.run_id },
+    };
+    const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       structuredModel.invoke([
         ["system", systemPrompt],
         ["human", contextText],
@@ -334,8 +333,7 @@ export async function synthesisNode(
       modelAlias,
       usage?.input_tokens ?? 0,
       usage?.output_tokens ?? 0,
-      state.run_id,
-      state.competitor_id
+      telemetryContext
     );
 
     // withStructuredOutput({ includeRaw: true }) hands back parsed: null on a Zod validation
@@ -345,7 +343,7 @@ export async function synthesisNode(
       logger.error("synthesis: decision structured output failed schema validation", {
         competitor_id: state.competitor_id,
         run_id: state.run_id,
-        raw_content: (raw as AIMessage)?.content,
+        failure: "invalid_structured_output",
       });
       throw new Error(
         `synthesis: decision structured output failed schema validation for competitor ${state.competitor_id}`
