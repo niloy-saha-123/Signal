@@ -2,8 +2,8 @@
 // but short-circuits to a no-op (no DB call, no LLM call) unless state.has_pricing_diff is set.
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, PricingChangeResult } from "../../graph/state";
+import { PricingChangeSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getRecentPricingDiffs, type PricingDiff, type PricingSignificance } from "../../db/queries";
@@ -59,12 +59,6 @@ function narrowDiffPayload(diff: Record<string, unknown>): { added: string[]; re
     removed: isStringArray(diff.removed) ? diff.removed : [],
   };
 }
-
-const PricingChangeSchema = z.object({
-  summary: z.string(),
-  old_price: z.string().nullable(),
-  new_price: z.string().nullable(),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following pricing page diff for a competitor — lines added and removed " +

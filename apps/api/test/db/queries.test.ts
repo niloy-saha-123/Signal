@@ -82,6 +82,8 @@ import {
   pricingDiffsTable,
   llmCostsTable,
   signalPipelineOutboxTable,
+  promptVersionsTable,
+  agentTestCasesTable,
 } from "@/db/schema";
 import {
   createCompetitor,
@@ -126,6 +128,9 @@ import {
   listPendingSignalPipelineOutbox,
   advanceSignalPipelineOutbox,
   completeSignalPipelineOutbox,
+  getPromptVersion,
+  listAgentTestCases,
+  promotePromptVersion,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -1691,5 +1696,396 @@ describe("db/queries — competitor discovery write-back", () => {
 
     expect(eq).toHaveBeenCalledWith(competitorsTable.id, "c1");
     expect(updateWhereMock).toHaveBeenCalled();
+  });
+});
+
+describe("db/queries — prompt evaluation and promotion", () => {
+  const activePrompt = {
+    id: "11111111-1111-4111-8111-111111111111",
+    agent_name: "intent_analyzer",
+    version: 1,
+    prompt_text: "Active prompt",
+    is_active: true,
+    accuracy: 0.7,
+    promoted_at: new Date("2026-09-01T00:00:00.000Z"),
+    created_at: new Date("2026-08-01T00:00:00.000Z"),
+  };
+  const candidatePrompt = {
+    id: "22222222-2222-4222-8222-222222222222",
+    agent_name: "intent_analyzer",
+    version: 2,
+    prompt_text: "Candidate prompt",
+    is_active: false,
+    accuracy: null,
+    promoted_at: null,
+    created_at: new Date("2026-09-02T00:00:00.000Z"),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+    updateReturningMock.mockResolvedValue([{ id: "updated" }]);
+  });
+
+  it("loads a candidate by both agent name and version", async () => {
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ limit: limitMock });
+    limitMock.mockResolvedValue([candidatePrompt]);
+
+    await expect(getPromptVersion("intent_analyzer", 2)).resolves.toEqual(candidatePrompt);
+
+    expect(fromMock).toHaveBeenCalledWith(promptVersionsTable);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.agent_name, "intent_analyzer");
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.version, 2);
+    expect(and).toHaveBeenCalled();
+    expect(limitMock).toHaveBeenCalledWith(1);
+  });
+
+  it("loads same-agent cases in deterministic created-at and id order", async () => {
+    const rows = [
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        agent_name: "intent_analyzer",
+        input: { context: "x" },
+        expected_output: { summary: "x", intent_level: "high" },
+        created_at: new Date("2026-09-03T00:00:00.000Z"),
+      },
+    ];
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ orderBy: orderByMock });
+    orderByMock.mockResolvedValue(rows);
+
+    await expect(listAgentTestCases("intent_analyzer")).resolves.toEqual(rows);
+
+    expect(fromMock).toHaveBeenCalledWith(agentTestCasesTable);
+    expect(eq).toHaveBeenCalledWith(agentTestCasesTable.agent_name, "intent_analyzer");
+    expect(orderByMock).toHaveBeenCalledWith(
+      asc(agentTestCasesTable.created_at),
+      asc(agentTestCasesTable.id)
+    );
+  });
+
+  it("locks the complete agent prompt set with a bound agent value and stable order", async () => {
+    const execute = vi.fn(async () => ({ rows: [activePrompt, candidatePrompt] }));
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: updateMock })
+    );
+
+    await promotePromptVersion({
+      agentName: "intent_analyzer",
+      candidateVersion: 2,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    });
+
+    const lockCall = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls.find((call) =>
+      rawSqlText(call).includes("FOR UPDATE")
+    );
+    expect(lockCall).toBeDefined();
+    const lockText = rawSqlText(lockCall!);
+    expect(lockText).toContain("ORDER BY");
+    expect(lockText).toContain("ASC");
+    expect(lockText).not.toContain("intent_analyzer");
+    expect(lockCall).toContain("intent_analyzer");
+    expect(lockCall!.slice(-2)).toEqual([
+      promptVersionsTable.version,
+      promptVersionsTable.id,
+    ]);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(transactionMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [70, "not-better"],
+    [60, "not-better"],
+    [71, "not-significant"],
+  ] as const)(
+    "returns %s/100 as %s without issuing any update",
+    async (candidatePassed, reason) => {
+    const execute = vi.fn(async () => ({ rows: [activePrompt, candidatePrompt] }));
+    const txUpdate = vi.fn();
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: txUpdate })
+    );
+
+    await expect(
+      promotePromptVersion({
+        agentName: "intent_analyzer",
+        candidateVersion: 2,
+        activeVersion: 1,
+        candidate: { passed: candidatePassed, total: 100 },
+        active: { passed: 70, total: 100 },
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        promoted: false,
+        reason,
+        active_version: 1,
+      })
+    );
+    expect(txUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects missing, already-active, and ambiguous candidate state without updating", async () => {
+    const txUpdate = vi.fn();
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [activePrompt] })
+      .mockResolvedValueOnce({ rows: [{ ...candidatePrompt, is_active: true }] })
+      .mockResolvedValueOnce({
+        rows: [
+          { ...activePrompt, id: "44444444-4444-4444-8444-444444444444" },
+          { ...activePrompt, version: 3, id: "55555555-5555-4555-8555-555555555555" },
+          candidatePrompt,
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [candidatePrompt] });
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: txUpdate })
+    );
+    const baseInput = {
+      agentName: "intent_analyzer" as const,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    };
+
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("not found");
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("already active");
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("expected exactly one active version");
+    await expect(
+      promotePromptVersion({ ...baseInput, candidateVersion: 2 })
+    ).rejects.toThrow("expected exactly one active version");
+    expect(txUpdate).not.toHaveBeenCalled();
+  });
+
+  it("validates audit counts before opening a transaction", async () => {
+    await expect(
+      promotePromptVersion({
+        agentName: "intent_analyzer",
+        candidateVersion: 2,
+        activeVersion: 1,
+        candidate: { passed: 11, total: 10 },
+        active: { passed: 7, total: 10 },
+      })
+    ).rejects.toThrow();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("deactivates the locked active row before activating only the locked candidate", async () => {
+    const execute = vi.fn(async () => ({ rows: [activePrompt, candidatePrompt] }));
+    const txReturning = vi.fn().mockResolvedValue([{ id: "updated" }]);
+    const txWhere = vi.fn(() => ({ returning: txReturning }));
+    const txSet = vi.fn((_value: Record<string, unknown>) => ({ where: txWhere }));
+    const txUpdate = vi.fn(() => ({ set: txSet }));
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback({ execute, update: txUpdate })
+    );
+
+    const result = await promotePromptVersion({
+      agentName: "intent_analyzer",
+      candidateVersion: 2,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    });
+
+    expect(txUpdate).toHaveBeenCalledTimes(2);
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(txSet.mock.calls[0][0]).toEqual({ is_active: false });
+    expect(txSet.mock.calls[1][0]).toEqual({
+      is_active: true,
+      accuracy: 0.95,
+      promoted_at: expect.any(Date),
+    });
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.id, activePrompt.id);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.id, candidatePrompt.id);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.agent_name, "intent_analyzer");
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.version, 2);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.is_active, true);
+    expect(eq).toHaveBeenCalledWith(promptVersionsTable.is_active, false);
+    expect(result).toEqual(
+      expect.objectContaining({
+        promoted: true,
+        reason: "promoted",
+        candidate_version: 2,
+        active_version: 1,
+        candidate_counts: { passed: 95, total: 100 },
+        active_counts: { passed: 70, total: 100 },
+      })
+    );
+  });
+
+  it.each(["deactivation", "activation"] as const)(
+    "keeps committed prompt state unchanged when %s throws",
+    async (failurePoint) => {
+    let committed = structuredClone([activePrompt, candidatePrompt]);
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const working = structuredClone(committed);
+      let pendingSet: Record<string, unknown> = {};
+      const returning = vi.fn(async () => {
+        if (pendingSet.is_active === false) {
+          if (failurePoint === "deactivation") {
+            throw new Error("active deactivation failed");
+          }
+          const active = working.find((row) => row.is_active);
+          if (!active) return [];
+          active.is_active = false;
+          return [{ id: active.id }];
+        }
+        throw new Error("candidate activation failed");
+      });
+      const where = vi.fn(() => ({ returning }));
+      const set = vi.fn((value: Record<string, unknown>) => {
+        pendingSet = value;
+        return { where };
+      });
+      const tx = {
+        execute: vi.fn(async () => ({ rows: working })),
+        update: vi.fn(() => ({ set })),
+      };
+      const result = await callback(tx);
+      committed = working;
+      return result;
+    });
+    const before = structuredClone(committed);
+
+    await expect(
+      promotePromptVersion({
+        agentName: "intent_analyzer",
+        candidateVersion: 2,
+        activeVersion: 1,
+        candidate: { passed: 95, total: 100 },
+        active: { passed: 70, total: 100 },
+      })
+    ).rejects.toThrow(
+      failurePoint === "deactivation"
+        ? "active deactivation failed"
+        : "candidate activation failed"
+    );
+
+    expect(committed).toEqual(before);
+    }
+  );
+
+  it("rejects a waiting different-candidate promotion when its audited active version is stale", async () => {
+    const secondCandidatePrompt = {
+      ...candidatePrompt,
+      id: "66666666-6666-4666-8666-666666666666",
+      version: 3,
+      prompt_text: "Second candidate prompt",
+    };
+    let committed = structuredClone([
+      activePrompt,
+      candidatePrompt,
+      secondCandidatePrompt,
+    ]);
+    let previousTransaction = Promise.resolve();
+    let firstLockAcquired: (() => void) | undefined;
+    const firstLocked = new Promise<void>((resolve) => {
+      firstLockAcquired = resolve;
+    });
+    let allowFirstToContinue: (() => void) | undefined;
+    const firstMayContinue = new Promise<void>((resolve) => {
+      allowFirstToContinue = resolve;
+    });
+    let transactionNumber = 0;
+
+    transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const waitForPrevious = previousTransaction;
+      let releaseCurrentTransaction: (() => void) | undefined;
+      previousTransaction = new Promise<void>((resolve) => {
+        releaseCurrentTransaction = resolve;
+      });
+      await waitForPrevious;
+
+      const currentTransaction = transactionNumber++;
+      const working = structuredClone(committed);
+      let pendingSet: Record<string, unknown> = {};
+      const returning = vi.fn(async () => {
+        if (pendingSet.is_active === false) {
+          const row = working.find((prompt) => prompt.is_active);
+          if (!row) return [];
+          row.is_active = false;
+          return [{ id: row.id }];
+        }
+        const row = working.find((prompt) => prompt.version === currentTransaction + 2);
+        if (!row || row.is_active) return [];
+        Object.assign(row, pendingSet);
+        return [{ id: row.id }];
+      });
+      const where = vi.fn(() => ({ returning }));
+      const set = vi.fn((value: Record<string, unknown>) => {
+        pendingSet = value;
+        return { where };
+      });
+      const tx = {
+        execute: vi.fn(async () => {
+          if (currentTransaction === 0) {
+            firstLockAcquired?.();
+            await firstMayContinue;
+          }
+          return { rows: working };
+        }),
+        update: vi.fn(() => ({ set })),
+      };
+
+      try {
+        const result = await callback(tx);
+        committed = working;
+        return result;
+      } finally {
+        releaseCurrentTransaction?.();
+      }
+    });
+
+    const firstInput = {
+      agentName: "intent_analyzer" as const,
+      candidateVersion: 2,
+      activeVersion: 1,
+      candidate: { passed: 95, total: 100 },
+      active: { passed: 70, total: 100 },
+    };
+    const secondInput = {
+      agentName: "intent_analyzer" as const,
+      candidateVersion: 3,
+      activeVersion: 1,
+      candidate: { passed: 80, total: 100 },
+      active: { passed: 70, total: 100 },
+    };
+    const first = promotePromptVersion(firstInput);
+    await firstLocked;
+    const second = promotePromptVersion(secondInput);
+    let secondSettled = false;
+    void second.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      }
+    );
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    allowFirstToContinue?.();
+    await expect(first).resolves.toEqual(expect.objectContaining({ promoted: true }));
+    await expect(second).rejects.toThrow("Active prompt version changed since evaluation");
+    expect(committed.map(({ version, is_active }) => ({ version, is_active }))).toEqual([
+      { version: 1, is_active: false },
+      { version: 2, is_active: true },
+      { version: 3, is_active: false },
+    ]);
   });
 });

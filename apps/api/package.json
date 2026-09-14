@@ -13,6 +13,8 @@
     "backtest": "tsx scripts/backtest.ts",
     "backtest:full": "tsx scripts/backtest.ts",
     "dedup-calibration": "tsx scripts/dedup-calibration.ts",
+    "eval": "tsx scripts/eval.ts",
+    "promote": "tsx scripts/promote.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "rag-eval": "tsx scripts/rag-eval.ts",

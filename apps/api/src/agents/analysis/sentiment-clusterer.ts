@@ -1,8 +1,8 @@
 // LangGraph node — clusters sentiment signals into new vs. chronic complaints (Claude Haiku).
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, SentimentClustersResult } from "../../graph/state";
+import { SentimentClustersSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getRecentSignalsByCompetitorAndSource, type Signal } from "../../db/queries";
@@ -28,12 +28,6 @@ const LLM_MAX_RETRIES = 2;
 // Same "don't blow the context window" reasoning as intent-analyzer.ts's
 // INTENT_ANALYZER_INPUT_MAX_LENGTH / deduplicator.ts's EMBEDDING_TEXT_MAX_LENGTH.
 export const SENTIMENT_CLUSTERER_INPUT_MAX_LENGTH = 24_000;
-
-const SentimentClustersSchema = z.object({
-  summary: z.string(),
-  new_complaints: z.array(z.string()),
-  chronic_complaints: z.array(z.string()),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following recent Reddit and Hacker News discussion about a competitor. " +

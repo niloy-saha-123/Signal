@@ -9,8 +9,8 @@
 // P50/P95 tracked via latency-tracker.ts.
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, PatternsResult } from "../../graph/state";
+import { PatternsSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getSignalVolumeByDay, getFirstSignalCollectedAt, type SignalVolumeByDay } from "../../db/queries";
@@ -43,11 +43,6 @@ const PHASE_2_MIN_HISTORY_MS = PHASE_2_MIN_HISTORY_DAYS * 24 * 60 * 60 * 1000;
 // hybridRetrieve's topK per the Part-10 spec — deliberately not reranked/truncated
 // downstream (see file header).
 const PHASE_2_RETRIEVAL_TOP_K = 150;
-
-const PatternsSchema = z.object({
-  summary: z.string(),
-  trend: z.enum(["increasing", "decreasing", "stable"]),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following signal volume trend for a competitor over the last 30 days. If " +

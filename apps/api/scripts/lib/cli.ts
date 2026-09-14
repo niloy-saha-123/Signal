@@ -11,6 +11,14 @@ export type CliIo = {
   stderr: (message: string) => void;
 };
 
+export function safeIntegerCliOption(minimum: number) {
+  return z
+    .string()
+    .regex(/^(0|[1-9]\d*)$/, "Expected a base-10 non-negative integer")
+    .transform(Number)
+    .pipe(z.number().int().safe().min(minimum));
+}
+
 const defaultIo: CliIo = {
   stderr: (message) => console.error(message),
 };

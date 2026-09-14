@@ -1,6 +1,7 @@
 // Typed Drizzle query functions used by the API routes and agents.
 import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
 import type {
+  AgentName,
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
@@ -20,8 +21,21 @@ import {
   alertsTable,
   llmCostsTable,
   signalPipelineOutboxTable,
+  promptVersionsTable,
+  agentTestCasesTable,
   type SignalPipelineStage,
 } from "./schema";
+import {
+  AgentTestCaseSchema,
+  PromotePromptVersionInputSchema,
+  PromptVersionCandidateSchema,
+  passesPromotionGate,
+  twoProportionZTest,
+  type AgentTestCase,
+  type PromotePromptVersionInput,
+  type PromptVersionCandidate,
+  type PromotionResult,
+} from "../evaluation/prompt-contracts";
 
 export type Competitor = typeof competitorsTable.$inferSelect;
 export type CompetitorDiscoveryLogEntry = typeof competitorDiscoveryLogTable.$inferSelect;
@@ -77,6 +91,153 @@ export type CostByCompetitorDayRow = {
 
 // Matches competitors_discovery_status_check in schema.ts.
 type DiscoveryStatus = "pending" | "in_progress" | "complete" | "failed";
+
+// ── prompt evaluation and promotion ─────────────────────────────────────
+
+export async function getPromptVersion(
+  agentName: AgentName,
+  version: number
+): Promise<PromptVersionCandidate | undefined> {
+  const [row] = await db
+    .select()
+    .from(promptVersionsTable)
+    .where(
+      and(
+        eq(promptVersionsTable.agent_name, agentName),
+        eq(promptVersionsTable.version, version)
+      )
+    )
+    .limit(1);
+  return row === undefined ? undefined : PromptVersionCandidateSchema.parse(row);
+}
+
+export async function listAgentTestCases(agentName: AgentName): Promise<AgentTestCase[]> {
+  const rows = await db
+    .select()
+    .from(agentTestCasesTable)
+    .where(eq(agentTestCasesTable.agent_name, agentName))
+    .orderBy(asc(agentTestCasesTable.created_at), asc(agentTestCasesTable.id));
+  return rows.map((row) => AgentTestCaseSchema.parse(row));
+}
+
+export async function promotePromptVersion(
+  input: PromotePromptVersionInput
+): Promise<PromotionResult> {
+  const parsedInput = PromotePromptVersionInputSchema.parse(input);
+
+  return db.transaction(async (tx) => {
+    // Lock the complete per-agent version set in one deterministic order. This
+    // serializes concurrent promotions for the same agent before either request
+    // reads the active row or evaluates its gate, and avoids the non-deferrable
+    // one-active partial-index race.
+    const lockedResult = await tx.execute(sql`
+      SELECT
+        ${promptVersionsTable.id} AS id,
+        ${promptVersionsTable.agent_name} AS agent_name,
+        ${promptVersionsTable.version} AS version,
+        ${promptVersionsTable.prompt_text} AS prompt_text,
+        ${promptVersionsTable.is_active} AS is_active,
+        ${promptVersionsTable.accuracy} AS accuracy,
+        ${promptVersionsTable.promoted_at} AS promoted_at,
+        ${promptVersionsTable.created_at} AS created_at
+      FROM ${promptVersionsTable}
+      WHERE ${promptVersionsTable.agent_name} = ${parsedInput.agentName}
+      ORDER BY ${promptVersionsTable.version} ASC, ${promptVersionsTable.id} ASC
+      FOR UPDATE
+    `);
+    const lockedPrompts = lockedResult.rows.map((row) =>
+      PromptVersionCandidateSchema.parse(row)
+    );
+    const candidate = lockedPrompts.find(
+      (prompt) => prompt.version === parsedInput.candidateVersion
+    );
+    if (!candidate) {
+      throw new Error(
+        `Prompt candidate ${parsedInput.agentName} version ${parsedInput.candidateVersion} not found`
+      );
+    }
+    if (candidate.is_active) {
+      throw new Error("Prompt candidate is already active");
+    }
+
+    const activePrompts = lockedPrompts.filter((prompt) => prompt.is_active);
+    if (activePrompts.length !== 1) {
+      throw new Error(
+        `Prompt-version invariant violated for ${parsedInput.agentName}: expected exactly one active version`
+      );
+    }
+    const active = activePrompts[0];
+    if (active.version !== parsedInput.activeVersion) {
+      throw new Error(
+        `Active prompt version changed since evaluation: expected ${parsedInput.activeVersion}, found ${active.version}`
+      );
+    }
+
+    const statistics = twoProportionZTest(
+      parsedInput.candidate.passed,
+      parsedInput.candidate.total,
+      parsedInput.active.passed,
+      parsedInput.active.total
+    );
+    const baseResult = {
+      agent_name: parsedInput.agentName,
+      candidate_version: candidate.version,
+      active_version: active.version,
+      candidate_counts: parsedInput.candidate,
+      active_counts: parsedInput.active,
+      statistics,
+    };
+
+    if (!passesPromotionGate(statistics)) {
+      return {
+        ...baseResult,
+        promoted: false,
+        reason:
+          statistics.candidate_accuracy <= statistics.active_accuracy
+            ? "not-better"
+            : "not-significant",
+      };
+    }
+
+    const [deactivated] = await tx
+      .update(promptVersionsTable)
+      .set({ is_active: false })
+      .where(
+        and(
+          eq(promptVersionsTable.id, active.id),
+          eq(promptVersionsTable.agent_name, parsedInput.agentName),
+          eq(promptVersionsTable.is_active, true)
+        )
+      )
+      .returning({ id: promptVersionsTable.id });
+    if (!deactivated) {
+      throw new Error("Active prompt changed while promotion locks were held");
+    }
+
+    const promotedAt = new Date();
+    const [activated] = await tx
+      .update(promptVersionsTable)
+      .set({
+        is_active: true,
+        accuracy: statistics.candidate_accuracy,
+        promoted_at: promotedAt,
+      })
+      .where(
+        and(
+          eq(promptVersionsTable.id, candidate.id),
+          eq(promptVersionsTable.agent_name, parsedInput.agentName),
+          eq(promptVersionsTable.version, parsedInput.candidateVersion),
+          eq(promptVersionsTable.is_active, false)
+        )
+      )
+      .returning({ id: promptVersionsTable.id });
+    if (!activated) {
+      throw new Error("Prompt candidate changed while promotion locks were held");
+    }
+
+    return { ...baseResult, promoted: true, reason: "promoted" };
+  });
+}
 
 
 export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {

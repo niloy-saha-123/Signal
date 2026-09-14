@@ -9,7 +9,6 @@
 // components are stored as JSONB in competitor_signal_scores alongside the composite score.
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { SignalScore } from "@signal/shared";
 import type {
   AnalysisDecision,
@@ -35,6 +34,7 @@ import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { isLlmBudgetExhausted } from "./branch-node";
+import { AnalysisDecisionSchema } from "./contracts";
 
 const AGENT_NAME = "synthesis" as const;
 // "claude-sonnet" IS a DOWNGRADE_MAP key — selectModel can hand back either "claude-sonnet"
@@ -97,11 +97,6 @@ const INTENT_LEVEL_TO_MOMENTUM: Record<"low" | "medium" | "high", number> = {
   medium: 0.5,
   high: 1,
 };
-
-const DecisionSchema = z.object({
-  action: z.enum(["alert", "digest", "suppress"]),
-  reason: z.string(),
-});
 
 const SYSTEM_PROMPT_BASE =
   "You decide how to surface a competitor's daily competitive-intelligence update to a " +
@@ -318,7 +313,7 @@ export async function synthesisNode(
       clientOptions: { timeout: LLM_TIMEOUT_MS },
       maxRetries: LLM_MAX_RETRIES,
     });
-    const structuredModel = chatModel.withStructuredOutput(DecisionSchema, { includeRaw: true });
+    const structuredModel = chatModel.withStructuredOutput(AnalysisDecisionSchema, { includeRaw: true });
 
     const telemetryContext = {
       competitorId: state.competitor_id,

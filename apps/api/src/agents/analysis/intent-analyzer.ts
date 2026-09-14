@@ -1,8 +1,8 @@
 // LangGraph node — infers competitor hiring intent from recent job postings (GPT-4o).
 import { ChatOpenAI } from "@langchain/openai";
 import type { AIMessage } from "@langchain/core/messages";
-import { z } from "zod";
 import type { AnalysisGraphState, HiringIntentResult } from "../../graph/state";
+import { HiringIntentSchema } from "./contracts";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import { getRecentSignalsByCompetitorAndSource, type Signal } from "../../db/queries";
@@ -25,11 +25,6 @@ const LLM_MAX_RETRIES = 2;
 // EMBEDDING_TEXT_MAX_LENGTH — this is a chat-completion input rather than an embedding,
 // but concatenated Greenhouse/Lever job postings can still run arbitrarily long.
 export const INTENT_ANALYZER_INPUT_MAX_LENGTH = 24_000;
-
-const HiringIntentSchema = z.object({
-  summary: z.string(),
-  intent_level: z.enum(["low", "medium", "high"]),
-});
 
 const SYSTEM_PROMPT_BASE =
   "Analyze the following recent job postings from a competitor and infer their hiring " +
