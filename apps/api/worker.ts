@@ -2,7 +2,7 @@
 // analysis stay outside Express so Playwright/LLM work cannot block HTTP.
 import type { Worker } from "bullmq";
 import { initWorkers, queues } from "./src/queues/registry";
-import { registerCollectorSchedules } from "./src/queues/scheduler";
+import { registerQueueSchedules } from "./src/queues/scheduler";
 import { initRedditWorker } from "./src/collectors/reddit";
 import { initHnWorker } from "./src/collectors/hn";
 import { initJobsWorker } from "./src/collectors/jobs";
@@ -42,7 +42,7 @@ export interface WorkerRuntimeDeps {
 }
 
 const defaultDeps: WorkerRuntimeDeps = {
-  registerSchedules: registerCollectorSchedules,
+  registerSchedules: registerQueueSchedules,
   initAllWorkers: async () => {
     const initialized: ClosableWorker[] = [];
     try {

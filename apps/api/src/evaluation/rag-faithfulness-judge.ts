@@ -98,10 +98,12 @@ function judgeSecurityPrompt(nonce: string): string {
   );
 }
 
-// Strips the marker token so untrusted text can neither forge the block boundary
-// nor impersonate a structural label.
+// Strips the marker token and the [signal:id] citation-label convention so
+// untrusted text can neither forge the block boundary nor impersonate a
+// structural citation marker — same two tokens chat-agent.ts's neutralize()
+// strips from evidence text, for the identical reason.
 function neutralize(value: string): string {
-  return value.replaceAll("RAG_JUDGE_", "");
+  return value.replaceAll("RAG_JUDGE_", "").replaceAll("[signal:", "");
 }
 
 function formatEvidence(signals: readonly RagFaithfulnessJudgeSignal[]): string {

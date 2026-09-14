@@ -30,7 +30,7 @@ vi.mock("@/queues/registry", () => ({
   initWorkers: mocks.initRegistry,
   queues: { analysis: { close: mocks.closeQueue }, reddit: { close: mocks.closeQueue } },
 }));
-vi.mock("@/queues/scheduler", () => ({ registerCollectorSchedules: mocks.registerSchedules }));
+vi.mock("@/queues/scheduler", () => ({ registerQueueSchedules: mocks.registerSchedules }));
 vi.mock("@/collectors/reddit", () => ({ initRedditWorker: mocks.initReddit }));
 vi.mock("@/collectors/hn", () => ({ initHnWorker: mocks.initHn }));
 vi.mock("@/collectors/jobs", () => ({ initJobsWorker: mocks.initJobs }));

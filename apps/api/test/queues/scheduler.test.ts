@@ -37,7 +37,7 @@ import {
   collectorCronExpression,
   getCollectIntervalHours,
   getCollectorScheduleConfig,
-  registerCollectorSchedules,
+  registerQueueSchedules,
   collectorSchedulerId,
   PIPELINE_RECOVERY_CRON,
   PIPELINE_RECOVERY_SCHEDULER_ID,
@@ -162,7 +162,7 @@ describe("queues/scheduler", () => {
     delete process.env.COLLECT_INTERVAL_HOURS;
     upsertJobSchedulerMock.mockClear();
 
-    await registerCollectorSchedules();
+    await registerQueueSchedules();
 
     expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(6);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(

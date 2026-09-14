@@ -15,7 +15,6 @@
     "build": "npm run build -w @signal/shared && npm run build -w @signal/api && npm run build -w @signal/web",
     "typecheck": "npm run typecheck -w @signal/shared && npm run build -w @signal/shared && npm run typecheck -w @signal/api && npm run typecheck -w @signal/web",
     "backfill": "npm run backfill -w @signal/api",
-    "backtest": "npm run backtest -w @signal/api",
     "backtest:full": "npm run backtest:full -w @signal/api",
     "dedup-calibration": "npm run dedup-calibration -w @signal/api"
   },

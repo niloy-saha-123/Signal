@@ -1,10 +1,10 @@
 // Cron schedule and per-queue rate-limit configuration for BullMQ.
 //
-// Only the 5 `collect-*` queues run on a schedule — competitor-discovery
-// and company-profile-update are triggered by their API routes, never
-// cron'd (see registry.ts's queue doc comments). Collector queue names are
-// derived from registry.ts's QUEUE_CONFIG keys rather than re-declared
-// here, so the two modules can't drift.
+// Only the 5 `collect-*` queues plus `pipeline-recovery` run on a schedule —
+// competitor-discovery and company-profile-update are triggered by their API
+// routes, never cron'd (see registry.ts's queue doc comments). Collector queue
+// names are derived from registry.ts's QUEUE_CONFIG keys rather than
+// re-declared here, so the two modules can't drift.
 import { COLLECTOR_RATE_LIMITER, QUEUE_CONFIG, queues, type QueueName } from "./registry";
 
 const DEFAULT_COLLECT_INTERVAL_HOURS = 24;
@@ -92,7 +92,10 @@ export function collectorSchedulerId(queueName: QueueName): string {
 export const PIPELINE_RECOVERY_CRON = "*/2 * * * *";
 export const PIPELINE_RECOVERY_SCHEDULER_ID = "signal-pipeline-recovery-v1";
 
-export async function registerCollectorSchedules(
+// Upserts every collector's schedule plus pipeline-recovery's — kept in one
+// function because both are the same "idempotent upsertJobScheduler at
+// worker startup" operation, not two separate concerns.
+export async function registerQueueSchedules(
   queueMap: Pick<
     typeof queues,
     (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery"

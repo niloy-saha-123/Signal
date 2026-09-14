@@ -8,8 +8,15 @@ import type {
   CompetitorCreateInput,
   RagEvalResult,
   RagEvalRunSummary,
+  RagEvalCategory,
+  RagEvalConfidenceLevel,
 } from "@signal/shared";
-import { RagEvalResultSchema, RagEvalRunSummarySchema } from "@signal/shared";
+import {
+  RagEvalResultSchema,
+  RagEvalRunSummarySchema,
+  RagEvalCategorySchema,
+  RagEvalConfidenceLevelSchema,
+} from "@signal/shared";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -64,17 +71,11 @@ export type CompanyProfileInput = Omit<
 export type RagEvalSeedCaseInput = {
   id: string;
   competitor_id: string;
-  category:
-    | "pricing_history"
-    | "hiring_pattern"
-    | "product_change"
-    | "sentiment_theme"
-    | "strategic_move"
-    | "general";
+  category: RagEvalCategory;
   question: string;
   expected_answer: string;
   supporting_signal_ids: string[];
-  confidence_level: "high" | "medium" | "low";
+  confidence_level: RagEvalConfidenceLevel;
 };
 
 export type RagEvalSeedResult = { inserted: number; unchanged: number };
@@ -374,22 +375,16 @@ export async function seedRagEvalDataset(
   });
 }
 
-// ── Task 6: RAG faithfulness evaluation ───────────────────────────────────
+// ── RAG faithfulness evaluation ────────────────────────────────────────────
 
 export type RagEvalCase = {
   id: string;
   competitor_id: string;
-  category:
-    | "pricing_history"
-    | "hiring_pattern"
-    | "product_change"
-    | "sentiment_theme"
-    | "strategic_move"
-    | "general";
+  category: RagEvalCategory;
   question: string;
   expected_answer: string;
   supporting_signal_ids: string[];
-  confidence_level: "high" | "medium" | "low";
+  confidence_level: RagEvalConfidenceLevel;
   created_at: Date;
 };
 
@@ -418,18 +413,11 @@ const RagEvalDatasetRowSchema = z
   .object({
     id: z.string().uuid(),
     competitor_id: z.string().uuid(),
-    category: z.enum([
-      "pricing_history",
-      "hiring_pattern",
-      "product_change",
-      "sentiment_theme",
-      "strategic_move",
-      "general",
-    ]),
+    category: RagEvalCategorySchema,
     question: z.string().min(1),
     expected_answer: z.string().min(1),
     supporting_signal_ids: z.array(z.string().uuid()).min(1),
-    confidence_level: z.enum(["high", "medium", "low"]),
+    confidence_level: RagEvalConfidenceLevelSchema,
     created_at: z.date(),
   })
   .superRefine((row, context) => {

@@ -1,13 +1,10 @@
 // Imports an explicitly supplied, human-curated RAG evaluation fixture.
 import { z } from "zod";
+import { RagEvalCategorySchema, RagEvalConfidenceLevelSchema } from "@signal/shared";
 import type { RagEvalSeedCaseInput, RagEvalSeedResult } from "../src/db/queries";
 import { CliUsageError, parseCliArgs, runCli } from "./lib/cli";
 import { readUtf8Fixture } from "./lib/fixture-file";
 
-const RagEvalCategorySchema = z.enum([
-  "pricing_history", "hiring_pattern", "product_change", "sentiment_theme", "strategic_move", "general",
-]);
-const RagEvalConfidenceSchema = z.enum(["high", "medium", "low"]);
 const CanonicalUuidSchema = z.string().uuid().refine(
   (value) => value === value.toLowerCase(), "UUIDs must use canonical lowercase text"
 );
@@ -24,7 +21,7 @@ const RagEvalSeedCaseSchema = z.object({
   question: ExactQuestionSchema,
   expected_answer: ExactAnswerSchema,
   supporting_signal_ids: z.array(CanonicalUuidSchema).min(1).max(100),
-  confidence_level: RagEvalConfidenceSchema,
+  confidence_level: RagEvalConfidenceLevelSchema,
 }).strict().superRefine((seedCase, context) => {
   const seen = new Set<string>();
   for (const [index, signalId] of seedCase.supporting_signal_ids.entries()) {

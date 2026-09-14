@@ -84,17 +84,26 @@ const RagEvalChunkIdsSchema = z
     }
   });
 
+// Single source of truth for the rag_eval_dataset category/confidence_level CHECK
+// constraints (db/schema.ts) — db/queries.ts and scripts/seed-rag-eval.ts import
+// these rather than re-declaring the same literal lists independently.
+export const RagEvalCategorySchema = z.enum([
+  "pricing_history",
+  "hiring_pattern",
+  "product_change",
+  "sentiment_theme",
+  "strategic_move",
+  "general",
+]);
+export type RagEvalCategory = z.infer<typeof RagEvalCategorySchema>;
+
+export const RagEvalConfidenceLevelSchema = z.enum(["high", "medium", "low"]);
+export type RagEvalConfidenceLevel = z.infer<typeof RagEvalConfidenceLevelSchema>;
+
 const RagEvalResultCommon = z.object({
   question_id: z.string().uuid(),
   question: z.string().min(1).max(2_000),
-  category: z.enum([
-    "pricing_history",
-    "hiring_pattern",
-    "product_change",
-    "sentiment_theme",
-    "strategic_move",
-    "general",
-  ]),
+  category: RagEvalCategorySchema,
   faithfulness_score: z.number().finite().min(0).max(1),
   passed: z.boolean(),
   chunks_used: RagEvalChunkIdsSchema,

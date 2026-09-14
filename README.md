@@ -8,7 +8,7 @@ Signal replaces your competitive analyst — it runs permanently, gets smarter t
 
 Product and growth teams at Series B+ B2B SaaS companies spend $40K+/year on tools like Crayon and Klue, plus 10 hours a week of analyst time, to produce battlecards that are outdated the moment they're published. Those tools automate collection — a changed pricing page, a new job posting — but a human still has to figure out what it means and what to do about it.
 
-Signal is the analyst. You add a competitor once and it monitors six public sources permanently: Reddit, Hacker News, job boards, RSS changelogs, pricing pages, and G2/Capterra. A quality-scoring and semantic-deduplication pipeline cleans every incoming signal, a multi-agent LangGraph.js system interprets it, and a real-time alert reaches your team when a competitor's move opens a vulnerability window worth acting on — with a chain of evidence, a confidence score backed by historical backtesting, and specific recommended actions.
+Signal is the analyst. You add a competitor once and it monitors five public sources permanently: Reddit, Hacker News, job boards, RSS changelogs, and pricing pages (G2/Capterra ingestion is planned but not yet built — see [Roadmap](#roadmap)). A quality-scoring and semantic-deduplication pipeline cleans every incoming signal, a multi-agent LangGraph.js system interprets it, and an alert is generated when a competitor's move opens a vulnerability window worth acting on — with a chain of evidence, a confidence score backed by historical backtesting, and specific recommended actions.
 
 It gets better over time. Every analysis run stores its signal pattern alongside what actually happened next. Six months of accumulated behavioral fingerprints on a competitor produce materially better predictions than six days — a moat a team starting fresh cannot replicate no matter how much they pay for Crayon.
 
@@ -77,7 +77,7 @@ graph TB
     end
 
     subgraph Pipeline["SIGNAL PROCESSING PIPELINE · BullMQ · 3 stages"]
-        QS[QualityScorer] --> SD[SemanticDeduplicator] --> EE[EntityExtractor]
+        EE[EntityExtractor] --> QS[QualityScorer] --> SD[SemanticDeduplicator]
     end
 
     subgraph Storage["STORAGE · PostgreSQL + Pinecone"]
@@ -124,6 +124,21 @@ graph TB
 
 ---
 
+## Implementation Status
+
+Stated plainly so this document does not overclaim what exists:
+
+| Area | Status |
+|---|---|
+| Collection, pipeline, analysis graph, ChatAgent, API routes | Built and tested (backend intelligence loop is complete). |
+| Frontend (`apps/web`) | Route scaffolding only — every page under `app/` is a placeholder a few lines long. No real UI, charts, or Socket.io client wiring exist yet. |
+| Authentication | None. Phase 0 is a single-tenant, unauthenticated, trusted-network deployment by design — no JWT, session, or API-key middleware exists anywhere in `apps/api`. Production startup requires explicit acknowledgement of this. Public multi-user auth is a later backend decision. |
+| Real-time delivery | The Socket.io server is instantiated (`api/index.ts`), but no code path anywhere in the backend currently emits an event through it — alert delivery is not wired end-to-end yet. ChatAgent's SSE streaming (`api/chat.ts`) is real and does work. |
+| Deployment automation | None configured. Railway and Vercel below are the intended target platforms, not active infrastructure — there is no Railway/Vercel project file, and `.github/workflows/ci.yml` only runs typecheck/test/build plus the RAG evaluation gate; it does not deploy anywhere. |
+| Automatic daily analysis fan-out | Not built. Analysis runs from manual/API-triggered requests and company-profile updates; no scheduler sweeps every competitor daily. |
+
+---
+
 ## Tech Stack
 
 ### Backend
@@ -131,10 +146,10 @@ graph TB
 | | |
 |---|---|
 | **Node.js 20 / TypeScript 5** | Strict mode throughout. Discriminated unions for circuit states, generics for retry utilities, `satisfies` for config. |
-| **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation, JWT auth middleware. |
+| **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation. No auth middleware — see [Implementation Status](#implementation-status). |
 | **LangGraph.js** | Stateful directed graph with parallel nodes, conditional edges, and immutable state transitions. |
-| **BullMQ** | Eight named queues — five collection, three processing pipeline, one analysis. Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
-| **Socket.io** | Server pushes alerts to clients in a competitor-scoped room. No polling. |
+| **BullMQ** | Twelve named queues — two lifecycle (discovery, company-profile update), five collection, three processing pipeline, one recovery, one analysis. Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
+| **Socket.io** | Server present; no alert emission wired yet — see [Implementation Status](#implementation-status). |
 | **Zod** | All LLM outputs validated on receipt. Schema failure message fed back to the model for self-correction. Max three retries before dead-letter. |
 | **Drizzle ORM** | Type-safe schema and queries. Migrations tracked and version-controlled. |
 | **flexsearch** | BM25 keyword index | In-memory keyword search for hybrid retrieval. Combined with semantic search via RRF. |
@@ -171,9 +186,9 @@ graph TB
 | | |
 |---|---|
 | **Docker + docker-compose** | Four services: `api`, `worker`, `postgres`, `redis`. API and worker are separate — background processing does not share a process with the HTTP server. |
-| **GitHub Actions** | Type check and test on every push. Deploy to Railway on merge to main. |
-| **Railway** | API and worker deployed as separate services. |
-| **Vercel** | Next.js frontend. |
+| **GitHub Actions** | Type check, test, and build on every push; RAG faithfulness gate on every push (see [Evaluation](#evaluation)). No deploy step exists yet. |
+| **Railway** (planned) | Target platform for API/worker as separate services — not yet configured. |
+| **Vercel** (planned) | Target platform for the Next.js frontend — not yet configured. |
 | **LangSmith** | Native LangGraph tracing: every node execution, state transition, and LLM call logged automatically with the LangGraph.js SDK. Prompt versioning, evaluation datasets, and a debugging UI for agent runs. |
 
 ---
@@ -197,13 +212,13 @@ Triggered once when a competitor is added via `POST /api/competitors`. Discovers
 
 Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before embedding.
 
-### Signal Processing Pipeline — three BullMQ stages
+### Signal Processing Pipeline — three BullMQ stages, in order
+
+**EntityExtractor** runs first. Uses GPT-4o-mini to pull structured data from signal text — pricing figures, product names, feature names, competitor references — stored as JSONB in `signal.entities`. Enables SQL queries on structured competitive data without full-text search. A failure here is caught and logged; the pipeline still advances (entities stay empty for that signal) rather than blocking the two deterministic stages below it.
 
 **QualityScorer** assigns a `quality_score` from 0.0–1.0 using source authority, log-scaled engagement, and exponential recency decay (λ = 0.0096, half-life ~72h). Score propagates into Pinecone metadata, PatternDetector weighting, and Signal Score's mention-velocity component.
 
-**SemanticDeduplicator** embeds each incoming signal and queries Pinecone for same-competitor signals from the last 48 hours. Cosine similarity above 0.88 (calibrated against 200 labeled pairs) triggers a merge into an existing cluster rather than a new record. Cluster tracks canonical summary, contributing sources, and corroboration count. Multiple sources confirming the same event raise SynthesisAgent's confidence directly.
-
-**EntityExtractor** uses GPT-4o-mini to pull structured data from signal text — pricing figures, product names, feature names, competitor references — stored as JSONB in `signal.entities`. Enables SQL queries on structured competitive data without full-text search.
+**SemanticDeduplicator** runs last (terminal stage). Embeds each incoming signal and queries Pinecone for the top-K most similar same-competitor signals — a plain top-K semantic search, not bounded to a time window. Cosine similarity above 0.88 (calibrated against 200 labeled pairs) triggers a merge into an existing cluster rather than a new record. Cluster tracks canonical summary, contributing sources, and corroboration count. Multiple sources confirming the same event raise SynthesisAgent's confidence directly.
 
 ### Analysis — LangGraph.js
 
@@ -300,7 +315,7 @@ To measure the current captured predictions, run `npm run backtest:full -- --fil
 
 ### Prompt versioning
 
-Every prompt change is gated by a regression suite. Promotion requires a two-proportion z-test at p < 0.05 against the labeled test case database. Every production run records `prompt_version_id` for full audit trail. A/B routing available for shadow testing in production. LangSmith tracks every version's evaluation runs against its dataset.
+Every prompt change is gated by a regression suite. Promotion requires a two-proportion z-test at p < 0.05 against the labeled test case database, with row locking and atomic version swap. `agent_runs.prompt_version_id` exists in the schema for this audit trail, but no current call site (manual/scheduled analysis, ChatAgent) populates it — every run resolves the active prompt at call time without recording which version it saw. No A/B routing or shadow-testing capability exists — `prompt-registry.ts` reads the single active version per agent. LangSmith tracks every version's evaluation runs against its dataset.
 
 IntentAnalyzer — 150 labeled test cases:
 
@@ -326,20 +341,20 @@ committed, so the current implementation does not present these values as locall
 The production threshold remains 0.88. `npm run dedup-calibration -- --file=<verified.json>` reports
 metrics for supplied human labels but never edits the runtime threshold.
 
-### RAG Quality — 50 golden Q&A pairs
+### RAG Quality — target 50 golden Q&A pairs
 
-Manually verified question/answer pairs covering five categories: pricing history, hiring patterns, product changes, sentiment themes, strategic moves.
+Manually verified question/answer pairs covering five categories: pricing history, hiring patterns, product changes, sentiment themes, strategic moves. 50 is the target curated dataset size; only the structural placeholder example (`scripts/fixtures/rag-eval.example.json`) is committed today — real cases are added via `npm run seed-rag-eval` from a human-curated fixture, never fabricated.
+
+The evaluator (`scripts/rag-eval.ts`) is fully implemented: it runs every curated case through the real competitor-scoped ChatAgent pipeline, validates citation integrity against stored signals, scores faithfulness with an LLM judge (`min(correctness, groundedness)`, computed in code), and persists one atomic run. It has never been run against real credentials/data — no aggregate faithfulness number below is a claimed result.
 
 | Metric | Score |
 |---|---|
-| Aggregate faithfulness | TBD after first eval run |
-| Citation coverage | TBD |
-| Refusal rate (correct) | TBD |
-| CI threshold | 0.75 |
+| Aggregate faithfulness | Not yet run |
+| CI threshold | 0.75 (immutable floor) |
 
-Runs automatically in GitHub Actions on every push. Build fails if faithfulness drops below 0.75. Run manually: `npm run rag-eval`
+The schema has no `answerable` flag, so a "correct refusal rate" cannot currently be measured — every seeded case is answerable by construction, and a refusal scores zero rather than being credited.
 
-Note: "TBD after first eval run" — these numbers will be populated once the system is implemented and the eval script is run against real data.
+Runs automatically in GitHub Actions on every push (`rag-eval` job). A below-threshold result or any operational failure fails the build; a narrow CI-only prerequisite skip (missing credentials, or zero curated cases) exits without asserting a quality result. Run manually: `npm run rag-eval --workspace=apps/api`
 
 ---
 
@@ -502,7 +517,7 @@ signal/
     │   │   │
     │   │   ├── llm/
     │   │   │   ├── adaptive-router.ts   # Runtime model selection
-    │   │   │   ├── prompt-registry.ts   # Version fetch + A/B routing
+    │   │   │   ├── prompt-registry.ts   # Active-version fetch (no A/B routing)
     │   │   │   └── cost-tracker.ts      # Per-call token counting + PG logging
     │   │   │
     │   │   ├── reliability/
@@ -559,7 +574,7 @@ signal/
 
 ## Getting Started
 
-Prerequisites: Node.js 20+, Docker, API keys for OpenAI, Anthropic, Pinecone, Reddit OAuth.
+Prerequisites: Node.js 20+, Docker, API keys for OpenAI, Anthropic, Cohere, Pinecone, Reddit OAuth.
 
 ```bash
 git clone https://github.com/yourusername/signal
@@ -635,13 +650,13 @@ not a verified calibration set.
 Run prompt regression tests:
 
 ```bash
-npm run eval -- --agent=intent-analyzer
+npm run eval --workspace=apps/api -- --agent=intent-analyzer
 ```
 
 Promote a prompt version:
 
 ```bash
-npm run promote -- --agent=intent-analyzer --version=8
+npm run promote --workspace=apps/api -- --agent=intent-analyzer --version=8
 # Runs z-test vs active version. Promotes if p < 0.05.
 ```
 
@@ -670,6 +685,7 @@ npm run latency-report --workspace=apps/api
 ```bash
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
+COHERE_API_KEY=
 PINECONE_API_KEY=
 PINECONE_INDEX_NAME=signal
 DATABASE_URL=
