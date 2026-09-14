@@ -1,10 +1,21 @@
 // Single shared Postgres connection pool + Drizzle instance. Every module that touches
 // the database imports `db` from here rather than opening its own pg.Pool — one pool per
 // process, not one per module.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
 import { logger } from "../lib/logger";
+
+// Every entrypoint (API server, worker, scripts) imports this module before
+// touching process.env.DATABASE_URL, so loading the repo-root .env here once
+// covers all of them. A real environment variable (CI, prod) always wins —
+// loadEnvFile never overwrites an already-set process.env key.
+const rootEnvPath = path.resolve(__dirname, "../../../../.env");
+if (existsSync(rootEnvPath)) {
+  process.loadEnvFile(rootEnvPath);
+}
 
 // Bound connection acquisition so infrastructure probes and application work
 // cannot queue forever behind an unreachable database.
