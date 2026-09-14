@@ -19,6 +19,20 @@ const CASE = {
 
 const DATASET = JSON.stringify({ schema_version: 1, cases: [CASE] });
 
+function canonicalUuid(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+}
+
+function structuralCase(index: number) {
+  return {
+    ...CASE,
+    id: canonicalUuid(10_000 + index),
+    question: `STRUCTURAL_TEST_ONLY_QUESTION_${index}`,
+    expected_answer: `STRUCTURAL_TEST_ONLY_ANSWER_${index}`,
+    supporting_signal_ids: [canonicalUuid(20_000 + index)],
+  };
+}
+
 function dependencies(content = DATASET): SeedRagEvalDeps {
   return {
     readFile: vi.fn(async () => content),
@@ -69,9 +83,7 @@ describe("parseRagEvalSeedDataset", () => {
   });
 
   it("accepts exact text and support bounds without normalizing them", () => {
-    const supportIds = Array.from({ length: 100 }, (_, index) =>
-      `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
-    );
+    const supportIds = Array.from({ length: 100 }, (_, index) => canonicalUuid(index));
     const dataset = parseRagEvalSeedDataset(JSON.stringify({
       schema_version: 1,
       cases: [{
@@ -84,6 +96,29 @@ describe("parseRagEvalSeedDataset", () => {
     expect(dataset.cases[0]?.question).toHaveLength(2_000);
     expect(dataset.cases[0]?.expected_answer).toHaveLength(20_000);
     expect(dataset.cases[0]?.supporting_signal_ids).toEqual(supportIds);
+  });
+
+  it("rejects 101 independently valid unique support IDs", () => {
+    const supportIds = Array.from({ length: 101 }, (_, index) => canonicalUuid(index));
+
+    expect(() => parseRagEvalSeedDataset(JSON.stringify({
+      schema_version: 1,
+      cases: [{ ...CASE, supporting_signal_ids: supportIds }],
+    }))).toThrow("RAG eval fixture failed validation");
+  });
+
+  it("accepts exactly 1,000 unique structural cases", () => {
+    const cases = Array.from({ length: 1_000 }, (_, index) => structuralCase(index));
+
+    expect(parseRagEvalSeedDataset(JSON.stringify({ schema_version: 1, cases })).cases).toHaveLength(1_000);
+  });
+
+  it("rejects 1,001 unique structural cases", () => {
+    const cases = Array.from({ length: 1_001 }, (_, index) => structuralCase(index));
+
+    expect(() => parseRagEvalSeedDataset(JSON.stringify({ schema_version: 1, cases }))).toThrow(
+      "RAG eval fixture failed validation"
+    );
   });
 
   it("uses a bounded value-free validation error for invalid curator text", () => {
@@ -104,7 +139,6 @@ describe("parseRagEvalSeedDataset", () => {
     ["unknown category", { category: "unknown" }],
     ["unknown confidence", { confidence_level: "unknown" }],
     ["empty support list", { supporting_signal_ids: [] }],
-    ["more than 100 support IDs", { supporting_signal_ids: Array.from({ length: 101 }, () => CASE.supporting_signal_ids[0]) }],
     ["question above 2,000 characters", { question: "q".repeat(2_001) }],
     ["answer above 20,000 characters", { expected_answer: "a".repeat(20_001) }],
   ])("rejects %s with the same bounded usage error", (_label, override) => {
@@ -189,6 +223,30 @@ describe("runSeedRagEval", () => {
     ).resolves.toBe(1);
     expect(stderr.mock.calls.join(" ")).not.toContain("CURATOR_PATH");
     expect(loadRuntime).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes executable reader failures before a runtime is opened", async () => {
+    const sentinel = "CURATOR_READER_PARAMS_MUST_NEVER_APPEAR";
+    const cleanup = vi.fn(async () => undefined);
+    const loadRuntime = vi.fn(async () => ({
+      seedRagEvalDataset: async () => ({ inserted: 1, unchanged: 0 }),
+      cleanup,
+    }));
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+
+    await expect(
+      runSeedRagEvalCli(
+        ["--file=/private/curator-fixture.json"],
+        async () => { throw new Error(`driver read params=[${sentinel}] /private/curator-fixture.json`); },
+        loadRuntime,
+        { stdout, stderr }
+      )
+    ).resolves.toBe(1);
+    expect(stdout).not.toHaveBeenCalled();
+    expect(loadRuntime).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.join(" ")).not.toMatch(/CURATOR_READER|params|driver|fixture\.json|private/);
   });
 
   it("loads and closes the default runtime only after valid fixture parsing, including repository failure", async () => {
