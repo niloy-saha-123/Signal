@@ -84,6 +84,7 @@ import {
   signalPipelineOutboxTable,
   promptVersionsTable,
   agentTestCasesTable,
+  ragEvalDatasetTable,
 } from "@/db/schema";
 import {
   createCompetitor,
@@ -131,6 +132,9 @@ import {
   getPromptVersion,
   listAgentTestCases,
   promotePromptVersion,
+  seedRagEvalDataset,
+  RagEvalSeedConflictError,
+  RagEvalSeedReferenceError,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -286,6 +290,143 @@ describe("db/queries — competitors", () => {
       expect(orderByMock).toHaveBeenCalledWith(competitorDiscoveryLogTable.discovered_at);
       expect(result).toEqual(rows);
     });
+  });
+});
+
+describe("db/queries — curated RAG seed ingestion", () => {
+  const input = {
+    id: "11111111-1111-4111-8111-111111111111",
+    competitor_id: "22222222-2222-4222-8222-222222222222",
+    category: "general" as const,
+    question: "Exact curator question",
+    expected_answer: "Exact curator answer",
+    supporting_signal_ids: ["33333333-3333-4333-8333-333333333333"],
+    confidence_level: "low" as const,
+  };
+
+  it("inserts only seed-owned fields after locked, set-based reference validation", async () => {
+    const persisted = {
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+    };
+    const returning = vi.fn(async () => [{ id: input.id }]);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn(() => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => [persisted]);
+    const where = vi.fn(() => ({ orderBy }));
+    const from = vi.fn(() => ({ where }));
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).resolves.toEqual({ inserted: 1, unchanged: 0 });
+
+    expect(transactionMock).toHaveBeenCalledOnce();
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+    expect(tx.insert).toHaveBeenCalledWith(ragEvalDatasetTable);
+    expect(values).toHaveBeenCalledWith([{
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+    }]);
+    expect(onConflictDoNothing).toHaveBeenCalledWith({ target: ragEvalDatasetTable.id });
+    expect(orderBy).toHaveBeenCalledWith(asc(ragEvalDatasetTable.id));
+  });
+
+  it("rejects missing or cross-competitor references before any insert", async () => {
+    const insert = vi.fn();
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: "99999999-9999-4999-8999-999999999999" }] }),
+      insert,
+      select: vi.fn(),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).rejects.toEqual(expect.objectContaining({
+      name: "RagEvalSeedReferenceError", caseIds: [input.id],
+    }));
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("reports deterministic conflicts while ignoring database-owned evaluation metadata", async () => {
+    const persisted = {
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+      created_at: new Date("2026-01-01T00:00:00.000Z"),
+      last_evaluated_at: new Date("2026-02-01T00:00:00.000Z"),
+      last_faithfulness_score: 0.99,
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn(() => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => [persisted]);
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).resolves.toEqual({ inserted: 0, unchanged: 1 });
+  });
+
+  it("rolls back a preceding insert when a later stable ID conflicts", async () => {
+    const conflicting = { ...input, id: "44444444-4444-4444-8444-444444444444", question: "Different stored question" };
+    let committed: Array<Record<string, unknown>> = [
+      {
+        id: conflicting.id, competitor_id: conflicting.competitor_id, category: conflicting.category,
+        question: "Previously persisted question", expected_answer: conflicting.expected_answer,
+        supporting_chunk_ids: conflicting.supporting_signal_ids, confidence_level: conflicting.confidence_level,
+      },
+    ];
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
+      const working = structuredClone(committed);
+      const orderBy = vi.fn(async () => working.sort((left, right) => String(left.id).localeCompare(String(right.id))));
+      const returning = vi.fn(async () => {
+        const rows = pending.filter((row) => !working.some((stored) => stored.id === row.id));
+        working.push(...rows);
+        return rows.map((row) => ({ id: row.id }));
+      });
+      const onConflictDoNothing = vi.fn(() => ({ returning }));
+      let pending: Array<Record<string, unknown>> = [];
+      const tx = {
+        execute: vi.fn()
+          .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+          .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+        insert: vi.fn(() => ({ values: vi.fn((rows) => { pending = rows; return { onConflictDoNothing }; }) })),
+        select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+      };
+      const result = await callback(tx);
+      committed = working;
+      return result;
+    });
+    const before = structuredClone(committed);
+
+    await expect(seedRagEvalDataset([input, conflicting])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
+    expect(committed).toEqual(before);
   });
 });
 

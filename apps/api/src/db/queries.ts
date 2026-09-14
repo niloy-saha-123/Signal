@@ -23,6 +23,7 @@ import {
   signalPipelineOutboxTable,
   promptVersionsTable,
   agentTestCasesTable,
+  ragEvalDatasetTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -54,6 +55,46 @@ export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
 >;
+
+export type RagEvalSeedCaseInput = {
+  id: string;
+  competitor_id: string;
+  category:
+    | "pricing_history"
+    | "hiring_pattern"
+    | "product_change"
+    | "sentiment_theme"
+    | "strategic_move"
+    | "general";
+  question: string;
+  expected_answer: string;
+  supporting_signal_ids: string[];
+  confidence_level: "high" | "medium" | "low";
+};
+
+export type RagEvalSeedResult = { inserted: number; unchanged: number };
+
+export class RagEvalSeedConflictError extends Error {
+  readonly conflictingIds: string[];
+
+  constructor(conflictingIds: readonly string[]) {
+    const sorted = [...conflictingIds].sort();
+    super(`RAG eval seed conflicts: ${sorted.join(", ")}`);
+    this.name = "RagEvalSeedConflictError";
+    this.conflictingIds = sorted;
+  }
+}
+
+export class RagEvalSeedReferenceError extends Error {
+  readonly caseIds: string[];
+
+  constructor(caseIds: readonly string[]) {
+    const sorted = [...caseIds].sort();
+    super(`RAG eval seed references are invalid for cases: ${sorted.join(", ")}`);
+    this.name = "RagEvalSeedReferenceError";
+    this.caseIds = sorted;
+  }
+}
 
 export type SignalVolumeByDay = {
   day: string;
@@ -236,6 +277,92 @@ export async function promotePromptVersion(
     }
 
     return { ...baseResult, promoted: true, reason: "promoted" };
+  });
+}
+
+function sameStringArray(left: readonly string[] | null, right: readonly string[]): boolean {
+  return left !== null && left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export async function seedRagEvalDataset(
+  cases: readonly RagEvalSeedCaseInput[]
+): Promise<RagEvalSeedResult> {
+  return db.transaction(async (tx) => {
+    const competitorIds = [...new Set(cases.map((seedCase) => seedCase.competitor_id))].sort();
+    const signalIds = [...new Set(cases.flatMap((seedCase) => seedCase.supporting_signal_ids))].sort();
+    const [competitorResult, signalResult] = await Promise.all([
+      tx.execute(sql`
+        SELECT ${competitorsTable.id} AS id
+        FROM ${competitorsTable}
+        WHERE ${competitorsTable.id} = ANY(${competitorIds}::uuid[])
+        ORDER BY ${competitorsTable.id} ASC
+        FOR KEY SHARE
+      `),
+      tx.execute(sql`
+        SELECT ${signalsTable.id} AS id, ${signalsTable.competitor_id} AS competitor_id
+        FROM ${signalsTable}
+        WHERE ${signalsTable.id} = ANY(${signalIds}::uuid[])
+        ORDER BY ${signalsTable.id} ASC
+        FOR KEY SHARE
+      `),
+    ]);
+    const foundCompetitorIds = new Set(competitorResult.rows.map((row) => String(row.id)));
+    const signalCompetitorIds = new Map(
+      signalResult.rows.map((row) => [String(row.id), String(row.competitor_id)])
+    );
+    const invalidReferenceCaseIds = cases.flatMap((seedCase) =>
+      !foundCompetitorIds.has(seedCase.competitor_id) ||
+      seedCase.supporting_signal_ids.some(
+        (signalId) => signalCompetitorIds.get(signalId) !== seedCase.competitor_id
+      )
+        ? [seedCase.id]
+        : []
+    );
+    if (invalidReferenceCaseIds.length > 0) throw new RagEvalSeedReferenceError(invalidReferenceCaseIds);
+
+    const inserted = await tx
+      .insert(ragEvalDatasetTable)
+      .values(cases.map((seedCase) => ({
+        id: seedCase.id,
+        competitor_id: seedCase.competitor_id,
+        category: seedCase.category,
+        question: seedCase.question,
+        expected_answer: seedCase.expected_answer,
+        supporting_chunk_ids: seedCase.supporting_signal_ids,
+        confidence_level: seedCase.confidence_level,
+      })))
+      .onConflictDoNothing({ target: ragEvalDatasetTable.id })
+      .returning({ id: ragEvalDatasetTable.id });
+
+    const requestedIds = cases.map((seedCase) => seedCase.id).sort();
+    const persisted = await tx
+      .select({
+        id: ragEvalDatasetTable.id,
+        competitor_id: ragEvalDatasetTable.competitor_id,
+        category: ragEvalDatasetTable.category,
+        question: ragEvalDatasetTable.question,
+        expected_answer: ragEvalDatasetTable.expected_answer,
+        supporting_chunk_ids: ragEvalDatasetTable.supporting_chunk_ids,
+        confidence_level: ragEvalDatasetTable.confidence_level,
+      })
+      .from(ragEvalDatasetTable)
+      .where(inArray(ragEvalDatasetTable.id, requestedIds))
+      .orderBy(asc(ragEvalDatasetTable.id));
+    const persistedById = new Map(persisted.map((row) => [row.id, row]));
+    const conflicts = cases.flatMap((seedCase) => {
+      const row = persistedById.get(seedCase.id);
+      return !row ||
+        row.competitor_id !== seedCase.competitor_id ||
+        row.category !== seedCase.category ||
+        row.question !== seedCase.question ||
+        row.expected_answer !== seedCase.expected_answer ||
+        !sameStringArray(row.supporting_chunk_ids, seedCase.supporting_signal_ids) ||
+        row.confidence_level !== seedCase.confidence_level
+        ? [seedCase.id]
+        : [];
+    });
+    if (conflicts.length > 0) throw new RagEvalSeedConflictError(conflicts);
+    return { inserted: inserted.length, unchanged: cases.length - inserted.length };
   });
 }
 
