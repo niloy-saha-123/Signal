@@ -36,6 +36,8 @@ describe("parseRagEvalSeedDataset", () => {
     ["whitespace bytes", "  \n"],
     ["malformed JSON", "{"],
     ["wrong version", JSON.stringify({ schema_version: 2, cases: [CASE] })],
+    ["missing schema version", JSON.stringify({ cases: [CASE] })],
+    ["missing cases", JSON.stringify({ schema_version: 1 })],
     ["unknown top-level key", JSON.stringify({ schema_version: 1, cases: [CASE], extra: true })],
     ["empty cases", JSON.stringify({ schema_version: 1, cases: [] })],
     ["noncanonical UUID", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, id: "ABCDEFAB-ABCD-4ABC-8ABC-ABCDEFABCDEF" }] })],
@@ -43,6 +45,9 @@ describe("parseRagEvalSeedDataset", () => {
     ["empty answer", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, expected_answer: "" }] })],
     ["unknown case key", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, extra: true }] })],
     ["repeated support id", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, supporting_signal_ids: [CASE.supporting_signal_ids[0], CASE.supporting_signal_ids[0]] }] })],
+    ["non-string support ID", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, supporting_signal_ids: [42] }] })],
+    ["malformed support ID", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, supporting_signal_ids: ["not-a-uuid"] }] })],
+    ["surrounding answer whitespace", JSON.stringify({ schema_version: 1, cases: [{ ...CASE, expected_answer: " answer" }] })],
     ["duplicate case id", JSON.stringify({ schema_version: 1, cases: [CASE, { ...CASE }] })],
   ])("rejects %s without repairing curator content", (_label, content) => {
     expect(() => parseRagEvalSeedDataset(content)).toThrow();
@@ -61,6 +66,24 @@ describe("parseRagEvalSeedDataset", () => {
       schema_version: 1,
       cases: [CASE, second],
     });
+  });
+
+  it("accepts exact text and support bounds without normalizing them", () => {
+    const supportIds = Array.from({ length: 100 }, (_, index) =>
+      `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
+    );
+    const dataset = parseRagEvalSeedDataset(JSON.stringify({
+      schema_version: 1,
+      cases: [{
+        ...CASE,
+        question: "q".repeat(2_000),
+        expected_answer: "a".repeat(20_000),
+        supporting_signal_ids: supportIds,
+      }],
+    }));
+    expect(dataset.cases[0]?.question).toHaveLength(2_000);
+    expect(dataset.cases[0]?.expected_answer).toHaveLength(20_000);
+    expect(dataset.cases[0]?.supporting_signal_ids).toEqual(supportIds);
   });
 
   it("uses a bounded value-free validation error for invalid curator text", () => {
@@ -184,5 +207,85 @@ describe("runSeedRagEval", () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(stdout).not.toHaveBeenCalled();
     expect(stderr.mock.calls.join(" ")).not.toContain("CURATOR_ANSWER_MUST_NEVER_APPEAR");
+  });
+
+  it("sanitizes a lazy runtime loader failure without attempting cleanup", async () => {
+    const sentinel = "CURATOR_LOADER_PARAMS_MUST_NEVER_APPEAR";
+    const loadRuntime = vi.fn(async () => {
+      throw new Error(`sql=SELECT params=[${sentinel}] /private/fixture.json`);
+    });
+    const stderr = vi.fn();
+
+    await expect(
+      runSeedRagEvalCli(["--file=/safe.json"], async () => DATASET, loadRuntime, {
+        stdout: vi.fn(),
+        stderr,
+      })
+    ).resolves.toBe(1);
+    expect(loadRuntime).toHaveBeenCalledOnce();
+    expect(stderr.mock.calls.join(" ")).not.toMatch(/CURATOR_LOADER|params|SELECT|fixture\.json/);
+  });
+
+  it("sanitizes cleanup failure while changing the executable exit to one", async () => {
+    const sentinel = "CURATOR_CLEANUP_PARAMS_MUST_NEVER_APPEAR";
+    const cleanup = vi.fn(async () => {
+      throw new Error(`close failed params=[${sentinel}] /private/fixture.json`);
+    });
+    const stderr = vi.fn();
+
+    await expect(
+      runSeedRagEvalCli(
+        ["--file=/safe.json"],
+        async () => DATASET,
+        async () => ({
+          seedRagEvalDataset: async () => ({ inserted: 1, unchanged: 0 }),
+          cleanup,
+        }),
+        { stdout: vi.fn(), stderr }
+      )
+    ).resolves.toBe(1);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(stderr.mock.calls.join(" ")).not.toMatch(/CURATOR_CLEANUP|params|fixture\.json/);
+  });
+
+  it("does not load or clean a runtime when complete fixture validation fails", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const loadRuntime = vi.fn(async () => ({
+      seedRagEvalDataset: async () => ({ inserted: 1, unchanged: 0 }),
+      cleanup,
+    }));
+
+    await expect(
+      runSeedRagEvalCli(["--file=/safe.json"], async () => "{", loadRuntime, {
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      })
+    ).resolves.toBe(1);
+    expect(loadRuntime).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("prints one stable success summary and cleans a successfully loaded runtime once", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const stdout = vi.fn();
+
+    await expect(
+      runSeedRagEvalCli(
+        ["--file=/safe.json"],
+        async () => DATASET,
+        async () => ({
+          seedRagEvalDataset: async () => ({ inserted: 1, unchanged: 0 }),
+          cleanup,
+        }),
+        { stdout, stderr: vi.fn() }
+      )
+    ).resolves.toBe(0);
+    expect(JSON.parse(stdout.mock.calls[0]?.[0] ?? "")).toEqual({
+      schema_version: 1,
+      total: 1,
+      inserted: 1,
+      unchanged: 0,
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 });

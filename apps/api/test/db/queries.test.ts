@@ -580,6 +580,83 @@ describe("db/queries — curated RAG seed ingestion", () => {
     await expect(seedRagEvalDataset([input, conflicting])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
     expect(committed).toEqual(before);
   });
+
+  it("waits for both locked reference reads before inserting and reads back only after insert", async () => {
+    let resolveCompetitor: ((value: { rows: Array<{ id: string }> }) => void) | undefined;
+    let resolveSignal: ((value: { rows: Array<{ id: string; competitor_id: string }> }) => void) | undefined;
+    const competitorRead = new Promise<{ rows: Array<{ id: string }> }>((resolve) => { resolveCompetitor = resolve; });
+    const signalRead = new Promise<{ rows: Array<{ id: string; competitor_id: string }> }>((resolve) => { resolveSignal = resolve; });
+    const events: string[] = [];
+    const returning = vi.fn(async () => [{ id: input.id }]);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn(() => ({ onConflictDoNothing }));
+    const tx = {
+      execute: vi.fn()
+        .mockImplementationOnce(() => { events.push("competitor-read"); return competitorRead; })
+        .mockImplementationOnce(() => { events.push("signal-read"); return signalRead; }),
+      insert: vi.fn(() => { events.push("insert"); return { values }; }),
+      select: vi.fn(() => {
+        events.push("post-read");
+        return { from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(async () => [{
+          id: input.id,
+          competitor_id: input.competitor_id,
+          category: input.category,
+          question: input.question,
+          expected_answer: input.expected_answer,
+          supporting_chunk_ids: input.supporting_signal_ids,
+          confidence_level: input.confidence_level,
+        }]) })) })) };
+      }),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    const seed = seedRagEvalDataset([input]);
+    await Promise.resolve();
+    expect(events).toEqual(["competitor-read", "signal-read"]);
+    resolveCompetitor?.({ rows: [{ id: input.competitor_id }] });
+    await Promise.resolve();
+    expect(events).toEqual(["competitor-read", "signal-read"]);
+    resolveSignal?.({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] });
+    await expect(seed).resolves.toEqual({ inserted: 1, unchanged: 0 });
+    expect(events).toEqual(["competitor-read", "signal-read", "insert", "post-read"]);
+  });
+
+  it.each(["insert", "post-read"] as const)(
+    "propagates a %s failure and leaves the transaction's committed state unchanged",
+    async (failurePoint) => {
+      let committed: Array<Record<string, unknown>> = [];
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
+        const working = structuredClone(committed);
+        const returning = vi.fn(async () => {
+          if (failurePoint === "insert") throw new Error("insert failure");
+          working.push({ id: input.id });
+          return [{ id: input.id }];
+        });
+        const onConflictDoNothing = vi.fn(() => ({ returning }));
+        const tx = {
+          execute: vi.fn()
+            .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+            .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+          insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing })) })),
+          select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({
+            orderBy: vi.fn(async () => {
+              if (failurePoint === "post-read") throw new Error("post-read failure");
+              return [];
+            }),
+          })) })) })),
+        };
+        const result = await callback(tx);
+        committed = working;
+        return result;
+      });
+      const before = structuredClone(committed);
+
+      await expect(seedRagEvalDataset([input])).rejects.toThrow(
+        failurePoint === "insert" ? "insert failure" : "post-read failure"
+      );
+      expect(committed).toEqual(before);
+    }
+  );
 });
 
 describe("db/queries — signals", () => {

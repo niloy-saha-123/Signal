@@ -87,6 +87,24 @@ async function loadDefaultRuntime(): Promise<SeedRagEvalRuntime> {
   return { seedRagEvalDataset, cleanup: closeDatabase };
 }
 
+async function loadSeedRuntime(
+  loadRuntime: () => Promise<SeedRagEvalRuntime>
+): Promise<SeedRagEvalRuntime> {
+  try {
+    return await loadRuntime();
+  } catch {
+    throw new Error("RAG eval seed runtime failed");
+  }
+}
+
+async function cleanupSeedRuntime(cleanup: () => Promise<void>): Promise<void> {
+  try {
+    await cleanup();
+  } catch {
+    throw new Error("RAG eval seed cleanup failed");
+  }
+}
+
 async function readRagEvalFixture(readFile: SeedRagEvalDeps["readFile"], path: string): Promise<string> {
   try { return await readFile(path); } catch (error) {
     if (error instanceof CliUsageError) throw error;
@@ -128,8 +146,8 @@ async function readValidatedDataset(
 export async function runSeedRagEval(argv: string[], dependencies?: SeedRagEvalDeps): Promise<SeedRagEvalSummary> {
   const dataset = await readValidatedDataset(argv, dependencies?.readFile ?? readUtf8Fixture);
   if (dependencies) return seedValidatedDataset(dataset, dependencies.seedRagEvalDataset);
-  const runtime = await loadDefaultRuntime();
-  try { return await seedValidatedDataset(dataset, runtime.seedRagEvalDataset); } finally { await runtime.cleanup(); }
+  const runtime = await loadSeedRuntime(loadDefaultRuntime);
+  try { return await seedValidatedDataset(dataset, runtime.seedRagEvalDataset); } finally { await cleanupSeedRuntime(runtime.cleanup); }
 }
 
 const defaultIo: SeedRagEvalCliIo = {
@@ -146,8 +164,8 @@ export async function runSeedRagEvalCli(
   let cleanup: () => Promise<void> = async () => undefined;
   return runCli(async () => {
     const dataset = await readValidatedDataset(argv, readFile);
-    const runtime = await loadRuntime();
-    cleanup = runtime.cleanup;
+    const runtime = await loadSeedRuntime(loadRuntime);
+    cleanup = () => cleanupSeedRuntime(runtime.cleanup);
     io.stdout(JSON.stringify(await seedValidatedDataset(dataset, runtime.seedRagEvalDataset)));
   }, () => cleanup(), { stderr: io.stderr });
 }
