@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseRagEvalSeedDataset, runSeedRagEval, type SeedRagEvalDeps } from "../../scripts/seed-rag-eval";
+import * as seedScript from "../../scripts/seed-rag-eval";
+import {
+  parseRagEvalSeedDataset,
+  runSeedRagEval,
+  runSeedRagEvalCli,
+  type SeedRagEvalDeps,
+} from "../../scripts/seed-rag-eval";
 
 const CASE = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -56,6 +62,34 @@ describe("parseRagEvalSeedDataset", () => {
       cases: [CASE, second],
     });
   });
+
+  it("uses a bounded value-free validation error for invalid curator text", () => {
+    const sentinel = "CURATOR_ANSWER_MUST_NEVER_APPEAR";
+    try {
+      parseRagEvalSeedDataset(
+        JSON.stringify({ schema_version: 1, cases: [{ ...CASE, expected_answer: ` ${sentinel}` }] })
+      );
+      throw new Error("expected parser to reject fixture");
+    } catch (error) {
+      expect(error).toMatchObject({ message: "RAG eval fixture failed validation" });
+      expect(String(error)).not.toContain(sentinel);
+    }
+  });
+
+  it.each([
+    ["non-string UUID", { id: 42 }],
+    ["unknown category", { category: "unknown" }],
+    ["unknown confidence", { confidence_level: "unknown" }],
+    ["empty support list", { supporting_signal_ids: [] }],
+    ["more than 100 support IDs", { supporting_signal_ids: Array.from({ length: 101 }, () => CASE.supporting_signal_ids[0]) }],
+    ["question above 2,000 characters", { question: "q".repeat(2_001) }],
+    ["answer above 20,000 characters", { expected_answer: "a".repeat(20_001) }],
+  ])("rejects %s with the same bounded usage error", (_label, override) => {
+    expect(() => parseRagEvalSeedDataset(JSON.stringify({
+      schema_version: 1,
+      cases: [{ ...CASE, ...override }],
+    }))).toThrow("RAG eval fixture failed validation");
+  });
 });
 
 describe("runSeedRagEval", () => {
@@ -101,5 +135,54 @@ describe("runSeedRagEval", () => {
     await expect(runSeedRagEval(["--file=/private/curated-fixture.json"], deps)).rejects.toThrow(
       "Unable to read RAG eval fixture"
     );
+  });
+
+  it("sanitizes unexpected repository failures while retaining safe domain errors", async () => {
+    const sentinel = "CURATOR_ANSWER_MUST_NEVER_APPEAR";
+    const deps = dependencies();
+    deps.seedRagEvalDataset = vi.fn(async () => {
+      throw new Error(`driver failure params=[${sentinel}] postgresql://secret@db`);
+    });
+    await expect(runSeedRagEval(["--file=/fixture.json"], deps)).rejects.toThrow(
+      "RAG eval seed failed"
+    );
+  });
+
+  it("keeps positional arguments and runtime failure details out of executable stderr", async () => {
+    const runner = Reflect.get(seedScript, "runSeedRagEvalCli") as undefined | ((
+      argv: string[],
+      readFile: (path: string) => Promise<string>,
+      loadRuntime: () => Promise<{ seedRagEvalDataset: SeedRagEvalDeps["seedRagEvalDataset"]; cleanup: () => Promise<void> }>,
+      io: { stdout: (message: string) => void; stderr: (message: string) => void }
+    ) => Promise<number>);
+    const stderr = vi.fn();
+    const loadRuntime = vi.fn(async () => ({
+      seedRagEvalDataset: vi.fn(async () => ({ inserted: 1, unchanged: 0 })),
+      cleanup: vi.fn(async () => undefined),
+    }));
+
+    await expect(
+      runner!(["/private/CURATOR_PATH"], async () => DATASET, loadRuntime, { stdout: vi.fn(), stderr })
+    ).resolves.toBe(1);
+    expect(stderr.mock.calls.join(" ")).not.toContain("CURATOR_PATH");
+    expect(loadRuntime).not.toHaveBeenCalled();
+  });
+
+  it("loads and closes the default runtime only after valid fixture parsing, including repository failure", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const seedRagEvalDataset = vi.fn(async () => {
+      throw new Error("driver params=[CURATOR_ANSWER_MUST_NEVER_APPEAR]");
+    });
+    const loadRuntime = vi.fn(async () => ({ seedRagEvalDataset, cleanup }));
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+
+    await expect(
+      runSeedRagEvalCli(["--file=/safe.json"], async () => DATASET, loadRuntime, { stdout, stderr })
+    ).resolves.toBe(1);
+    expect(loadRuntime).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.join(" ")).not.toContain("CURATOR_ANSWER_MUST_NEVER_APPEAR");
   });
 });

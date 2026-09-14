@@ -68,6 +68,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
 
 import type { CompetitorDiscoveryResult } from "@signal/shared";
 import { eq, and, sql, asc, desc, inArray } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import {
   competitorsTable,
   competitorDiscoveryLogTable,
@@ -304,6 +305,31 @@ describe("db/queries — curated RAG seed ingestion", () => {
     confidence_level: "low" as const,
   };
 
+  function arrangeExisting(persistedOverride: Record<string, unknown>) {
+    const persisted = {
+      id: input.id,
+      competitor_id: input.competitor_id,
+      category: input.category,
+      question: input.question,
+      expected_answer: input.expected_answer,
+      supporting_chunk_ids: input.supporting_signal_ids,
+      confidence_level: input.confidence_level,
+      ...persistedOverride,
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn((_rows: Array<{ id: string }>) => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => [persisted]);
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+  }
+
   it("inserts only seed-owned fields after locked, set-based reference validation", async () => {
     const persisted = {
       id: input.id,
@@ -345,6 +371,54 @@ describe("db/queries — curated RAG seed ingestion", () => {
     }]);
     expect(onConflictDoNothing).toHaveBeenCalledWith({ target: ragEvalDatasetTable.id });
     expect(orderBy).toHaveBeenCalledWith(asc(ragEvalDatasetTable.id));
+    const dialect = new PgDialect();
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[0]![0]).params).toEqual([[input.competitor_id]]);
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[1]![0]).params).toEqual([
+      [input.supporting_signal_ids[0]],
+    ]);
+    const referenceSql = tx.execute.mock.calls.map((call) => dialect.sqlToQuery(call[0]).sql);
+    expect(referenceSql).toHaveLength(2);
+    expect(referenceSql.every((statement) => statement.includes("ORDER BY") && statement.includes("FOR KEY SHARE"))).toBe(true);
+    expect(referenceSql.join(" ")).toContain("ANY($1::uuid[])");
+  });
+
+  it("binds multiple reference IDs as uuid arrays and sorts insert rows by stable case ID", async () => {
+    const second = {
+      ...input,
+      id: "00000000-0000-4000-8000-000000000000",
+      competitor_id: "44444444-4444-4444-8444-444444444444",
+      supporting_signal_ids: ["55555555-5555-4555-8555-555555555555"],
+    };
+    const persisted = [input, second].map((seedCase) => ({
+      ...seedCase,
+      supporting_chunk_ids: seedCase.supporting_signal_ids,
+    }));
+    const returning = vi.fn(async () => [{ id: input.id }, { id: second.id }]);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const values = vi.fn((_rows: Array<{ id: string }>) => ({ onConflictDoNothing }));
+    const orderBy = vi.fn(async () => persisted);
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: second.competitor_id }, { id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: [
+          { id: second.supporting_signal_ids[0], competitor_id: second.competitor_id },
+          { id: input.supporting_signal_ids[0], competitor_id: input.competitor_id },
+        ] }),
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input, second])).resolves.toEqual({ inserted: 2, unchanged: 0 });
+
+    const dialect = new PgDialect();
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[0]![0]).params).toEqual([
+      [second.competitor_id, input.competitor_id].sort(),
+    ]);
+    expect(dialect.sqlToQuery(tx.execute.mock.calls[1]![0]).params).toEqual([
+      [input.supporting_signal_ids[0], second.supporting_signal_ids[0]].sort(),
+    ]);
+    expect(values.mock.calls[0]![0].map((row: { id: string }) => row.id)).toEqual([second.id, input.id]);
   });
 
   it("rejects missing or cross-competitor references before any insert", async () => {
@@ -362,6 +436,84 @@ describe("db/queries — curated RAG seed ingestion", () => {
       name: "RagEvalSeedReferenceError", caseIds: [input.id],
     }));
     expect(insert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing competitor", { competitors: [], signals: [{ id: input.supporting_signal_ids[0], competitor_id: input.competitor_id }] }],
+    ["missing signal", { competitors: [{ id: input.competitor_id }], signals: [] }],
+  ])("rejects %s without inserting", async (_label, rows) => {
+    const insert = vi.fn();
+    const tx = {
+      execute: vi.fn().mockResolvedValueOnce({ rows: rows.competitors }).mockResolvedValueOnce({ rows: rows.signals }),
+      insert,
+      select: vi.fn(),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+    await expect(seedRagEvalDataset([input])).rejects.toBeInstanceOf(RagEvalSeedReferenceError);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["competitor", { competitor_id: "99999999-9999-4999-8999-999999999999" }],
+    ["nullable legacy competitor", { competitor_id: null }],
+    ["category", { category: "pricing_history" }],
+    ["question", { question: "Changed question" }],
+    ["expected answer", { expected_answer: "Changed answer" }],
+    ["nullable legacy support IDs", { supporting_chunk_ids: null }],
+    ["confidence", { confidence_level: "high" }],
+  ])("treats a changed %s as a no-overwrite conflict", async (_label, persistedOverride) => {
+    arrangeExisting(persistedOverride);
+    await expect(seedRagEvalDataset([input])).rejects.toMatchObject({
+      name: "RagEvalSeedConflictError",
+      conflictingIds: [input.id],
+    });
+  });
+
+  it("treats an absent post-insert row as a conflict", async () => {
+    const orderedInput = {
+      ...input,
+      supporting_signal_ids: [
+        input.supporting_signal_ids[0],
+        "44444444-4444-4444-8444-444444444444",
+      ],
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: orderedInput.supporting_signal_ids.map((id) => ({ id, competitor_id: input.competitor_id })) }),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing })) })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(async () => []) })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+    await expect(seedRagEvalDataset([orderedInput])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
+  });
+
+  it("treats support-ID order as seed-owned content", async () => {
+    const orderedInput = {
+      ...input,
+      supporting_signal_ids: [
+        input.supporting_signal_ids[0],
+        "44444444-4444-4444-8444-444444444444",
+      ],
+    };
+    const returning = vi.fn(async () => []);
+    const onConflictDoNothing = vi.fn(() => ({ returning }));
+    const persisted = {
+      ...orderedInput,
+      supporting_chunk_ids: [...orderedInput.supporting_signal_ids].reverse(),
+    };
+    const tx = {
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: input.competitor_id }] })
+        .mockResolvedValueOnce({ rows: orderedInput.supporting_signal_ids.map((id) => ({ id, competitor_id: input.competitor_id })) }),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoNothing })) })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(async () => [persisted]) })) })) })),
+    };
+    transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+    await expect(seedRagEvalDataset([orderedInput])).rejects.toBeInstanceOf(RagEvalSeedConflictError);
   });
 
   it("reports deterministic conflicts while ignoring database-owned evaluation metadata", async () => {

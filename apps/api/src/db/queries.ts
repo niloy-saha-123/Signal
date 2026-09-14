@@ -294,14 +294,14 @@ export async function seedRagEvalDataset(
       tx.execute(sql`
         SELECT ${competitorsTable.id} AS id
         FROM ${competitorsTable}
-        WHERE ${competitorsTable.id} = ANY(${competitorIds}::uuid[])
+        WHERE ${competitorsTable.id} = ANY(${sql.param(competitorIds)}::uuid[])
         ORDER BY ${competitorsTable.id} ASC
         FOR KEY SHARE
       `),
       tx.execute(sql`
         SELECT ${signalsTable.id} AS id, ${signalsTable.competitor_id} AS competitor_id
         FROM ${signalsTable}
-        WHERE ${signalsTable.id} = ANY(${signalIds}::uuid[])
+        WHERE ${signalsTable.id} = ANY(${sql.param(signalIds)}::uuid[])
         ORDER BY ${signalsTable.id} ASC
         FOR KEY SHARE
       `),
@@ -320,9 +320,8 @@ export async function seedRagEvalDataset(
     );
     if (invalidReferenceCaseIds.length > 0) throw new RagEvalSeedReferenceError(invalidReferenceCaseIds);
 
-    const inserted = await tx
-      .insert(ragEvalDatasetTable)
-      .values(cases.map((seedCase) => ({
+    const insertRows = cases
+      .map((seedCase) => ({
         id: seedCase.id,
         competitor_id: seedCase.competitor_id,
         category: seedCase.category,
@@ -330,7 +329,11 @@ export async function seedRagEvalDataset(
         expected_answer: seedCase.expected_answer,
         supporting_chunk_ids: seedCase.supporting_signal_ids,
         confidence_level: seedCase.confidence_level,
-      })))
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const inserted = await tx
+      .insert(ragEvalDatasetTable)
+      .values(insertRows)
       .onConflictDoNothing({ target: ragEvalDatasetTable.id })
       .returning({ id: ragEvalDatasetTable.id });
 

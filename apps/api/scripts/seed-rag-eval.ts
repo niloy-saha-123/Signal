@@ -59,26 +59,36 @@ export type SeedRagEvalDeps = {
   seedRagEvalDataset: (cases: readonly RagEvalSeedCaseInput[]) => Promise<RagEvalSeedResult>;
 };
 export type SeedRagEvalSummary = { schema_version: 1; total: number; inserted: number; unchanged: number };
+export type SeedRagEvalRuntime = {
+  seedRagEvalDataset: SeedRagEvalDeps["seedRagEvalDataset"];
+  cleanup: () => Promise<void>;
+};
+export type SeedRagEvalCliIo = { stdout: (message: string) => void; stderr: (message: string) => void };
 
 export function parseRagEvalSeedDataset(content: string): RagEvalSeedDataset {
   let parsed: unknown;
   try { parsed = JSON.parse(content); } catch { throw new CliUsageError("RAG eval fixture must be valid JSON"); }
-  const result = RagEvalSeedDatasetSchema.safeParse(parsed);
-  if (!result.success) throw new CliUsageError(result.error.issues.map((issue) => issue.message).join("; "));
-  return result.data;
+  if (!RagEvalSeedDatasetSchema.safeParse(parsed).success) {
+    throw new CliUsageError("RAG eval fixture failed validation");
+  }
+  return RagEvalSeedDatasetSchema.parse(parsed);
 }
 
-async function loadDefaultSeedRepository(): Promise<SeedRagEvalDeps["seedRagEvalDataset"]> {
-  return (await import("../src/db/queries.js")).seedRagEvalDataset;
+function parseSeedRagEvalOptions(argv: string[]): z.output<typeof SeedRagEvalOptionsSchema> {
+  try { return parseCliArgs(argv, SeedRagEvalOptionsSchema); } catch {
+    throw new CliUsageError("Invalid RAG eval seed command options");
+  }
 }
 
-async function readRagEvalFixture(
-  readFile: SeedRagEvalDeps["readFile"],
-  path: string
-): Promise<string> {
-  try {
-    return await readFile(path);
-  } catch (error) {
+async function loadDefaultRuntime(): Promise<SeedRagEvalRuntime> {
+  const [{ seedRagEvalDataset }, { closeDatabase }] = await Promise.all([
+    import("../src/db/queries.js"), import("../src/db/client.js"),
+  ]);
+  return { seedRagEvalDataset, cleanup: closeDatabase };
+}
+
+async function readRagEvalFixture(readFile: SeedRagEvalDeps["readFile"], path: string): Promise<string> {
+  try { return await readFile(path); } catch (error) {
     if (error instanceof CliUsageError) throw error;
     throw new CliUsageError("Unable to read RAG eval fixture");
   }
@@ -92,23 +102,56 @@ function summaryFor(dataset: RagEvalSeedDataset, result: RagEvalSeedResult): See
   return { schema_version: 1, total: dataset.cases.length, inserted: result.inserted, unchanged: result.unchanged };
 }
 
+function isSafeDomainError(error: unknown): error is Error {
+  return error instanceof Error &&
+    (error.name === "RagEvalSeedConflictError" || error.name === "RagEvalSeedReferenceError");
+}
+
+async function seedValidatedDataset(
+  dataset: RagEvalSeedDataset,
+  seed: SeedRagEvalDeps["seedRagEvalDataset"]
+): Promise<SeedRagEvalSummary> {
+  try { return summaryFor(dataset, await seed(dataset.cases)); } catch (error) {
+    if (isSafeDomainError(error) ||
+      error instanceof Error && error.message === "RAG eval seed repository returned inconsistent counts") throw error;
+    throw new Error("RAG eval seed failed");
+  }
+}
+
+async function readValidatedDataset(
+  argv: string[], readFile: SeedRagEvalDeps["readFile"]
+): Promise<RagEvalSeedDataset> {
+  const options = parseSeedRagEvalOptions(argv);
+  return parseRagEvalSeedDataset(await readRagEvalFixture(readFile, options.file));
+}
+
 export async function runSeedRagEval(argv: string[], dependencies?: SeedRagEvalDeps): Promise<SeedRagEvalSummary> {
-  const options = parseCliArgs(argv, SeedRagEvalOptionsSchema);
-  const content = await readRagEvalFixture(dependencies?.readFile ?? readUtf8Fixture, options.file);
-  const dataset = parseRagEvalSeedDataset(content);
-  const seed = dependencies?.seedRagEvalDataset ?? (await loadDefaultSeedRepository());
-  return summaryFor(dataset, await seed(dataset.cases));
+  const dataset = await readValidatedDataset(argv, dependencies?.readFile ?? readUtf8Fixture);
+  if (dependencies) return seedValidatedDataset(dataset, dependencies.seedRagEvalDataset);
+  const runtime = await loadDefaultRuntime();
+  try { return await seedValidatedDataset(dataset, runtime.seedRagEvalDataset); } finally { await runtime.cleanup(); }
+}
+
+const defaultIo: SeedRagEvalCliIo = {
+  stdout: (message) => console.log(message),
+  stderr: (message) => console.error(message),
+};
+
+export async function runSeedRagEvalCli(
+  argv: string[],
+  readFile: SeedRagEvalDeps["readFile"] = readUtf8Fixture,
+  loadRuntime: () => Promise<SeedRagEvalRuntime> = loadDefaultRuntime,
+  io: SeedRagEvalCliIo = defaultIo
+): Promise<number> {
+  let cleanup: () => Promise<void> = async () => undefined;
+  return runCli(async () => {
+    const dataset = await readValidatedDataset(argv, readFile);
+    const runtime = await loadRuntime();
+    cleanup = runtime.cleanup;
+    io.stdout(JSON.stringify(await seedValidatedDataset(dataset, runtime.seedRagEvalDataset)));
+  }, () => cleanup(), { stderr: io.stderr });
 }
 
 if (require.main === module) {
-  let cleanup: () => Promise<void> = async () => undefined;
-  void runCli(async () => {
-    const options = parseCliArgs(process.argv.slice(2), SeedRagEvalOptionsSchema);
-    const dataset = parseRagEvalSeedDataset(await readRagEvalFixture(readUtf8Fixture, options.file));
-    const [{ seedRagEvalDataset }, { closeDatabase }] = await Promise.all([
-      import("../src/db/queries.js"), import("../src/db/client.js"),
-    ]);
-    cleanup = closeDatabase;
-    console.log(JSON.stringify(summaryFor(dataset, await seedRagEvalDataset(dataset.cases))));
-  }, () => cleanup()).then((exitCode) => { process.exitCode = exitCode; });
+  void runSeedRagEvalCli(process.argv.slice(2)).then((exitCode) => { process.exitCode = exitCode; });
 }
