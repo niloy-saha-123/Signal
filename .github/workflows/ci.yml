@@ -23,13 +23,19 @@ jobs:
       - run: npm run build
 
   # RAG quality regression gate.
-  # Runs the golden eval dataset through the full ChatAgent retrieval pipeline and scores
-  # faithfulness using GPT-4o-mini as judge.
-  # Build fails if aggregate faithfulness < 0.75.
+  # Runs the curated golden eval dataset through the real competitor-scoped ChatAgent pipeline
+  # and scores faithfulness with a runtime-validated GPT-4o-mini judge (min(correctness,
+  # groundedness), computed in trusted code — never taken from the model).
+  # Skip (exit 78) is a narrow, explicit prerequisite condition — never a quality pass. Every
+  # other non-zero exit (below-threshold, malformed data, provider/DB failure) fails the job.
   # See: apps/api/scripts/rag-eval.ts
   rag-eval:
     needs: [ci]
     runs-on: ubuntu-latest
+    # Defense in depth: no individual DB call in the eval path carries its own query
+    # timeout (see docs/tech-debt.md), so a stuck query/lock must not be able to hold
+    # a runner for GitHub's 6-hour default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,16 +44,39 @@ jobs:
           cache: npm
       - run: npm ci
       - name: "Run RAG evaluation suite"
-        run: npm run rag-eval --workspace=apps/api
+        id: rag_eval
+        run: |
+          set +e
+          npm run rag-eval --workspace=apps/api -- --ci=true --threshold=0.75
+          check_code=$?
+          set -e
+          if [ "$check_code" -eq 0 ]; then
+            echo "evaluated=true" >> "$GITHUB_OUTPUT"
+            echo "status=passed" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$check_code" -eq 78 ]; then
+            echo "evaluated=false" >> "$GITHUB_OUTPUT"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "RAG evaluation skipped: required prerequisite (credentials or curated dataset) unavailable." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          else
+            echo "evaluated=true" >> "$GITHUB_OUTPUT"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            exit "$check_code"
+          fi
         env:
+          CI: "true"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           RAG_EVAL_FAITHFULNESS_THRESHOLD: "0.75"
       - name: "Upload eval results"
-        if: always()
+        if: always() && steps.rag_eval.outputs.evaluated == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rag-eval-results
           path: apps/api/rag-eval-results-*.json
+          if-no-files-found: error

@@ -86,6 +86,7 @@ import {
   promptVersionsTable,
   agentTestCasesTable,
   ragEvalDatasetTable,
+  ragEvalRunsTable,
 } from "@/db/schema";
 import {
   createCompetitor,
@@ -136,6 +137,10 @@ import {
   seedRagEvalDataset,
   RagEvalSeedConflictError,
   RagEvalSeedReferenceError,
+  listRagEvalCases,
+  getRagEvalCitationSignals,
+  persistRagEvaluation,
+  RagEvalDatasetIntegrityError,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -657,6 +662,227 @@ describe("db/queries — curated RAG seed ingestion", () => {
       expect(committed).toEqual(before);
     }
   );
+});
+
+describe("db/queries — RAG faithfulness evaluation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+  });
+
+  const datasetRow = {
+    id: "11111111-1111-4111-8111-111111111111",
+    competitor_id: "22222222-2222-4222-8222-222222222222",
+    category: "general" as const,
+    question: "Exact curator question",
+    expected_answer: "Exact curator answer",
+    supporting_signal_ids: ["33333333-3333-4333-8333-333333333333"],
+    confidence_level: "low" as const,
+    created_at: new Date("2026-01-01T00:00:00.000Z"),
+  };
+
+  describe("listRagEvalCases", () => {
+    it("orders by created_at then id and maps the legacy support column honestly", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([datasetRow]);
+
+      const result = await listRagEvalCases();
+
+      expect(fromMock).toHaveBeenCalledWith(ragEvalDatasetTable);
+      expect(orderByMock).toHaveBeenCalledWith(
+        asc(ragEvalDatasetTable.created_at),
+        asc(ragEvalDatasetTable.id)
+      );
+      expect(result).toEqual([datasetRow]);
+    });
+
+    it("filters by the exact competitor UUID when provided", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([datasetRow]);
+
+      await listRagEvalCases(datasetRow.competitor_id);
+
+      expect(eq).toHaveBeenCalledWith(ragEvalDatasetTable.competitor_id, datasetRow.competitor_id);
+      expect(whereMock).toHaveBeenCalledWith(eq(ragEvalDatasetTable.competitor_id, datasetRow.competitor_id));
+    });
+
+    it.each([
+      ["null competitor_id", { competitor_id: null }],
+      ["null support list", { supporting_signal_ids: null }],
+      ["empty support list", { supporting_signal_ids: [] }],
+      ["structural example question", { question: "STRUCTURAL EXAMPLE ONLY - placeholder" }],
+      ["structural example expected answer", { expected_answer: "STRUCTURAL EXAMPLE ONLY - placeholder" }],
+      ["invalid confidence level", { confidence_level: "extreme" }],
+      ["non-UUID support id", { supporting_signal_ids: ["not-a-uuid"] }],
+    ])("throws RagEvalDatasetIntegrityError for %s", async (_label, override) => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([{ ...datasetRow, ...override }]);
+
+      await expect(listRagEvalCases()).rejects.toBeInstanceOf(RagEvalDatasetIntegrityError);
+    });
+  });
+
+  describe("getRagEvalCitationSignals", () => {
+    it("returns [] without querying for an empty id list", async () => {
+      const result = await getRagEvalCitationSignals([]);
+      expect(result).toEqual([]);
+      expect(selectMock).not.toHaveBeenCalled();
+    });
+
+    it("hydrates via one set-based WHERE id IN (...) query and dedupes requested ids", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([
+        { id: "s1", competitor_id: "c1", source: "reddit", title: "A title", raw_text: "raw text" },
+        { id: "s2", competitor_id: "c1", source: "pricing", title: null, raw_text: "other text" },
+      ]);
+
+      const result = await getRagEvalCitationSignals(["s1", "s2", "s1"]);
+
+      expect(fromMock).toHaveBeenCalledWith(signalsTable);
+      expect(inArray).toHaveBeenCalledWith(signalsTable.id, ["s1", "s2"]);
+      expect(result).toEqual([
+        { id: "s1", competitor_id: "c1", source: "reddit", title: "A title", raw_text: "raw text" },
+        { id: "s2", competitor_id: "c1", source: "pricing", title: "", raw_text: "other text" },
+      ]);
+    });
+  });
+
+  describe("persistRagEvaluation", () => {
+    const runAt = new Date("2026-03-01T00:00:00.000Z");
+    const answerResult = {
+      response_type: "answer" as const,
+      question_id: "11111111-1111-4111-8111-111111111111",
+      question: "What is Acme's pricing?",
+      category: "pricing_history" as const,
+      answer: "Acme charges $10/month.",
+      faithfulness_score: 1,
+      passed: true,
+      chunks_used: ["33333333-3333-4333-8333-333333333333"],
+      failure_code: "none" as const,
+      reasoning: "fully grounded",
+    };
+    const refusalResult = {
+      response_type: "refusal" as const,
+      question_id: "44444444-4444-4444-8444-444444444444",
+      question: "What did Acme ship last week?",
+      category: "product_change" as const,
+      refusal_reason: "No evidence.",
+      faithfulness_score: 0,
+      passed: false,
+      chunks_used: [] as [],
+      failure_code: "unexpected_refusal" as const,
+      reasoning: "seeded case incorrectly refused",
+    };
+
+    it("rejects an empty result set before starting a transaction", async () => {
+      await expect(persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: true, git_commit: "abc123", results: [],
+      })).rejects.toThrow();
+      expect(transactionMock).not.toHaveBeenCalled();
+    });
+
+    it("recomputes totals/mean from validated results, updates case metadata set-based, and inserts one run", async () => {
+      const executeMock = vi.fn().mockResolvedValue({
+        rows: [{ id: answerResult.question_id }, { id: refusalResult.question_id }],
+      });
+      const insertReturning = vi.fn(async () => [{ id: "run-id-1" }]);
+      const insertValues = vi.fn(() => ({ returning: insertReturning }));
+      const tx = { execute: executeMock, insert: vi.fn(() => ({ values: insertValues })) };
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+      const result = await persistRagEvaluation({
+        run_at: runAt,
+        threshold: 0.75,
+        ci_triggered: true,
+        git_commit: "abc123",
+        results: [answerResult, refusalResult],
+      });
+
+      expect(transactionMock).toHaveBeenCalledOnce();
+      expect(executeMock).toHaveBeenCalledOnce();
+      expect(tx.insert).toHaveBeenCalledWith(ragEvalRunsTable);
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({
+          run_at: runAt,
+          total_questions: 2,
+          passed: 1,
+          failed: 1,
+          faithfulness_score: 0.5,
+          threshold: 0.75,
+          ci_triggered: true,
+          git_commit: "abc123",
+        })
+      );
+      expect(result).toEqual({
+        id: "run-id-1",
+        summary: {
+          run_at: runAt.toISOString(),
+          total_questions: 2,
+          passed: 1,
+          failed: 1,
+          faithfulness_score: 0.5,
+          threshold: 0.75,
+          ci_triggered: true,
+          git_commit: "abc123",
+        },
+      });
+    });
+
+    it("ignores caller-supplied aggregates — an inconsistent passed flag never reaches the insert", async () => {
+      const executeMock = vi.fn().mockResolvedValue({ rows: [{ id: answerResult.question_id }] });
+      const insertReturning = vi.fn(async () => [{ id: "run-id-2" }]);
+      const insertValues = vi.fn(() => ({ returning: insertReturning }));
+      const tx = { execute: executeMock, insert: vi.fn(() => ({ values: insertValues })) };
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+      await persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: false, git_commit: null,
+        results: [{ ...answerResult, faithfulness_score: 0.9 }],
+      });
+
+      expect(insertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ total_questions: 1, passed: 1, failed: 0, faithfulness_score: 0.9 })
+      );
+    });
+
+    it("throws and does not insert when a requested case id was deleted mid-evaluation", async () => {
+      const executeMock = vi.fn().mockResolvedValue({ rows: [] });
+      const insert = vi.fn();
+      const tx = { execute: executeMock, insert };
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => callback(tx));
+
+      await expect(persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: true, git_commit: null, results: [answerResult],
+      })).rejects.toThrow();
+      expect(insert).not.toHaveBeenCalled();
+    });
+
+    it("rolls back the metadata update when the run insert fails", async () => {
+      let committed: Array<{ id: string; score: number }> = [];
+      transactionMock.mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
+        const working = structuredClone(committed);
+        working.push({ id: answerResult.question_id, score: answerResult.faithfulness_score });
+        const executeMock = vi.fn().mockResolvedValue({ rows: [{ id: answerResult.question_id }] });
+        const insertReturning = vi.fn(async () => { throw new Error("insert failure"); });
+        const tx = {
+          execute: executeMock,
+          insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: insertReturning })) })),
+        };
+        const result = await callback(tx);
+        committed = working;
+        return result;
+      });
+      const before = structuredClone(committed);
+
+      await expect(persistRagEvaluation({
+        run_at: runAt, threshold: 0.75, ci_triggered: true, git_commit: null, results: [answerResult],
+      })).rejects.toThrow("insert failure");
+      expect(committed).toEqual(before);
+    });
+  });
 });
 
 describe("db/queries — signals", () => {

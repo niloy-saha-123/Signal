@@ -1,11 +1,15 @@
 // Typed Drizzle query functions used by the API routes and agents.
 import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
 import type {
   AgentName,
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
+  RagEvalResult,
+  RagEvalRunSummary,
 } from "@signal/shared";
+import { RagEvalResultSchema, RagEvalRunSummarySchema } from "@signal/shared";
 import { db } from "./client";
 import {
   competitorsTable,
@@ -24,6 +28,7 @@ import {
   promptVersionsTable,
   agentTestCasesTable,
   ragEvalDatasetTable,
+  ragEvalRunsTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -369,6 +374,217 @@ export async function seedRagEvalDataset(
   });
 }
 
+// ── Task 6: RAG faithfulness evaluation ───────────────────────────────────
+
+export type RagEvalCase = {
+  id: string;
+  competitor_id: string;
+  category:
+    | "pricing_history"
+    | "hiring_pattern"
+    | "product_change"
+    | "sentiment_theme"
+    | "strategic_move"
+    | "general";
+  question: string;
+  expected_answer: string;
+  supporting_signal_ids: string[];
+  confidence_level: "high" | "medium" | "low";
+  created_at: Date;
+};
+
+export type RagEvalCitationSignal = {
+  id: string;
+  competitor_id: string;
+  source: SignalSource;
+  title: string;
+  raw_text: string;
+};
+
+export class RagEvalDatasetIntegrityError extends Error {
+  readonly caseId: string;
+
+  constructor(caseId: string, reason: string) {
+    super(`RAG eval dataset row ${caseId} failed integrity validation: ${reason}`);
+    this.name = "RagEvalDatasetIntegrityError";
+    this.caseId = caseId;
+  }
+}
+
+// scripts/rag-eval.ts must never send a curator placeholder or a legacy-invalid row to a
+// paid ChatAgent/judge call — this is a runtime boundary against the raw select, not just
+// the seed-time schema which already enforces most of this for freshly seeded rows.
+const RagEvalDatasetRowSchema = z
+  .object({
+    id: z.string().uuid(),
+    competitor_id: z.string().uuid(),
+    category: z.enum([
+      "pricing_history",
+      "hiring_pattern",
+      "product_change",
+      "sentiment_theme",
+      "strategic_move",
+      "general",
+    ]),
+    question: z.string().min(1),
+    expected_answer: z.string().min(1),
+    supporting_signal_ids: z.array(z.string().uuid()).min(1),
+    confidence_level: z.enum(["high", "medium", "low"]),
+    created_at: z.date(),
+  })
+  .superRefine((row, context) => {
+    if (row.question.startsWith("STRUCTURAL EXAMPLE ONLY") ||
+      row.expected_answer.startsWith("STRUCTURAL EXAMPLE ONLY")) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Structural example rows cannot be evaluated",
+      });
+    }
+  });
+
+export async function listRagEvalCases(competitorId?: string): Promise<RagEvalCase[]> {
+  const rows = await db
+    .select({
+      id: ragEvalDatasetTable.id,
+      competitor_id: ragEvalDatasetTable.competitor_id,
+      category: ragEvalDatasetTable.category,
+      question: ragEvalDatasetTable.question,
+      expected_answer: ragEvalDatasetTable.expected_answer,
+      supporting_signal_ids: ragEvalDatasetTable.supporting_chunk_ids,
+      confidence_level: ragEvalDatasetTable.confidence_level,
+      created_at: ragEvalDatasetTable.created_at,
+    })
+    .from(ragEvalDatasetTable)
+    .where(competitorId === undefined ? undefined : eq(ragEvalDatasetTable.competitor_id, competitorId))
+    .orderBy(asc(ragEvalDatasetTable.created_at), asc(ragEvalDatasetTable.id));
+
+  return rows.map((row) => {
+    const validated = RagEvalDatasetRowSchema.safeParse(row);
+    if (!validated.success) {
+      throw new RagEvalDatasetIntegrityError(
+        String(row.id),
+        validated.error.issues.map((issue) => issue.message).join("; ")
+      );
+    }
+    return validated.data;
+  });
+}
+
+// One set-based `WHERE id IN (...)` lookup — never called per-case. `title` is
+// nullable in the signals table; RagEvalCitationSignal keeps the field honestly
+// present but empty rather than surfacing null through the evaluator/judge boundary.
+export async function getRagEvalCitationSignals(
+  ids: readonly string[]
+): Promise<RagEvalCitationSignal[]> {
+  if (ids.length === 0) return [];
+  const uniqueIds = [...new Set(ids)];
+  const rows = await db
+    .select({
+      id: signalsTable.id,
+      competitor_id: signalsTable.competitor_id,
+      source: signalsTable.source,
+      title: signalsTable.title,
+      raw_text: signalsTable.raw_text,
+    })
+    .from(signalsTable)
+    .where(inArray(signalsTable.id, uniqueIds));
+
+  return rows.map((row) => ({
+    id: row.id,
+    competitor_id: row.competitor_id,
+    source: row.source,
+    title: row.title ?? "",
+    raw_text: row.raw_text,
+  }));
+}
+
+export type PersistRagEvaluationInput = {
+  run_at: Date;
+  threshold: number;
+  ci_triggered: boolean;
+  git_commit: string | null;
+  results: readonly RagEvalResult[];
+};
+
+export async function persistRagEvaluation(
+  input: PersistRagEvaluationInput
+): Promise<{ id: string; summary: RagEvalRunSummary }> {
+  if (input.results.length === 0) {
+    throw new Error("RAG evaluation persistence requires at least one result");
+  }
+  // Independently recompute totals/mean from validated results rather than trusting
+  // caller-supplied aggregates — the persisted row is the source of truth.
+  const parsedResults = input.results.map((result) => RagEvalResultSchema.parse(result));
+  const total = parsedResults.length;
+  const passed = parsedResults.filter((result) => result.passed).length;
+  const failed = total - passed;
+  const faithfulnessScore =
+    parsedResults.reduce((sum, result) => sum + result.faithfulness_score, 0) / total;
+
+  const runId = await db.transaction(async (tx) => {
+    const caseIds = [...new Set(parsedResults.map((result) => result.question_id))].sort();
+    const scoreValues = sql.join(
+      parsedResults.map(
+        (result) => sql`(${result.question_id}::uuid, ${result.faithfulness_score}::real)`
+      ),
+      sql`, `
+    );
+    // A single CASE per column: every requested id is matched and returned by the
+    // WHERE, but a case whose stored last_evaluated_at is already newer than this
+    // run keeps its existing value — a slower concurrent old run cannot clobber a
+    // newer one. No per-case UPDATE loop.
+    const updateResult = await tx.execute(sql`
+      UPDATE ${ragEvalDatasetTable} AS d
+      SET
+        last_evaluated_at = CASE
+          WHEN d.last_evaluated_at IS NULL OR d.last_evaluated_at <= ${input.run_at}
+          THEN ${input.run_at}
+          ELSE d.last_evaluated_at
+        END,
+        last_faithfulness_score = CASE
+          WHEN d.last_evaluated_at IS NULL OR d.last_evaluated_at <= ${input.run_at}
+          THEN v.score
+          ELSE d.last_faithfulness_score
+        END
+      FROM (VALUES ${scoreValues}) AS v(id, score)
+      WHERE d.id = v.id
+      RETURNING d.id
+    `);
+    const updatedIds = new Set(updateResult.rows.map((row) => String(row.id)));
+    if (updatedIds.size !== caseIds.length || caseIds.some((id) => !updatedIds.has(id))) {
+      throw new Error("RAG evaluation dataset case was deleted during evaluation");
+    }
+
+    const [inserted] = await tx
+      .insert(ragEvalRunsTable)
+      .values({
+        run_at: input.run_at,
+        total_questions: total,
+        passed,
+        failed,
+        faithfulness_score: faithfulnessScore,
+        threshold: input.threshold,
+        ci_triggered: input.ci_triggered,
+        git_commit: input.git_commit,
+        results: parsedResults,
+      })
+      .returning({ id: ragEvalRunsTable.id });
+    if (!inserted) throw new Error("RAG evaluation run insert returned no row");
+    return inserted.id;
+  });
+
+  const summary = RagEvalRunSummarySchema.parse({
+    run_at: input.run_at.toISOString(),
+    total_questions: total,
+    passed,
+    failed,
+    faithfulness_score: faithfulnessScore,
+    threshold: input.threshold,
+    ci_triggered: input.ci_triggered,
+    git_commit: input.git_commit,
+  });
+  return { id: runId, summary };
+}
 
 export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
   const [row] = await db
