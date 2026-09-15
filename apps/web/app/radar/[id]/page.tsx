@@ -1,14 +1,15 @@
 // apps/web/app/radar/[id]/page.tsx
 // Competitor radar — Signal Score over time, mention volume trend, sentiment trajectory,
-// hiring velocity by department. GET /:id/scores backs SignalScoreCard's sparkline. Mention
-// volume, sentiment, and hiring-by-department have no endpoint yet (see 00-overview.md's
-// Discovered Gaps) — TrendChart/HiringChart still get empty arrays until those exist.
+// hiring velocity by department. GET /:id/scores backs SignalScoreCard's sparkline;
+// GET /:id/trend and GET /:id/hiring back TrendChart's other two panels and HiringChart.
 import { notFound } from "next/navigation";
 import {
   ApiError,
   getCompetitor,
+  getCompetitorHiring,
   getCompetitorScore,
   getCompetitorScoreHistory,
+  getCompetitorTrend,
 } from "../../../lib/api";
 import { SignalScoreCard } from "../../../components/SignalScoreCard";
 import { TrendChart } from "../../../components/TrendChart";
@@ -25,7 +26,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     throw error;
   }
 
-  const [score, history] = await Promise.all([
+  const [score, history, trend, hiring] = await Promise.all([
     getCompetitorScore(id).catch((error) => {
       if (error instanceof ApiError && error.status === 404) return null;
       console.error("Failed to fetch competitor score", { competitorId: id, error });
@@ -33,6 +34,14 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     }),
     getCompetitorScoreHistory(id).catch((error) => {
       console.error("Failed to fetch competitor score history", { competitorId: id, error });
+      return [];
+    }),
+    getCompetitorTrend(id).catch((error) => {
+      console.error("Failed to fetch competitor trend", { competitorId: id, error });
+      return [];
+    }),
+    getCompetitorHiring(id).catch((error) => {
+      console.error("Failed to fetch competitor hiring", { competitorId: id, error });
       return [];
     }),
   ]);
@@ -50,8 +59,8 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       ) : (
         <p className="text-sm text-slate-400">No score yet.</p>
       )}
-      <TrendChart data={[]} />
-      <HiringChart data={[]} />
+      <TrendChart data={trend} />
+      <HiringChart data={hiring} />
     </div>
   );
 }

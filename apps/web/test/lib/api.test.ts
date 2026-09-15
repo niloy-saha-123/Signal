@@ -6,7 +6,9 @@ import {
   getCompanyProfile,
   getCompetitor,
   getCompetitorDiscovery,
+  getCompetitorHiring,
   getCompetitorScore,
+  getCompetitorTrend,
   listAlerts,
   listCompetitors,
   listSignals,
@@ -117,6 +119,52 @@ describe("lib/api competitor endpoints", () => {
   it("getCompetitorScore throws when the response fails schema validation", async () => {
     mockFetchOnce(200, { score: 72 }); // missing components/computed_at
     await expect(getCompetitorScore("abc")).rejects.toThrow();
+  });
+
+  it("getCompetitorTrend GETs /api/competitors/:id/trend with default days and returns the parsed array", async () => {
+    const trend = [
+      { date: "2026-09-01", mention_volume: 5, sentiment: -0.2, score: 60 },
+      { date: "2026-09-02", mention_volume: 0, sentiment: 0, score: 62 },
+    ];
+    mockFetchOnce(200, { data: trend });
+    const result = await getCompetitorTrend("abc");
+    expect(result).toEqual(trend);
+    expect(fetch).toHaveBeenCalledWith(`${BASE}/api/competitors/abc/trend?days=30`, expect.any(Object));
+  });
+
+  it("getCompetitorTrend passes a custom days value through", async () => {
+    mockFetchOnce(200, { data: [] });
+    await getCompetitorTrend("abc", 7);
+    expect(fetch).toHaveBeenCalledWith(`${BASE}/api/competitors/abc/trend?days=7`, expect.any(Object));
+  });
+
+  it("getCompetitorTrend throws when a row fails schema validation", async () => {
+    mockFetchOnce(200, {
+      data: [{ date: "2026-09-01", mention_volume: "not-a-number", sentiment: 0, score: 60 }],
+    });
+    await expect(getCompetitorTrend("abc")).rejects.toThrow();
+  });
+
+  it("getCompetitorHiring GETs /api/competitors/:id/hiring with default days and returns the parsed array", async () => {
+    const hiring = [
+      { department: "Engineering", delta: 3 },
+      { department: "Sales", delta: -1 },
+    ];
+    mockFetchOnce(200, { data: hiring });
+    const result = await getCompetitorHiring("abc");
+    expect(result).toEqual(hiring);
+    expect(fetch).toHaveBeenCalledWith(`${BASE}/api/competitors/abc/hiring?days=30`, expect.any(Object));
+  });
+
+  it("getCompetitorHiring passes a custom days value through", async () => {
+    mockFetchOnce(200, { data: [] });
+    await getCompetitorHiring("abc", 7);
+    expect(fetch).toHaveBeenCalledWith(`${BASE}/api/competitors/abc/hiring?days=7`, expect.any(Object));
+  });
+
+  it("getCompetitorHiring throws when a row fails schema validation", async () => {
+    mockFetchOnce(200, { data: [{ department: "Engineering" }] }); // missing delta
+    await expect(getCompetitorHiring("abc")).rejects.toThrow();
   });
 
   it("getCompetitorDiscovery validates and returns the discovery shape", async () => {

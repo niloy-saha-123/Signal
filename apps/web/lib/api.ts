@@ -98,6 +98,35 @@ export async function getCompetitorScoreHistory(id: string, limit = 30): Promise
   return raw.data.map((row) => SignalScoreSchema.parse(row));
 }
 
+// Chronological, for TrendChart's mention-volume/sentiment/score panels.
+const TrendChartDataPointSchema = z.object({
+  date: z.string(),
+  mention_volume: z.number(),
+  sentiment: z.number(),
+  score: z.number(),
+});
+export type CompetitorTrendPoint = z.infer<typeof TrendChartDataPointSchema>;
+
+export async function getCompetitorTrend(id: string, days = 30): Promise<CompetitorTrendPoint[]> {
+  const raw = await request<{ data: unknown[] }>(`/api/competitors/${id}/trend?days=${days}`);
+  return raw.data.map((row) => TrendChartDataPointSchema.parse(row));
+}
+
+// Recent-vs-prior department hiring deltas for HiringChart.
+const HiringChartDataPointSchema = z.object({
+  department: z.string(),
+  delta: z.number(),
+});
+export type CompetitorHiringDelta = z.infer<typeof HiringChartDataPointSchema>;
+
+export async function getCompetitorHiring(
+  id: string,
+  days = 30
+): Promise<CompetitorHiringDelta[]> {
+  const raw = await request<{ data: unknown[] }>(`/api/competitors/${id}/hiring?days=${days}`);
+  return raw.data.map((row) => HiringChartDataPointSchema.parse(row));
+}
+
 const CompetitorDiscoverySchema = z.object({
   discovery_status: DiscoveryStatusSchema,
   log: z.array(DiscoveryLogSchema),

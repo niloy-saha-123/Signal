@@ -1040,12 +1040,17 @@ describe("db/queries — signals", () => {
 
       // Correctness-critical: exact raw SQL text for each fragment.
       // The db call is mocked (no real Postgres), so we can't observe the pg
-      // driver's actual type parsing here — instead we assert the ::int/::text
+      // driver's actual type parsing here — instead we assert the ::int/::date
       // casts that make it produce real numbers/strings are present in the
       // query text. Without them: COUNT(*) comes back as bigint -> JS string
       // "3", and DATE_TRUNC on a timestamptz column comes back as a JS Date,
       // not a string, silently violating SignalVolumeByDay's declared types.
-      expect(rawTexts.some((t) => t.includes("DATE_TRUNC('day', ?)::text"))).toBe(true);
+      // AT TIME ZONE 'UTC' pins the truncation boundary regardless of session
+      // timezone (see the function's own comment) — GET /:id/trend joins this
+      // day string exactly against an independently UTC-derived key.
+      expect(
+        rawTexts.some((t) => t.includes("DATE_TRUNC('day', ? AT TIME ZONE 'UTC')::date"))
+      ).toBe(true);
       expect(rawTexts.some((t) => t === "COUNT(*)::int")).toBe(true);
       expect(rawTexts.some((t) => t.includes("SUM(?)"))).toBe(true);
       expect(rawTexts.some((t) => t.includes("NOW() - INTERVAL"))).toBe(true);
@@ -1077,7 +1082,7 @@ describe("db/queries — signals", () => {
       const sqlCalls = (sql as unknown as ReturnType<typeof vi.fn>).mock.calls;
       const rawTexts = sqlCalls.map(rawSqlText);
       expect(rawTexts.some((t) => t === "COUNT(*)::int")).toBe(true);
-      expect(rawTexts.some((t) => t.includes("::text"))).toBe(true);
+      expect(rawTexts.some((t) => t.includes("::date"))).toBe(true);
     });
 
     it("honors a custom days window", async () => {
