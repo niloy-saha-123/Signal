@@ -2706,6 +2706,10 @@ describe("db/queries — workspaces", () => {
   const INVITE_UUID = "44444444-4444-4444-8444-444444444444";
 
   describe("createWorkspace", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
     it("inserts a workspace and its owner membership row in one transaction", async () => {
       const workspaceRow = { id: WS_UUID, name: "Acme Inc", owner_id: OWNER_UUID, created_at: new Date() };
       const workspaceValues = vi.fn(() => ({ returning: vi.fn(async () => [workspaceRow]) }));
@@ -2870,6 +2874,10 @@ describe("db/queries — workspaces", () => {
   });
 
   describe("redeemInvite", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
     it("marks the invite used and adds the member in one transaction", async () => {
       const updateReturning = vi.fn(async () => [{ id: INVITE_UUID, workspace_id: WS_UUID }]);
       const memberValues = vi.fn(async () => undefined);
