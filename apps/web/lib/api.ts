@@ -10,10 +10,12 @@ import {
   DiscoveryStatusSchema,
   SignalSchema,
   SignalScoreComponentsSchema,
+  SignalScoreSchema,
   type CompanyProfile,
   type CompetitorCreateInput,
   type DiscoveryStatus,
   type Signal,
+  type SignalScore,
 } from "@signal/shared";
 import { z } from "zod";
 
@@ -88,6 +90,12 @@ export type CompetitorScore = z.infer<typeof CompetitorScoreSchema>;
 
 export async function getCompetitorScore(id: string): Promise<CompetitorScore> {
   return CompetitorScoreSchema.parse(await request(`/api/competitors/${id}/score`));
+}
+
+// Oldest-first, for SignalScoreCard's sparkline / TrendChart's Signal Score panel.
+export async function getCompetitorScoreHistory(id: string, limit = 30): Promise<SignalScore[]> {
+  const raw = await request<{ data: unknown[] }>(`/api/competitors/${id}/scores?limit=${limit}`);
+  return raw.data.map((row) => SignalScoreSchema.parse(row));
 }
 
 const CompetitorDiscoverySchema = z.object({

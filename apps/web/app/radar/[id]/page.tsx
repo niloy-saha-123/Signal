@@ -1,9 +1,15 @@
 // apps/web/app/radar/[id]/page.tsx
 // Competitor radar — Signal Score over time, mention volume trend, sentiment trajectory,
-// hiring velocity by department. No score/trend-history endpoint exists yet (see
-// 00-overview.md's Discovered Gaps) — TrendChart/HiringChart get empty arrays until one does.
+// hiring velocity by department. GET /:id/scores backs SignalScoreCard's sparkline. Mention
+// volume, sentiment, and hiring-by-department have no endpoint yet (see 00-overview.md's
+// Discovered Gaps) — TrendChart/HiringChart still get empty arrays until those exist.
 import { notFound } from "next/navigation";
-import { ApiError, getCompetitor, getCompetitorScore } from "../../../lib/api";
+import {
+  ApiError,
+  getCompetitor,
+  getCompetitorScore,
+  getCompetitorScoreHistory,
+} from "../../../lib/api";
 import { SignalScoreCard } from "../../../components/SignalScoreCard";
 import { TrendChart } from "../../../components/TrendChart";
 import { HiringChart } from "../../../components/HiringChart";
@@ -19,11 +25,17 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     throw error;
   }
 
-  const score = await getCompetitorScore(id).catch((error) => {
-    if (error instanceof ApiError && error.status === 404) return null;
-    console.error("Failed to fetch competitor score", { competitorId: id, error });
-    return null;
-  });
+  const [score, history] = await Promise.all([
+    getCompetitorScore(id).catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null;
+      console.error("Failed to fetch competitor score", { competitorId: id, error });
+      return null;
+    }),
+    getCompetitorScoreHistory(id).catch((error) => {
+      console.error("Failed to fetch competitor score history", { competitorId: id, error });
+      return [];
+    }),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -33,7 +45,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           competitorName={competitor.name}
           score={score.score}
           delta7d={score.delta_7d}
-          history={[]}
+          history={history.map((row) => ({ date: row.computed_at, score: row.score }))}
         />
       ) : (
         <p className="text-sm text-slate-400">No score yet.</p>

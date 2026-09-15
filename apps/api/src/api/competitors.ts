@@ -1,5 +1,7 @@
 // Express routes for competitor CRUD and triggering manual analysis runs.
 // GET /competitors/:id/score — current Signal Score, component breakdown, and 7d/30d delta.
+// GET /competitors/:id/scores — up to `limit` (default 30) most recent score rows, oldest
+//   first, for sparklines/trend charts. See @signal/shared's SignalScoreSchema for the shape.
 //
 // POST /competitors
 //   1. Validate body with CompetitorCreateInput (name + domain required,
@@ -17,12 +19,19 @@
 //   attempted, with what it tried and what it found (or didn't). Polled by
 //   DiscoveryStatus.tsx every 3s while discovery_status is pending/in_progress.
 import express, { Router } from "express";
+import { z } from "zod";
 import { CompetitorCreateInputSchema } from "@signal/shared";
 import * as queries from "../db/queries";
 import { isPublicHostname } from "../lib/safe-fetch";
 import { queues, type QueueName } from "../queues/registry";
 import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler, requireUuidParam } from "./http";
+
+// getLatestSignalScores takes a row-count limit, not a day range — one row per day in
+// practice, but that's a convention, not a guarantee, so the param is named honestly.
+const ScoreHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(90).default(30),
+});
 
 export interface CompetitorRouterDeps {
   createCompetitor: typeof queries.createCompetitor;
@@ -188,6 +197,38 @@ export function createCompetitorRouter(
         computed_at: latest.computed_at,
         delta_7d: latest.delta_7d ?? null,
         delta_30d: latest.delta_30d ?? null,
+      });
+    })
+  );
+
+  router.get(
+    "/:id/scores",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (id === null) return;
+      const parsedLimit = ScoreHistoryQuerySchema.safeParse(req.query);
+      if (!parsedLimit.success) {
+        res.status(400).json({ error: "validation", issues: parsedLimit.error.issues });
+        return;
+      }
+      const competitor = await deps.getCompetitorById(id);
+      if (!competitor) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      // Newest-first from the query — reverse to chronological order, the shape every
+      // sparkline/trend chart on the frontend expects.
+      const scores = (await deps.getLatestSignalScores(id, parsedLimit.data.limit)).reverse();
+      res.status(200).json({
+        data: scores.map((row) => ({
+          id: row.id,
+          competitor_id: row.competitor_id,
+          score: row.score,
+          components: row.components,
+          delta_7d: row.delta_7d ?? null,
+          delta_30d: row.delta_30d ?? null,
+          computed_at: row.computed_at.toISOString(),
+        })),
       });
     })
   );

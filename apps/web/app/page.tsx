@@ -1,11 +1,11 @@
 // apps/web/app/page.tsx
 // Home screen — competitor list with Signal Score per competitor, sparkline, and last alert
-// timestamp. No score-history endpoint exists yet (see 00-overview.md's Discovered Gaps) —
-// SignalScoreCard gets an empty history array until one does.
+// timestamp.
 import Link from "next/link";
 import {
   ApiError,
   getCompetitorScore,
+  getCompetitorScoreHistory,
   listAlerts,
   listCompetitors,
   type Alert,
@@ -26,13 +26,24 @@ async function latestAlertByCompetitor(competitorIds: string[]): Promise<Map<str
 
 export default async function Page() {
   const competitors = await listCompetitors();
-  const [scores, latestAlerts] = await Promise.all([
+  const [scores, histories, latestAlerts] = await Promise.all([
     Promise.all(
       competitors.map((competitor) =>
         getCompetitorScore(competitor.id).catch((error) => {
           if (error instanceof ApiError && error.status === 404) return null;
           console.error("Failed to fetch competitor score", { competitorId: competitor.id, error });
           return null;
+        })
+      )
+    ),
+    Promise.all(
+      competitors.map((competitor) =>
+        getCompetitorScoreHistory(competitor.id).catch((error) => {
+          console.error("Failed to fetch competitor score history", {
+            competitorId: competitor.id,
+            error,
+          });
+          return [];
         })
       )
     ),
@@ -46,6 +57,7 @@ export default async function Page() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {competitors.map((competitor: Competitor, index: number) => {
           const score = scores[index];
+          const history = histories[index];
           const lastAlert = latestAlerts.get(competitor.id);
           return (
             <Link key={competitor.id} href={`/radar/${competitor.id}`} className="block">
@@ -54,7 +66,7 @@ export default async function Page() {
                   competitorName={competitor.name}
                   score={score.score}
                   delta7d={score.delta_7d}
-                  history={[]}
+                  history={history.map((row) => ({ date: row.computed_at, score: row.score }))}
                 />
               ) : (
                 <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
