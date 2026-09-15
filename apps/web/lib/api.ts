@@ -101,3 +101,76 @@ export async function getCompetitorDiscovery(id: string): Promise<CompetitorDisc
 export function analyzeCompetitor(id: string): Promise<{ run_id: string; status: "running" }> {
   return request(`/api/competitors/${id}/analyze`, { method: "POST" });
 }
+
+// --- Signals ---
+
+export interface Paginated<T> {
+  data: T[];
+  next_cursor: string | null;
+}
+
+export interface ListSignalsParams {
+  competitor_ids: string[];
+  sources?: string[];
+  min_quality?: number;
+  created_after?: string;
+  created_before?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+function buildQuery(params: Record<string, string | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) q.set(key, value);
+  }
+  return q.toString();
+}
+
+export async function listSignals(params: ListSignalsParams): Promise<Paginated<Signal>> {
+  const query = buildQuery({
+    competitor_ids: params.competitor_ids.join(","),
+    sources: params.sources?.join(","),
+    min_quality: params.min_quality?.toString(),
+    created_after: params.created_after,
+    created_before: params.created_before,
+    cursor: params.cursor,
+    limit: params.limit?.toString(),
+  });
+  const raw = await request<{ data: unknown[]; next_cursor: string | null }>(
+    `/api/signals?${query}`
+  );
+  return { data: raw.data.map((row) => SignalSchema.parse(row)), next_cursor: raw.next_cursor };
+}
+
+// --- Alerts (apps/api/src/db/schema.ts's alertsTable — no shared Zod schema) ---
+
+export interface Alert {
+  id: string;
+  competitor_id: string;
+  run_id: string | null;
+  pattern: string;
+  confidence: number;
+  evidence: Record<string, unknown>[];
+  interpretation: string;
+  vulnerability_window_days: number | null;
+  recommended_actions: Record<string, unknown>[];
+  supporting_cluster_ids: string[];
+  delivered: boolean;
+  created_at: string;
+}
+
+export interface ListAlertsParams {
+  competitor_ids: string[];
+  cursor?: string;
+  limit?: number;
+}
+
+export function listAlerts(params: ListAlertsParams): Promise<Paginated<Alert>> {
+  const query = buildQuery({
+    competitor_ids: params.competitor_ids.join(","),
+    cursor: params.cursor,
+    limit: params.limit?.toString(),
+  });
+  return request(`/api/alerts?${query}`);
+}

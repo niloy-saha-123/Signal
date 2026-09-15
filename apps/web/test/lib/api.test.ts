@@ -6,7 +6,9 @@ import {
   getCompetitor,
   getCompetitorDiscovery,
   getCompetitorScore,
+  listAlerts,
   listCompetitors,
+  listSignals,
 } from "../../lib/api";
 
 const BASE = "http://localhost:3000";
@@ -140,6 +142,79 @@ describe("lib/api competitor endpoints", () => {
     expect(fetch).toHaveBeenCalledWith(
       `${BASE}/api/competitors/abc/analyze`,
       expect.objectContaining({ method: "POST" })
+    );
+  });
+});
+
+describe("lib/api signals + alerts endpoints", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", BASE);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const validSignal = {
+    id: "11111111-1111-1111-1111-111111111111",
+    competitor_id: "22222222-2222-2222-2222-222222222222",
+    source: "reddit",
+    source_url: "https://reddit.com/r/x/1",
+    title: "post title",
+    raw_text: "body",
+    quality_score: 0.8,
+    entities: {},
+    cluster_id: null,
+    collected_at: "2026-09-14T00:00:00.000Z",
+    created_at: "2026-09-14T00:00:00.000Z",
+  };
+
+  it("listSignals builds the query string and validates each returned signal", async () => {
+    mockFetchOnce(200, { data: [validSignal], next_cursor: "cursor-1" });
+    const result = await listSignals({
+      competitor_ids: ["22222222-2222-2222-2222-222222222222"],
+      sources: ["reddit", "hn"],
+      min_quality: 0.5,
+      limit: 10,
+    });
+    expect(result).toEqual({ data: [validSignal], next_cursor: "cursor-1" });
+    const [url] = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(url).toBe(
+      `${BASE}/api/signals?competitor_ids=22222222-2222-2222-2222-222222222222&sources=reddit%2Chn&min_quality=0.5&limit=10`
+    );
+  });
+
+  it("listSignals throws when a returned signal fails schema validation", async () => {
+    mockFetchOnce(200, { data: [{ id: "not-a-uuid" }], next_cursor: null });
+    await expect(
+      listSignals({ competitor_ids: ["22222222-2222-2222-2222-222222222222"] })
+    ).rejects.toThrow();
+  });
+
+  it("listAlerts builds the query string and returns the page", async () => {
+    const alert = {
+      id: "a1",
+      competitor_id: "22222222-2222-2222-2222-222222222222",
+      run_id: null,
+      pattern: "pricing_cut",
+      confidence: 0.9,
+      evidence: [],
+      interpretation: "text",
+      vulnerability_window_days: 14,
+      recommended_actions: [],
+      supporting_cluster_ids: [],
+      delivered: true,
+      created_at: "2026-09-14T00:00:00.000Z",
+    };
+    mockFetchOnce(200, { data: [alert], next_cursor: null });
+    const result = await listAlerts({
+      competitor_ids: ["22222222-2222-2222-2222-222222222222"],
+      limit: 20,
+    });
+    expect(result).toEqual({ data: [alert], next_cursor: null });
+    const [url] = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(url).toBe(
+      `${BASE}/api/alerts?competitor_ids=22222222-2222-2222-2222-222222222222&limit=20`
     );
   });
 });
