@@ -1,6 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
+
+// @testing-library/react's waitFor/asyncWrapper only auto-advance fake timers when they can
+// see a global `jest` with a mocked setTimeout — a Jest-specific check that Vitest's `vi`
+// never satisfies on its own. Without this alias, `waitFor()` under `vi.useFakeTimers()`
+// deadlocks forever on an internal `setTimeout(..., 0)` that never fires. See
+// https://github.com/testing-library/dom-testing-library/issues/987 and RTL's own
+// pure.js (jestFakeTimersAreEnabled checks `typeof jest !== 'undefined'`).
+(globalThis as unknown as { jest: typeof vi }).jest = vi;
 
 // vitest.config.ts doesn't set `test.globals`, so RTL's own auto-cleanup (which only
 // registers when it finds a global `afterEach`) never fires — without this, multiple
