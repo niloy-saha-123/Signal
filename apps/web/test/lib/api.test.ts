@@ -3,12 +3,14 @@ import {
   ApiError,
   analyzeCompetitor,
   createCompetitor,
+  getCompanyProfile,
   getCompetitor,
   getCompetitorDiscovery,
   getCompetitorScore,
   listAlerts,
   listCompetitors,
   listSignals,
+  saveCompanyProfile,
 } from "../../lib/api";
 
 const BASE = "http://localhost:3000";
@@ -216,5 +218,58 @@ describe("lib/api signals + alerts endpoints", () => {
     expect(url).toBe(
       `${BASE}/api/alerts?competitor_ids=22222222-2222-2222-2222-222222222222&limit=20`
     );
+  });
+});
+
+describe("lib/api company-profile endpoints", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", BASE);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const profile = {
+    product_description: "A widget factory.",
+    icp_industries: [],
+    pricing_tiers: [],
+    key_differentiators: [],
+    primary_competitor_ids: [],
+  };
+
+  it("getCompanyProfile returns null on 404", async () => {
+    mockFetchOnce(404, { message: "No company profile configured. POST to create one." });
+    const result = await getCompanyProfile();
+    expect(result).toBeNull();
+  });
+
+  it("getCompanyProfile returns the validated profile on 200", async () => {
+    mockFetchOnce(200, profile);
+    const result = await getCompanyProfile();
+    expect(result).toEqual(profile);
+  });
+
+  it("getCompanyProfile throws ApiError on a non-404 failure", async () => {
+    mockFetchOnce(500, { error: "internal" });
+    await expect(getCompanyProfile()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("saveCompanyProfile validates input, POSTs it, and returns the validated response", async () => {
+    mockFetchOnce(200, profile);
+    const result = await saveCompanyProfile(profile);
+    expect(result).toEqual(profile);
+    const [url, init] = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(url).toBe(`${BASE}/api/company-profile`);
+    expect((init as RequestInit).method).toBe("POST");
+  });
+
+  it("saveCompanyProfile rejects invalid input before calling fetch", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    await expect(
+      // @ts-expect-error deliberately invalid: product_description missing
+      saveCompanyProfile({ icp_industries: [] })
+    ).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

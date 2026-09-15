@@ -174,3 +174,22 @@ export function listAlerts(params: ListAlertsParams): Promise<Paginated<Alert>> 
   });
   return request(`/api/alerts?${query}`);
 }
+
+// --- Company profile ---
+
+export async function getCompanyProfile(): Promise<CompanyProfile | null> {
+  const res = await fetch(`${API_BASE}/api/company-profile`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
+  return CompanyProfileSchema.parse(await res.json());
+}
+
+export async function saveCompanyProfile(input: CompanyProfile): Promise<CompanyProfile> {
+  const body = CompanyProfileSchema.parse(input);
+  return CompanyProfileSchema.parse(
+    await request("/api/company-profile", { method: "POST", body: JSON.stringify(body) })
+  );
+}
