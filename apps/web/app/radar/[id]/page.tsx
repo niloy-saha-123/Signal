@@ -19,7 +19,11 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
     throw error;
   }
 
-  const score = await getCompetitorScore(id).catch(() => null);
+  const score = await getCompetitorScore(id).catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    console.error("Failed to fetch competitor score", { competitorId: id, error });
+    return null;
+  });
 
   return (
     <div className="flex flex-col gap-6">
