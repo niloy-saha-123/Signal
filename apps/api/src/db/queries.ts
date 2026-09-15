@@ -36,6 +36,9 @@ import {
   agentTestCasesTable,
   ragEvalDatasetTable,
   ragEvalRunsTable,
+  workspacesTable,
+  workspaceMembersTable,
+  workspaceInvitesTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -63,6 +66,9 @@ export type AgentRun = typeof agentRunsTable.$inferSelect;
 export type AgentLatency = typeof agentLatenciesTable.$inferSelect;
 export type LlmCost = typeof llmCostsTable.$inferSelect;
 export type Alert = typeof alertsTable.$inferSelect;
+export type Workspace = typeof workspacesTable.$inferSelect;
+export type WorkspaceMember = typeof workspaceMembersTable.$inferSelect;
+export type WorkspaceInvite = typeof workspaceInvitesTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
