@@ -22,6 +22,7 @@ import {
   getSocket,
   onAlertCreated,
   onDiscoveryStatusChanged,
+  onSignalCreated,
 } from "../../lib/socket";
 
 describe("lib/socket", () => {
@@ -80,5 +81,14 @@ describe("lib/socket", () => {
     expect(socket.on).toHaveBeenCalledWith("alert:created", handler);
     unsubscribe();
     expect(socket.off).toHaveBeenCalledWith("alert:created", handler);
+  });
+
+  it("onSignalCreated registers and unsubscribes a handler", () => {
+    const handler = vi.fn();
+    const unsubscribe = onSignalCreated(handler);
+    const socket = mockSockets[0];
+    expect(socket.on).toHaveBeenCalledWith("signal:new", handler);
+    unsubscribe();
+    expect(socket.off).toHaveBeenCalledWith("signal:new", handler);
   });
 });

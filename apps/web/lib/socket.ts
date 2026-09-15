@@ -12,6 +12,7 @@ import type {
   AlertCreatedPayload,
   DiscoveryStatusChangedPayload,
   ServerToClientEvents,
+  SignalCreatedPayload,
 } from "@signal/shared";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
@@ -42,6 +43,12 @@ export function onAlertCreated(handler: (payload: AlertCreatedPayload) => void):
   const activeSocket = getSocket();
   activeSocket.on("alert:created", handler);
   return () => activeSocket.off("alert:created", handler);
+}
+
+export function onSignalCreated(handler: (payload: SignalCreatedPayload) => void): () => void {
+  const activeSocket = getSocket();
+  activeSocket.on("signal:new", handler);
+  return () => activeSocket.off("signal:new", handler);
 }
 
 // Test-only escape hatch — clears the module singleton between test cases so each test
