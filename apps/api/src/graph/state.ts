@@ -17,6 +17,8 @@
 // silently assumed solved here.
 import { Annotation } from "@langchain/langgraph";
 import type { SignalScore } from "@signal/shared";
+import type { z } from "zod";
+import type { AnalysisDecisionSchema } from "../agents/analysis/contracts";
 
 // intent-analyzer.ts: "infers competitor hiring intent from recent job postings".
 export interface HiringIntentResult {
@@ -54,12 +56,10 @@ export interface VulnerabilityResult {
   positioning_copy: string;
 }
 
-// synthesis.ts: "combines all agent outputs into an alert/digest/suppress decision" — keep
-// exactly these three literal values, the stub names no others.
-export interface AnalysisDecision {
-  action: "alert" | "digest" | "suppress";
-  reason: string;
-}
+// synthesis.ts: "combines all agent outputs into an alert/digest/suppress decision".
+// Inferred (not hand-written) so this can never drift from AnalysisDecisionSchema, the actual
+// LLM structured-output contract — including the optional `detail` alert-copy fields.
+export type AnalysisDecision = z.infer<typeof AnalysisDecisionSchema>;
 
 // Overwrite-on-write reducer: a node's returned value simply replaces the prior one. Paired
 // with `default` below to give these optional fields a defined initial value at invocation.

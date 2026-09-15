@@ -106,7 +106,15 @@ const SYSTEM_PROMPT_BASE =
   "threat score), its five components, each analysis agent's summary, and the 7-day and " +
   "30-day score deltas, choose exactly one action: \"alert\" (urgent — notify the team " +
   "immediately), \"digest\" (include in the routine daily briefing), or \"suppress\" (not " +
-  "worth the team's attention today). Explain your choice in one or two sentences.";
+  "worth the team's attention today). Explain your choice in one or two sentences.\n\n" +
+  "When, and only when, action is \"alert\", also populate `detail` with purpose-written " +
+  "alert copy: a short headline-style `pattern` (max 200 characters) naming what's " +
+  "happening, a plain-language `interpretation` (max 2000 characters) explaining why it " +
+  "matters to this team, up to 5 `evidence` items (each a `type` — one of pattern, hiring, " +
+  "sentiment, pricing, vulnerability — and a one-sentence `summary`) citing the specific " +
+  "agent findings that justify the alert, and up to 5 `recommended_actions` (each an " +
+  "`action` string) the team could take in response. Omit `detail` entirely for \"digest\" " +
+  "and \"suppress\" — do not spend words on alert copy nothing will surface.";
 
 // recent-7-days signal count vs. prior-7-days count, as a ratio-based delta clamped to
 // [-1, 1] so a divide-by-near-zero spike can't produce a non-finite value.
@@ -233,11 +241,12 @@ function buildContextText(input: {
   return text.slice(0, SYNTHESIS_INPUT_MAX_LENGTH);
 }
 
-// ponytail: no dedicated LLM schema exists for alert fields (AnalysisDecisionSchema is just
-// {action, reason} — expanding it is real prompt/eval surface, out of this pass's scope).
-// Derives pattern/interpretation/evidence/recommended_actions from data synthesisNode already
-// computed instead. Upgrade path: give the decision call its own structured alert-detail
-// output when a real "alert quality" need shows up.
+// ponytail: decision.detail (AnalysisDecisionSchema, model-authored alert copy from the same
+// decision call) is preferred when present. The fallback below — deriving pattern/
+// interpretation/evidence from data synthesisNode already computed — only fires when detail
+// is absent: today that's a model that emits action:"alert" without detail (schema allows it;
+// SYSTEM_PROMPT_BASE asks for it but nothing enforces it), or a stale/legacy fixture. Never
+// crash on that path — degrade to the mechanical derivation instead.
 function buildAlertInput(input: {
   state: AnalysisGraphStateType;
   score: number;
@@ -245,41 +254,54 @@ function buildAlertInput(input: {
   contextText: string;
 }): Omit<Parameters<typeof createAlert>[0], "run_id" | "competitor_id"> {
   const { state, score, decision, contextText } = input;
+  const { detail } = decision;
 
-  const evidence: Record<string, unknown>[] = [];
+  const fallbackEvidence: Record<string, unknown>[] = [];
   if (state.patterns) {
-    evidence.push({ type: "pattern", summary: state.patterns.summary, trend: state.patterns.trend });
+    fallbackEvidence.push({
+      type: "pattern",
+      summary: state.patterns.summary,
+      trend: state.patterns.trend,
+    });
   }
   if (state.hiring_intent) {
-    evidence.push({
+    fallbackEvidence.push({
       type: "hiring",
       summary: state.hiring_intent.summary,
       intent_level: state.hiring_intent.intent_level,
     });
   }
   if (state.sentiment_clusters) {
-    evidence.push({ type: "sentiment", summary: state.sentiment_clusters.summary });
+    fallbackEvidence.push({ type: "sentiment", summary: state.sentiment_clusters.summary });
   }
   if (state.pricing_change) {
-    evidence.push({ type: "pricing", summary: state.pricing_change.summary });
+    fallbackEvidence.push({ type: "pricing", summary: state.pricing_change.summary });
   }
   if (state.vulnerability) {
-    evidence.push({
+    fallbackEvidence.push({
       type: "vulnerability",
       summary: state.vulnerability.summary,
       window_open: state.vulnerability.window_open,
     });
   }
+  const fallbackRecommendedActions: Record<string, unknown>[] = state.vulnerability?.window_open
+    ? [{ action: state.vulnerability.positioning_copy }]
+    : [];
 
   return {
-    pattern: decision.reason,
+    pattern: detail?.pattern ?? decision.reason,
     confidence: clamp(score / 100, 0, 1),
-    evidence,
-    interpretation: contextText,
+    // .length check, not `??`: AlertDetailSchema allows an empty list (no .min() — a model
+    // can validly write a good headline/interpretation but an empty evidence/actions array),
+    // and `??` only falls through on null/undefined, not on []. Without this, a present-but-
+    // empty list would silently beat the mechanical fallback even though state.* already has
+    // real data to surface — worse than the pre-detail behavior, not better.
+    evidence: detail?.evidence.length ? detail.evidence : fallbackEvidence,
+    interpretation: detail?.interpretation ?? contextText,
     vulnerability_window_days: null,
-    recommended_actions: state.vulnerability?.window_open
-      ? [{ action: state.vulnerability.positioning_copy }]
-      : [],
+    recommended_actions: detail?.recommended_actions.length
+      ? detail.recommended_actions
+      : fallbackRecommendedActions,
     supporting_cluster_ids: [],
   };
 }
@@ -403,7 +425,12 @@ export async function synthesisNode(
       );
     }
 
-    decision = parsed;
+    // withStructuredOutput's generic pipeline doesn't fully preserve AnalysisDecisionSchema's
+    // detail: AlertDetailSchema.optional().catch(undefined) chain through its own type
+    // inference (widens `detail` to `unknown`), even though the Zod schema itself parses it
+    // correctly at runtime — a LangChain/Zod interop typing gap, not a real shape mismatch.
+    // `parsed` already ran through AnalysisDecisionSchema.safeParse successfully by this point.
+    decision = parsed as AnalysisDecision;
   }
 
   // 6. Persist — only now that a decision is in hand.
