@@ -15,4 +15,14 @@ describe("globals.css", () => {
     // this class only exists because SiteNav.tsx uses hover:bg-indigo-50.
     expect(result.css).toContain("hover\\:bg-indigo-50");
   });
+
+  it("emits the Part 4 semantic color tokens as CSS custom properties", async () => {
+    const cssPath = path.resolve(__dirname, "../../app/globals.css");
+    const css = readFileSync(cssPath, "utf-8");
+    const result = await postcss([tailwindcss()]).process(css, { from: cssPath });
+    expect(result.css).toContain("--color-source-reddit");
+    expect(result.css).toContain("--color-status-critical");
+    expect(result.css).toContain("--color-diverging-positive");
+    expect(result.css).toContain("--color-sequential");
+  });
 });
