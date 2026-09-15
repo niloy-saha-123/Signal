@@ -9,6 +9,10 @@ export const metadata: Metadata = {
   description: "Autonomous competitive strategy intelligence engine",
 };
 
+// Every page fetches live data from the API at request time; the API isn't reachable
+// during `next build` (CI, local build), so static prerendering must be off app-wide.
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
