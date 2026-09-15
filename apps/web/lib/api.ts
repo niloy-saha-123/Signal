@@ -17,7 +17,7 @@ import {
 } from "@signal/shared";
 import { z } from "zod";
 
-export type { SignalSource } from "@signal/shared";
+export type { CompanyProfile, SignalSource } from "@signal/shared";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 
