@@ -1347,7 +1347,7 @@ export async function failRunIfRunning(runId: string): Promise<void> {
 export async function finalizeDiscovery(
   competitorId: string,
   result: CompetitorDiscoveryResult
-): Promise<void> {
+): Promise<DiscoveryStatus> {
   // `failed` is terminal (no auto-rediscovery), so only use it when the agent
   // actually probed and came back with nothing usable. A competitor created
   // with every field pre-filled produces `logs: []` — that row is fully usable,
@@ -1390,4 +1390,6 @@ export async function finalizeDiscovery(
       );
     }
   });
+
+  return discoveryStatus;
 }

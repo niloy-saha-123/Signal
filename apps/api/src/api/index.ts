@@ -9,6 +9,7 @@ import { createCompanyProfileRouter } from "./company-profile";
 import { queues } from "../queues/registry";
 import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
 import { checkDatabaseReadiness, closeDatabase } from "../db/client";
+import { wireSocketRelay, type EmittableSocketServer } from "../lib/socket-relay";
 import { logger } from "../lib/logger";
 
 const JSON_BODY_LIMIT = "100kb";
@@ -165,6 +166,10 @@ export function createApiRuntime(overrides: ApiRuntimeOverrides = {}) {
   const app = overrides.app ?? createApiApp();
   const server = overrides.server ?? http.createServer(app);
   const io = overrides.io ?? new SocketIOServer(server, { serveClient: false });
+  // The frontend's socket.ts joins no room (see its own header comment) — a bare io.emit()
+  // from the relay reaches every connected client, so there's no per-connection setup to do
+  // here beyond starting the relay itself.
+  const socketRelay = wireSocketRelay(io as unknown as EmittableSocketServer);
   const closeQueues =
     overrides.closeQueues ??
     (() => Promise.allSettled(Object.values(queues).map((queue) => queue.close())).then(() => undefined));
@@ -193,6 +198,7 @@ export function createApiRuntime(overrides: ApiRuntimeOverrides = {}) {
         const failures: unknown[] = [];
         for (const operation of [
           () => closeSocketServer(io),
+          socketRelay.close,
           () => closeHttpServer(server),
           closeQueues,
           closeRedis,

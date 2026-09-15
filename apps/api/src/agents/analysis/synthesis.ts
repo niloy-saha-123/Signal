@@ -25,10 +25,12 @@ import {
   getRecentPricingDiffs,
   getLatestSignalScores,
   createSignalScore,
+  createAlert,
   completeAgentRun,
   type SignalVolumeByDay,
   type SignalScore as SignalScoreRow,
 } from "../../db/queries";
+import { publishSocketEvent } from "../../lib/socket-relay";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
@@ -231,6 +233,57 @@ function buildContextText(input: {
   return text.slice(0, SYNTHESIS_INPUT_MAX_LENGTH);
 }
 
+// ponytail: no dedicated LLM schema exists for alert fields (AnalysisDecisionSchema is just
+// {action, reason} — expanding it is real prompt/eval surface, out of this pass's scope).
+// Derives pattern/interpretation/evidence/recommended_actions from data synthesisNode already
+// computed instead. Upgrade path: give the decision call its own structured alert-detail
+// output when a real "alert quality" need shows up.
+function buildAlertInput(input: {
+  state: AnalysisGraphStateType;
+  score: number;
+  decision: AnalysisDecision;
+  contextText: string;
+}): Omit<Parameters<typeof createAlert>[0], "run_id" | "competitor_id"> {
+  const { state, score, decision, contextText } = input;
+
+  const evidence: Record<string, unknown>[] = [];
+  if (state.patterns) {
+    evidence.push({ type: "pattern", summary: state.patterns.summary, trend: state.patterns.trend });
+  }
+  if (state.hiring_intent) {
+    evidence.push({
+      type: "hiring",
+      summary: state.hiring_intent.summary,
+      intent_level: state.hiring_intent.intent_level,
+    });
+  }
+  if (state.sentiment_clusters) {
+    evidence.push({ type: "sentiment", summary: state.sentiment_clusters.summary });
+  }
+  if (state.pricing_change) {
+    evidence.push({ type: "pricing", summary: state.pricing_change.summary });
+  }
+  if (state.vulnerability) {
+    evidence.push({
+      type: "vulnerability",
+      summary: state.vulnerability.summary,
+      window_open: state.vulnerability.window_open,
+    });
+  }
+
+  return {
+    pattern: decision.reason,
+    confidence: clamp(score / 100, 0, 1),
+    evidence,
+    interpretation: contextText,
+    vulnerability_window_days: null,
+    recommended_actions: state.vulnerability?.window_open
+      ? [{ action: state.vulnerability.positioning_copy }]
+      : [],
+    supporting_cluster_ids: [],
+  };
+}
+
 export async function synthesisNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
@@ -361,6 +414,23 @@ export async function synthesisNode(
     delta_7d: delta7d,
     delta_30d: delta30d,
   });
+
+  // 6.5. Persist + push the alert row itself. Same ordering rationale as the score above —
+  // decision is already final at this point, so a failure here can't orphan a half-made
+  // decision, only leave a computed score without its alert (visible over REST regardless).
+  if (decision.action === "alert") {
+    const alert = await createAlert({
+      ...buildAlertInput({ state, score, decision, contextText }),
+      competitor_id: state.competitor_id,
+      run_id: state.run_id,
+    });
+    await publishSocketEvent("alert:created", {
+      id: alert.id,
+      competitor_id: alert.competitor_id,
+      pattern: alert.pattern,
+      confidence: alert.confidence,
+    });
+  }
 
   // 7. Close out the run. NOT wrapped in a try/catch that marks it "failed" on error — the
   // agent_runs row's lifecycle belongs to this node's (not-yet-built) caller, the analysis

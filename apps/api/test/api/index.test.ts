@@ -27,6 +27,10 @@ vi.mock("@/lib/redis-client", () => ({
   closeRedisConnections: closeRedisMock,
   checkRedisReadiness: checkRedisReadinessMock,
 }));
+const { wireSocketRelayMock } = vi.hoisted(() => ({
+  wireSocketRelayMock: vi.fn(() => ({ close: vi.fn().mockResolvedValue(undefined) })),
+}));
+vi.mock("@/lib/socket-relay", () => ({ wireSocketRelay: wireSocketRelayMock }));
 vi.mock("@/db/client", () => ({
   closeDatabase: closeDatabaseMock,
   checkDatabaseReadiness: checkDatabaseReadinessMock,

@@ -5,12 +5,21 @@ const {
   getRecentPricingDiffsMock,
   getLatestSignalScoresMock,
   createSignalScoreMock,
+  createAlertMock,
   completeAgentRunMock,
 } = vi.hoisted(() => ({
   getSignalVolumeByDayMock: vi.fn(),
   getRecentPricingDiffsMock: vi.fn(),
   getLatestSignalScoresMock: vi.fn(),
   createSignalScoreMock: vi.fn(),
+  // anthropicResult()'s default decision is "alert" (see below), so most tests in this file
+  // exercise the alert-persist branch whether or not they care about its output.
+  createAlertMock: vi.fn().mockResolvedValue({
+    id: "alert-1",
+    competitor_id: "competitor-1",
+    pattern: "Score jumped and the window is open.",
+    confidence: 0.5,
+  }),
   completeAgentRunMock: vi.fn(),
 }));
 
@@ -19,8 +28,15 @@ vi.mock("@/db/queries", () => ({
   getRecentPricingDiffs: getRecentPricingDiffsMock,
   getLatestSignalScores: getLatestSignalScoresMock,
   createSignalScore: createSignalScoreMock,
+  createAlert: createAlertMock,
   completeAgentRun: completeAgentRunMock,
 }));
+
+const { publishSocketEventMock } = vi.hoisted(() => ({
+  publishSocketEventMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/socket-relay", () => ({ publishSocketEvent: publishSocketEventMock }));
 
 const { getCompanyContextMock } = vi.hoisted(() => ({
   getCompanyContextMock: vi.fn().mockResolvedValue(""),
