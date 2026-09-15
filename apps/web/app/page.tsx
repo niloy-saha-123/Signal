@@ -3,7 +3,14 @@
 // timestamp. No score-history endpoint exists yet (see 00-overview.md's Discovered Gaps) —
 // SignalScoreCard gets an empty history array until one does.
 import Link from "next/link";
-import { getCompetitorScore, listAlerts, listCompetitors, type Alert, type Competitor } from "../lib/api";
+import {
+  ApiError,
+  getCompetitorScore,
+  listAlerts,
+  listCompetitors,
+  type Alert,
+  type Competitor,
+} from "../lib/api";
 import { SignalScoreCard } from "../components/SignalScoreCard";
 import { HomeClient } from "./home-client";
 
@@ -21,7 +28,13 @@ export default async function Page() {
   const competitors = await listCompetitors();
   const [scores, latestAlerts] = await Promise.all([
     Promise.all(
-      competitors.map((competitor) => getCompetitorScore(competitor.id).catch(() => null))
+      competitors.map((competitor) =>
+        getCompetitorScore(competitor.id).catch((error) => {
+          if (error instanceof ApiError && error.status === 404) return null;
+          console.error("Failed to fetch competitor score", { competitorId: competitor.id, error });
+          return null;
+        })
+      )
     ),
     latestAlertByCompetitor(competitors.map((competitor) => competitor.id)),
   ]);
