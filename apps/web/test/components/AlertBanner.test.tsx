@@ -62,4 +62,17 @@ describe("AlertBanner", () => {
     unmount();
     expect(unsubscribeMock).toHaveBeenCalledTimes(1);
   });
+
+  it("caps the alert list instead of growing unbounded", () => {
+    render(<AlertBanner />);
+    act(() => {
+      for (let i = 0; i < 25; i++) {
+        capturedHandler({ ...payload, id: `alert-${i}`, pattern: `pattern-${i}` });
+      }
+    });
+    expect(screen.getAllByRole("button", { name: "Dismiss alert" })).toHaveLength(20);
+    // Newest-first, oldest dropped: the most recent 20 (alert-5..alert-24) survive.
+    expect(screen.getByText("pattern-24")).toBeInTheDocument();
+    expect(screen.queryByText("pattern-4")).not.toBeInTheDocument();
+  });
 });

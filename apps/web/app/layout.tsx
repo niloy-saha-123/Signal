@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { SiteNav } from "@/components/SiteNav";
+import { AlertBanner } from "@/components/AlertBanner";
 import { AppCommandBar } from "./app-command-bar";
 import "./globals.css";
 
@@ -14,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
         <SiteNav />
         <AppCommandBar />
+        <AlertBanner />
         <main className="mx-auto max-w-6xl px-8 py-10">{children}</main>
       </body>
     </html>

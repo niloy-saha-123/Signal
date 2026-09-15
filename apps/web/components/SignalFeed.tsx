@@ -3,11 +3,11 @@
 // live updates. SignalCreatedPayload is too slim to render directly (see Task 2's comment),
 // so a relevant event triggers router.refresh() instead of a client-side merge.
 "use client";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { Signal } from "@signal/shared";
 import { SOURCE_COLORS } from "../lib/chart-colors";
-import { onSignalCreated } from "../lib/socket";
+import { joinCompetitor, leaveCompetitor, onSignalCreated } from "../lib/socket";
 
 export interface SignalFeedProps {
   signals: Signal[];
@@ -24,6 +24,23 @@ export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
       }
     });
   }, [competitorIds, router]);
+
+  // A value key, not the array reference: router.refresh() (triggered by the effect above, on
+  // every live signal:new) re-runs the Server Component parent, which produces a *new*
+  // competitorIds array with the *same* ids. Keying this effect on the array reference would
+  // leave-then-rejoin every room on every single live update — racing the very event that
+  // triggered the refresh and dropping anything published mid-churn.
+  const competitorIdsKey = useMemo(() => [...competitorIds].sort().join(","), [competitorIds]);
+
+  // Keyed on the joined ids (not just mount/unmount) so a competitorIds prop change (e.g. the
+  // Intel page's competitor filter) leaves stale rooms and joins the new set.
+  useEffect(() => {
+    const ids = competitorIdsKey === "" ? [] : competitorIdsKey.split(",");
+    ids.forEach((id) => joinCompetitor(id));
+    return () => {
+      ids.forEach((id) => leaveCompetitor(id));
+    };
+  }, [competitorIdsKey]);
 
   if (signals.length === 0) {
     return <p className="text-sm text-slate-500">No signals yet.</p>;

@@ -2,14 +2,19 @@ import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Signal, SignalCreatedPayload } from "@signal/shared";
 
-const { onSignalCreatedMock, unsubscribeMock, refreshMock } = vi.hoisted(() => ({
-  onSignalCreatedMock: vi.fn(),
-  unsubscribeMock: vi.fn(),
-  refreshMock: vi.fn(),
-}));
+const { onSignalCreatedMock, unsubscribeMock, refreshMock, joinCompetitorMock, leaveCompetitorMock } =
+  vi.hoisted(() => ({
+    onSignalCreatedMock: vi.fn(),
+    unsubscribeMock: vi.fn(),
+    refreshMock: vi.fn(),
+    joinCompetitorMock: vi.fn(),
+    leaveCompetitorMock: vi.fn(),
+  }));
 
 vi.mock("../../lib/socket", () => ({
   onSignalCreated: onSignalCreatedMock,
+  joinCompetitor: joinCompetitorMock,
+  leaveCompetitor: leaveCompetitorMock,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -48,6 +53,8 @@ describe("SignalFeed", () => {
     onSignalCreatedMock.mockReset();
     unsubscribeMock.mockReset();
     refreshMock.mockReset();
+    joinCompetitorMock.mockReset();
+    leaveCompetitorMock.mockReset();
   });
 
   it("shows an empty state when given no signals", () => {
@@ -81,5 +88,53 @@ describe("SignalFeed", () => {
     const { unmount } = render(<SignalFeed signals={[signal]} competitorIds={["comp-1"]} />);
     unmount();
     expect(unsubscribeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins every competitor room on mount", () => {
+    render(<SignalFeed signals={[signal]} competitorIds={["comp-1", "comp-2"]} />);
+    expect(joinCompetitorMock).toHaveBeenCalledWith("comp-1");
+    expect(joinCompetitorMock).toHaveBeenCalledWith("comp-2");
+    expect(leaveCompetitorMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves every joined competitor room on unmount", () => {
+    const { unmount } = render(
+      <SignalFeed signals={[signal]} competitorIds={["comp-1", "comp-2"]} />
+    );
+    unmount();
+    expect(leaveCompetitorMock).toHaveBeenCalledWith("comp-1");
+    expect(leaveCompetitorMock).toHaveBeenCalledWith("comp-2");
+  });
+
+  it("leaves old rooms and joins new ones when competitorIds changes", () => {
+    const { rerender } = render(<SignalFeed signals={[signal]} competitorIds={["comp-1"]} />);
+    joinCompetitorMock.mockClear();
+    rerender(<SignalFeed signals={[signal]} competitorIds={["comp-2"]} />);
+    expect(leaveCompetitorMock).toHaveBeenCalledWith("comp-1");
+    expect(joinCompetitorMock).toHaveBeenCalledWith("comp-2");
+  });
+
+  it("does not churn rooms on a new array with the same ids (e.g. router.refresh() re-rendering the parent)", () => {
+    const { rerender } = render(
+      <SignalFeed signals={[signal]} competitorIds={["comp-1", "comp-2"]} />
+    );
+    joinCompetitorMock.mockClear();
+    leaveCompetitorMock.mockClear();
+    // A brand-new array, same values, same order — exactly what a Server Component parent
+    // produces on re-render. Must not leave/rejoin.
+    rerender(<SignalFeed signals={[signal]} competitorIds={["comp-1", "comp-2"]} />);
+    expect(joinCompetitorMock).not.toHaveBeenCalled();
+    expect(leaveCompetitorMock).not.toHaveBeenCalled();
+  });
+
+  it("does not churn rooms when the same ids arrive in a different order", () => {
+    const { rerender } = render(
+      <SignalFeed signals={[signal]} competitorIds={["comp-1", "comp-2"]} />
+    );
+    joinCompetitorMock.mockClear();
+    leaveCompetitorMock.mockClear();
+    rerender(<SignalFeed signals={[signal]} competitorIds={["comp-2", "comp-1"]} />);
+    expect(joinCompetitorMock).not.toHaveBeenCalled();
+    expect(leaveCompetitorMock).not.toHaveBeenCalled();
   });
 });

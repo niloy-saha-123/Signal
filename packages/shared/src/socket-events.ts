@@ -40,3 +40,11 @@ export interface ServerToClientEvents {
   "alert:created": (payload: AlertCreatedPayload) => void;
   "signal:new": (payload: SignalCreatedPayload) => void;
 }
+
+// Client-supplied room join/leave requests, paired with ServerToClientEvents per Socket.IO's
+// typed-server convention. Competitor id is untrusted input over a public socket — the API
+// validates shape before calling socket.join/leave (see api/index.ts's connection handler).
+export interface ClientToServerEvents {
+  "competitor:join": (competitorId: string) => void;
+  "competitor:leave": (competitorId: string) => void;
+}

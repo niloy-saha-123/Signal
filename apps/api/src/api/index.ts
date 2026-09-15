@@ -166,9 +166,8 @@ export function createApiRuntime(overrides: ApiRuntimeOverrides = {}) {
   const app = overrides.app ?? createApiApp();
   const server = overrides.server ?? http.createServer(app);
   const io = overrides.io ?? new SocketIOServer(server, { serveClient: false });
-  // The frontend's socket.ts joins no room (see its own header comment) — a bare io.emit()
-  // from the relay reaches every connected client, so there's no per-connection setup to do
-  // here beyond starting the relay itself.
+  // wireSocketRelay registers the competitor:join/leave connection handlers and routes
+  // signal:new/discovery:status_changed to per-competitor rooms — see its own header comment.
   const socketRelay = wireSocketRelay(io as unknown as EmittableSocketServer);
   const closeQueues =
     overrides.closeQueues ??

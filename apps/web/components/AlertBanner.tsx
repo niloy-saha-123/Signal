@@ -6,12 +6,19 @@ import type { AlertCreatedPayload } from "@signal/shared";
 import { STATUS_COLORS } from "../lib/chart-colors";
 import { onAlertCreated } from "../lib/socket";
 
+// ponytail: fixed cap, not a "load more"/dismiss-all affordance — this is now mounted in the
+// root layout (apps/web/app/layout.tsx) so it lives for the whole client-side session;
+// alert:created is a global broadcast with no per-user dismissal persistence, so an
+// uncapped array grows for as long as the tab stays open. Revisit if alert volume or a real
+// notification-center UX makes 20 too small.
+const MAX_ALERTS = 20;
+
 export function AlertBanner() {
   const [alerts, setAlerts] = useState<AlertCreatedPayload[]>([]);
 
   useEffect(() => {
     return onAlertCreated((payload) => {
-      setAlerts((current) => [payload, ...current]);
+      setAlerts((current) => [payload, ...current].slice(0, MAX_ALERTS));
     });
   }, []);
 
