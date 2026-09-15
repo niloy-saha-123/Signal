@@ -6,7 +6,7 @@ describe("SiteNav", () => {
   it("renders a link for every command-center view", () => {
     render(<SiteNav />);
     const expected = [
-      ["Briefing", "/"],
+      ["Home", "/"],
       ["Intel", "/intel"],
       ["Chat", "/chat"],
       ["Alerts", "/alerts"],
