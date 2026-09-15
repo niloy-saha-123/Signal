@@ -25,10 +25,12 @@ import {
   getRecentPricingDiffs,
   getLatestSignalScores,
   createSignalScore,
+  createAlert,
   completeAgentRun,
   type SignalVolumeByDay,
   type SignalScore as SignalScoreRow,
 } from "../../db/queries";
+import { publishSocketEvent } from "../../lib/socket-relay";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
@@ -104,7 +106,15 @@ const SYSTEM_PROMPT_BASE =
   "threat score), its five components, each analysis agent's summary, and the 7-day and " +
   "30-day score deltas, choose exactly one action: \"alert\" (urgent — notify the team " +
   "immediately), \"digest\" (include in the routine daily briefing), or \"suppress\" (not " +
-  "worth the team's attention today). Explain your choice in one or two sentences.";
+  "worth the team's attention today). Explain your choice in one or two sentences.\n\n" +
+  "When, and only when, action is \"alert\", also populate `detail` with purpose-written " +
+  "alert copy: a short headline-style `pattern` (max 200 characters) naming what's " +
+  "happening, a plain-language `interpretation` (max 2000 characters) explaining why it " +
+  "matters to this team, up to 5 `evidence` items (each a `type` — one of pattern, hiring, " +
+  "sentiment, pricing, vulnerability — and a one-sentence `summary`) citing the specific " +
+  "agent findings that justify the alert, and up to 5 `recommended_actions` (each an " +
+  "`action` string) the team could take in response. Omit `detail` entirely for \"digest\" " +
+  "and \"suppress\" — do not spend words on alert copy nothing will surface.";
 
 // recent-7-days signal count vs. prior-7-days count, as a ratio-based delta clamped to
 // [-1, 1] so a divide-by-near-zero spike can't produce a non-finite value.
@@ -231,6 +241,71 @@ function buildContextText(input: {
   return text.slice(0, SYNTHESIS_INPUT_MAX_LENGTH);
 }
 
+// ponytail: decision.detail (AnalysisDecisionSchema, model-authored alert copy from the same
+// decision call) is preferred when present. The fallback below — deriving pattern/
+// interpretation/evidence from data synthesisNode already computed — only fires when detail
+// is absent: today that's a model that emits action:"alert" without detail (schema allows it;
+// SYSTEM_PROMPT_BASE asks for it but nothing enforces it), or a stale/legacy fixture. Never
+// crash on that path — degrade to the mechanical derivation instead.
+function buildAlertInput(input: {
+  state: AnalysisGraphStateType;
+  score: number;
+  decision: AnalysisDecision;
+  contextText: string;
+}): Omit<Parameters<typeof createAlert>[0], "run_id" | "competitor_id"> {
+  const { state, score, decision, contextText } = input;
+  const { detail } = decision;
+
+  const fallbackEvidence: Record<string, unknown>[] = [];
+  if (state.patterns) {
+    fallbackEvidence.push({
+      type: "pattern",
+      summary: state.patterns.summary,
+      trend: state.patterns.trend,
+    });
+  }
+  if (state.hiring_intent) {
+    fallbackEvidence.push({
+      type: "hiring",
+      summary: state.hiring_intent.summary,
+      intent_level: state.hiring_intent.intent_level,
+    });
+  }
+  if (state.sentiment_clusters) {
+    fallbackEvidence.push({ type: "sentiment", summary: state.sentiment_clusters.summary });
+  }
+  if (state.pricing_change) {
+    fallbackEvidence.push({ type: "pricing", summary: state.pricing_change.summary });
+  }
+  if (state.vulnerability) {
+    fallbackEvidence.push({
+      type: "vulnerability",
+      summary: state.vulnerability.summary,
+      window_open: state.vulnerability.window_open,
+    });
+  }
+  const fallbackRecommendedActions: Record<string, unknown>[] = state.vulnerability?.window_open
+    ? [{ action: state.vulnerability.positioning_copy }]
+    : [];
+
+  return {
+    pattern: detail?.pattern ?? decision.reason,
+    confidence: clamp(score / 100, 0, 1),
+    // .length check, not `??`: AlertDetailSchema allows an empty list (no .min() — a model
+    // can validly write a good headline/interpretation but an empty evidence/actions array),
+    // and `??` only falls through on null/undefined, not on []. Without this, a present-but-
+    // empty list would silently beat the mechanical fallback even though state.* already has
+    // real data to surface — worse than the pre-detail behavior, not better.
+    evidence: detail?.evidence.length ? detail.evidence : fallbackEvidence,
+    interpretation: detail?.interpretation ?? contextText,
+    vulnerability_window_days: null,
+    recommended_actions: detail?.recommended_actions.length
+      ? detail.recommended_actions
+      : fallbackRecommendedActions,
+    supporting_cluster_ids: [],
+  };
+}
+
 export async function synthesisNode(
   state: typeof AnalysisGraphState.State
 ): Promise<Partial<typeof AnalysisGraphState.State>> {
@@ -350,7 +425,12 @@ export async function synthesisNode(
       );
     }
 
-    decision = parsed;
+    // withStructuredOutput's generic pipeline doesn't fully preserve AnalysisDecisionSchema's
+    // detail: AlertDetailSchema.optional().catch(undefined) chain through its own type
+    // inference (widens `detail` to `unknown`), even though the Zod schema itself parses it
+    // correctly at runtime — a LangChain/Zod interop typing gap, not a real shape mismatch.
+    // `parsed` already ran through AnalysisDecisionSchema.safeParse successfully by this point.
+    decision = parsed as AnalysisDecision;
   }
 
   // 6. Persist — only now that a decision is in hand.
@@ -361,6 +441,23 @@ export async function synthesisNode(
     delta_7d: delta7d,
     delta_30d: delta30d,
   });
+
+  // 6.5. Persist + push the alert row itself. Same ordering rationale as the score above —
+  // decision is already final at this point, so a failure here can't orphan a half-made
+  // decision, only leave a computed score without its alert (visible over REST regardless).
+  if (decision.action === "alert") {
+    const alert = await createAlert({
+      ...buildAlertInput({ state, score, decision, contextText }),
+      competitor_id: state.competitor_id,
+      run_id: state.run_id,
+    });
+    await publishSocketEvent("alert:created", {
+      id: alert.id,
+      competitor_id: alert.competitor_id,
+      pattern: alert.pattern,
+      confidence: alert.confidence,
+    });
+  }
 
   // 7. Close out the run. NOT wrapped in a try/catch that marks it "failed" on error — the
   // agent_runs row's lifecycle belongs to this node's (not-yet-built) caller, the analysis

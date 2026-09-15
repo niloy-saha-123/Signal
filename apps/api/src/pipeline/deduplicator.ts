@@ -10,6 +10,7 @@ import { pineconeQuery, pineconeUpsert } from "../vector/pinecone";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { trackLatency } from "../lib/latency-tracker";
+import { publishSocketEvent } from "../lib/socket-relay";
 import {
   getSignalById,
   createClusterForSignalPair,
@@ -45,6 +46,17 @@ export function buildEmbeddingText(signal: Pick<Signal, "title" | "raw_text">): 
 
 function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+// Fires signal:new on a genuinely fresh pipeline completion only — not the "already
+// clustered" idempotency skip (that signal was already notified on a prior attempt) and not
+// the not-found/no-text skips (no signal to describe).
+async function notifySignalCleared(signal: Pick<Signal, "id" | "competitor_id" | "source">): Promise<void> {
+  await publishSocketEvent("signal:new", {
+    id: signal.id,
+    competitor_id: signal.competitor_id,
+    source: signal.source,
+  });
 }
 
 interface DeduplicationJobData {
@@ -113,6 +125,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
     // No near-duplicate — leave cluster_id null. No cluster row for a singleton signal
     // (signal_clusters only exists for actual multi-signal groups, per its header comment).
     await completeSignalPipelineOutbox(signal.id, "deduplication");
+    await notifySignalCleared(signal);
     return;
   }
 
@@ -140,6 +153,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
       corroboration_count: cluster.corroboration_count,
     });
     await completeSignalPipelineOutbox(signal.id, "deduplication");
+    await notifySignalCleared(signal);
     return;
   }
 
@@ -161,6 +175,7 @@ export async function deduplicatorProcessor(job: Job<DeduplicationJobData>): Pro
     corroboration_count: cluster.corroboration_count,
   });
   await completeSignalPipelineOutbox(signal.id, "deduplication");
+  await notifySignalCleared(signal);
 }
 
 // Extension point — must only be called from the standalone worker process

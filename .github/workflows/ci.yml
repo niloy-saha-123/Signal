@@ -20,6 +20,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test -w @signal/api
       - run: npm test -w @signal/shared
+      - run: npm test -w @signal/web
+      - run: npm run lint -w @signal/web
       - run: npm run build
 
   # RAG quality regression gate.

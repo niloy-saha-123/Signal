@@ -59,7 +59,54 @@ export const VulnerabilityResultSchema = z
     }
   });
 
+// Bounds for the alert-detail fields below: same "this ends up in a Postgres jsonb column and
+// gets rendered in the UI" reasoning as SYNTHESIS_INPUT_MAX_LENGTH (synthesis.ts) — a headline
+// is short by nature, interpretation is real prose but still far below the 24k context-window
+// bound, and evidence/recommended_actions are bounded lists, not open-ended dumps.
+const ALERT_PATTERN_MAX_LENGTH = 200;
+const ALERT_INTERPRETATION_MAX_LENGTH = 2_000;
+const ALERT_EVIDENCE_MAX_ITEMS = 5;
+const ALERT_EVIDENCE_SUMMARY_MAX_LENGTH = 300;
+const ALERT_RECOMMENDED_ACTIONS_MAX_ITEMS = 5;
+const ALERT_RECOMMENDED_ACTION_MAX_LENGTH = 300;
+
+export const AlertEvidenceItemSchema = z.object({
+  type: z.enum(["pattern", "hiring", "sentiment", "pricing", "vulnerability"]),
+  summary: z.string().trim().min(1).max(ALERT_EVIDENCE_SUMMARY_MAX_LENGTH),
+});
+
+export const AlertRecommendedActionSchema = z.object({
+  action: z.string().trim().min(1).max(ALERT_RECOMMENDED_ACTION_MAX_LENGTH),
+});
+
+// Purpose-written alert copy, produced by the same synthesis decision call as
+// action/reason — not a second LLM call. Optional on AnalysisDecisionSchema below so a bare
+// {action, reason} (the shape already stored in agent_test_cases for agent_name = "synthesis")
+// keeps validating unchanged; see synthesis.ts's SYSTEM_PROMPT_BASE for when the model is
+// asked to populate it, and buildAlertInput for the fallback when it's absent.
+export const AlertDetailSchema = z.object({
+  pattern: z.string().trim().min(1).max(ALERT_PATTERN_MAX_LENGTH),
+  interpretation: z.string().trim().min(1).max(ALERT_INTERPRETATION_MAX_LENGTH),
+  evidence: z.array(AlertEvidenceItemSchema).max(ALERT_EVIDENCE_MAX_ITEMS),
+  recommended_actions: z
+    .array(AlertRecommendedActionSchema)
+    .max(ALERT_RECOMMENDED_ACTIONS_MAX_ITEMS),
+});
+
 export const AnalysisDecisionSchema = z.object({
   action: z.enum(["alert", "digest", "suppress"]),
   reason: z.string(),
+  // .catch(undefined), not just .optional(): withStructuredOutput's Zod parse is atomic over
+  // the whole object — before this, `.optional()` alone meant a `detail` that's *present but
+  // malformed* (a 6th evidence item, a stray whitespace-only string past .min(1), a wrong
+  // `type` enum value — anything an LLM can plausibly emit under free-text generation, since
+  // Anthropic's tool-calling only shapes the JSON structurally, it doesn't enforce
+  // minLength/maxLength/enum server-side) failed the ENTIRE decision parse, not just `detail`.
+  // That throws in synthesisNode before createSignalScore runs, losing that day's Signal Score
+  // too, and a BullMQ retry re-invokes all 5 upstream branch nodes' LLM calls for a failure
+  // that originates purely in optional alert-copy formatting. `.catch(undefined)` makes a
+  // malformed `detail` degrade to the same "absent" case buildAlertInput already falls back
+  // from — action/reason (the two fields an LLM essentially can't get wrong under forced
+  // tool-calling) still parse and the run still succeeds.
+  detail: AlertDetailSchema.optional().catch(undefined),
 });

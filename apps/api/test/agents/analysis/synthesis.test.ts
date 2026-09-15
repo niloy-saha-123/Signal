@@ -5,12 +5,21 @@ const {
   getRecentPricingDiffsMock,
   getLatestSignalScoresMock,
   createSignalScoreMock,
+  createAlertMock,
   completeAgentRunMock,
 } = vi.hoisted(() => ({
   getSignalVolumeByDayMock: vi.fn(),
   getRecentPricingDiffsMock: vi.fn(),
   getLatestSignalScoresMock: vi.fn(),
   createSignalScoreMock: vi.fn(),
+  // anthropicResult()'s default decision is "alert" (see below), so most tests in this file
+  // exercise the alert-persist branch whether or not they care about its output.
+  createAlertMock: vi.fn().mockResolvedValue({
+    id: "alert-1",
+    competitor_id: "competitor-1",
+    pattern: "Score jumped and the window is open.",
+    confidence: 0.5,
+  }),
   completeAgentRunMock: vi.fn(),
 }));
 
@@ -19,8 +28,15 @@ vi.mock("@/db/queries", () => ({
   getRecentPricingDiffs: getRecentPricingDiffsMock,
   getLatestSignalScores: getLatestSignalScoresMock,
   createSignalScore: createSignalScoreMock,
+  createAlert: createAlertMock,
   completeAgentRun: completeAgentRunMock,
 }));
+
+const { publishSocketEventMock } = vi.hoisted(() => ({
+  publishSocketEventMock: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/socket-relay", () => ({ publishSocketEvent: publishSocketEventMock }));
 
 const { getCompanyContextMock } = vi.hoisted(() => ({
   getCompanyContextMock: vi.fn().mockResolvedValue(""),
@@ -319,6 +335,103 @@ describe("agents/analysis/synthesis", () => {
     const [messages] = anthropicInvokeMock.mock.calls[0];
     const [systemMessage] = messages as [string, string][];
     expect(systemMessage[1]).toContain("CUSTOM REGISTRY PROMPT");
+  });
+
+  it("buildAlertInput: uses decision.detail's model-authored fields for the created alert when present", async () => {
+    anthropicInvokeMock.mockResolvedValue(
+      anthropicResult({
+        parsed: {
+          action: "alert",
+          reason: "Score jumped and the window is open.",
+          detail: {
+            pattern: "Hiring surge meets an open support-quality window",
+            interpretation:
+              "Five senior AE hires plus a widened support regression window is a near-term acquisition risk.",
+            evidence: [
+              { type: "hiring", summary: "5 senior AE postings opened this week." },
+              { type: "vulnerability", summary: "Support regression widened the window." },
+            ],
+            recommended_actions: [
+              { action: "Brief sales on the support regression talking point." },
+            ],
+          },
+        },
+      })
+    );
+
+    await synthesisNode(fullState());
+
+    expect(createAlertMock).toHaveBeenCalledTimes(1);
+    const alertInput = createAlertMock.mock.calls[0][0];
+    expect(alertInput.pattern).toBe("Hiring surge meets an open support-quality window");
+    expect(alertInput.interpretation).toBe(
+      "Five senior AE hires plus a widened support regression window is a near-term acquisition risk."
+    );
+    expect(alertInput.evidence).toEqual([
+      { type: "hiring", summary: "5 senior AE postings opened this week." },
+      { type: "vulnerability", summary: "Support regression widened the window." },
+    ]);
+    expect(alertInput.recommended_actions).toEqual([
+      { action: "Brief sales on the support regression talking point." },
+    ]);
+  });
+
+  it("buildAlertInput: falls back to the heuristic derivation when action is alert but detail is absent", async () => {
+    // anthropicResult()'s default parsed value has no `detail` key at all.
+    anthropicInvokeMock.mockResolvedValue(anthropicResult());
+
+    await synthesisNode(fullState());
+
+    expect(createAlertMock).toHaveBeenCalledTimes(1);
+    const alertInput = createAlertMock.mock.calls[0][0];
+    // Falls back to the decision's one-sentence reason as the pattern label.
+    expect(alertInput.pattern).toBe("Score jumped and the window is open.");
+    // Falls back to the full LLM context text.
+    expect(alertInput.interpretation).toContain("Signal Score:");
+    expect(alertInput.interpretation).toContain("Agent summaries:");
+    // Falls back to a mechanical dump of every non-null branch-node summary.
+    expect(alertInput.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "hiring" }),
+        expect.objectContaining({ type: "sentiment" }),
+        expect.objectContaining({ type: "pricing" }),
+        expect.objectContaining({ type: "pattern" }),
+        expect.objectContaining({ type: "vulnerability" }),
+      ])
+    );
+    // Falls back to the vulnerability window's positioning copy as the sole recommended action.
+    expect(alertInput.recommended_actions).toEqual([{ action: "..." }]);
+  });
+
+  it("buildAlertInput: falls back to the heuristic derivation when detail is present but evidence/recommended_actions are empty", async () => {
+    // AlertDetailSchema allows an empty evidence/recommended_actions list (no .min()) — a
+    // model can validly write a good pattern/interpretation but leave the structured lists
+    // empty. `??` alone would only fall through on null/undefined, not [], so this would
+    // silently discard real derivable data without the .length check in buildAlertInput.
+    anthropicInvokeMock.mockResolvedValue(
+      anthropicResult({
+        parsed: {
+          action: "alert",
+          reason: "Score jumped and the window is open.",
+          detail: {
+            pattern: "Model-authored headline",
+            interpretation: "Model-authored interpretation.",
+            evidence: [],
+            recommended_actions: [],
+          },
+        },
+      })
+    );
+
+    await synthesisNode(fullState());
+
+    const alertInput = createAlertMock.mock.calls[0][0];
+    // pattern/interpretation still prefer detail's model-authored fields.
+    expect(alertInput.pattern).toBe("Model-authored headline");
+    expect(alertInput.interpretation).toBe("Model-authored interpretation.");
+    // evidence/recommended_actions fall back to the mechanical derivation, not [].
+    expect(alertInput.evidence.length).toBeGreaterThan(0);
+    expect(alertInput.recommended_actions).toEqual([{ action: "..." }]);
   });
 
   it("translates a runtime downgrade to claude-haiku for the constructor, alias for trackCost", async () => {

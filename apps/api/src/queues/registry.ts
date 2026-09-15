@@ -44,6 +44,7 @@ import {
   updateDiscoveryStatus,
 } from "../db/queries";
 import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
+import { publishSocketEvent } from "../lib/socket-relay";
 
 // bullmq pins its own ioredis@5 copy while apps/api installs ioredis@^6, so
 // npm hoists two separate copies — same runtime API (bullmq duck-types via
@@ -273,6 +274,10 @@ async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void>
   }
 
   await updateDiscoveryStatus(competitor_id, "in_progress");
+  await publishSocketEvent("discovery:status_changed", {
+    competitor_id,
+    discovery_status: "in_progress",
+  });
   const result = await discoverCompetitor({
     competitor_id,
     name,
@@ -285,7 +290,11 @@ async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void>
       changelog_rss: competitor.changelog_rss,
     },
   });
-  await finalizeDiscovery(competitor_id, result);
+  const discoveryStatus = await finalizeDiscovery(competitor_id, result);
+  await publishSocketEvent("discovery:status_changed", {
+    competitor_id,
+    discovery_status: discoveryStatus,
+  });
 
   if (result.logs.length > 0 && result.logs.every((log) => log.status !== "found")) {
     logger.warn("competitor-discovery: no fields discovered — see competitor_discovery_log", {
@@ -342,6 +351,10 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
       .update(competitorsTable)
       .set({ discovery_status: "failed" })
       .where(eq(competitorsTable.id, competitorId));
+  });
+  await publishSocketEvent("discovery:status_changed", {
+    competitor_id: competitorId,
+    discovery_status: "failed",
   });
 }
 

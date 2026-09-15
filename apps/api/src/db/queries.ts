@@ -654,6 +654,34 @@ export async function getRecentSignalsByCompetitorAndSource(
     .limit(analysisInputLimit(limit));
 }
 
+// GET /:id/hiring's source query — deliberately NOT getRecentSignalsByCompetitorAndSource
+// above: that function's 500-row cap exists to bound an LLM prompt's token budget (dropping
+// the oldest rows there is harmless — IntentAnalyzer just sees less context). Reused for a
+// recent-vs-prior delta *count* instead, the same cap silently under-counts a real
+// heavy-hiring competitor and skews the split toward the recent half. This selects only the
+// two columns the delta math needs (lighter payload) with a limit sized for counting, not
+// prompting, and the caller can detect truncation via `.length === limit`.
+export const HIRING_DELTA_ROW_LIMIT = 5000;
+
+export async function getJobSignalsForHiringDelta(
+  competitorId: string,
+  days: number,
+  limit = HIRING_DELTA_ROW_LIMIT
+): Promise<{ title: string | null; created_at: Date }[]> {
+  return db
+    .select({ title: signalsTable.title, created_at: signalsTable.created_at })
+    .from(signalsTable)
+    .where(
+      and(
+        eq(signalsTable.competitor_id, competitorId),
+        eq(signalsTable.source, "jobs"),
+        sql`${signalsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`
+      )
+    )
+    .orderBy(desc(signalsTable.created_at))
+    .limit(limit);
+}
+
 // Retrieval pipeline source — fetch recent signals across multiple competitors
 // for BM25 corpus. inArray with empty array is a Drizzle footgun, so short-circuit.
 export async function getRecentSignalsByCompetitorIds(
@@ -697,9 +725,18 @@ export async function getSignalVolumeByDay(
     .select({
       // Cast in SQL, not JS: COUNT(*) is bigint (pg driver returns it as a
       // string, not number) and DATE_TRUNC on a timestamptz column comes back
-      // as a Date, not a string — ::int/::text make the driver's runtime
+      // as a Date, not a string — ::int/::date make the driver's runtime
       // value match the declared TS type instead of lying about it.
-      day: sql<string>`DATE_TRUNC('day', ${signalsTable.created_at})::text`,
+      // AT TIME ZONE 'UTC' before truncating — same reasoning as competitor_signal_scores.day's
+      // own comment: DATE_TRUNC on a timestamptz truncates in the *session's* timezone, not
+      // UTC, and this pool sets none explicitly (db/client.ts). Every existing caller
+      // (synthesis.ts's relative-age math, pattern-detector.ts's display text) tolerated that
+      // looseness; the API's GET /:id/trend route does an exact date-string join against an
+      // independently UTC-derived key and does not. ::date (not ::text) so node-postgres's
+      // default DATE type parser hands back a plain "YYYY-MM-DD" string with no offset for
+      // JS to misinterpret — unlike a timestamptz::text cast, which round-trips through
+      // `new Date(...)` ambiguously.
+      day: sql<string>`DATE_TRUNC('day', ${signalsTable.created_at} AT TIME ZONE 'UTC')::date`,
       count: sql<number>`COUNT(*)::int`,
       weighted_count: sql<number>`SUM(${signalsTable.quality_score})`,
     })
@@ -1347,7 +1384,7 @@ export async function failRunIfRunning(runId: string): Promise<void> {
 export async function finalizeDiscovery(
   competitorId: string,
   result: CompetitorDiscoveryResult
-): Promise<void> {
+): Promise<DiscoveryStatus> {
   // `failed` is terminal (no auto-rediscovery), so only use it when the agent
   // actually probed and came back with nothing usable. A competitor created
   // with every field pre-filled produces `logs: []` — that row is fully usable,
@@ -1390,4 +1427,6 @@ export async function finalizeDiscovery(
       );
     }
   });
+
+  return discoveryStatus;
 }

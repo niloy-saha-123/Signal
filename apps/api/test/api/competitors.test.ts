@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AddressInfo } from "node:net";
 import express from "express";
 
@@ -17,6 +17,14 @@ import { discoverCompetitor } from "@/agents/discovery/competitor-discovery";
 import { createCompetitorRouter, type CompetitorRouterDeps } from "@/api/competitors";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+
+const VALID_COMPONENTS = {
+  mention_velocity: 0.4,
+  sentiment_trajectory: -0.1,
+  hiring_momentum: 0.2,
+  pricing_change_recency: 0,
+  vulnerability_window_status: "closed" as const,
+};
 
 async function call(
   app: express.Express,
@@ -51,6 +59,8 @@ function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDep
     listCompetitors: vi.fn(async () => [{ id: UUID }]) as any,
     getCompetitorDiscoveryLog: vi.fn(async () => [{ field_name: "subreddits" }]) as any,
     getLatestSignalScores: vi.fn(async () => []) as any,
+    getSignalVolumeByDay: vi.fn(async () => []) as any,
+    getJobSignalsForHiringDelta: vi.fn(async () => []) as any,
     getRecentPricingDiffs: vi.fn(async () => []) as any,
     createAgentRun: vi.fn(async () => ({ id: "run-1" })) as any,
     failRunIfRunning: vi.fn(async () => undefined) as any,
@@ -221,8 +231,9 @@ describe("GET /api/competitors/:id/score", () => {
     const deps = makeDeps({
       getLatestSignalScores: vi.fn(async () => [
         {
+          id: "score-1",
           score: 72,
-          components: { velocity: 1 },
+          components: VALID_COMPONENTS,
           computed_at: new Date("2026-01-01T00:00:00.000Z"),
           delta_7d: 3.5,
           delta_30d: null,
@@ -233,10 +244,101 @@ describe("GET /api/competitors/:id/score", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       score: 72,
-      components: { velocity: 1 },
+      components: VALID_COMPONENTS,
       computed_at: "2026-01-01T00:00:00.000Z",
       delta_7d: 3.5,
       delta_30d: null,
+    });
+  });
+
+  it("returns zeroed default components and logs a warning when the row's components are malformed", async () => {
+    const deps = makeDeps({
+      getLatestSignalScores: vi.fn(async () => [
+        {
+          id: "score-1",
+          score: 72,
+          components: { velocity: 1 }, // legacy/malformed shape
+          computed_at: new Date("2026-01-01T00:00:00.000Z"),
+          delta_7d: null,
+          delta_30d: null,
+        },
+      ]) as any,
+    });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/score`);
+    expect(res.status).toBe(200);
+    expect(res.body.components).toEqual({
+      mention_velocity: 0,
+      sentiment_trajectory: 0,
+      hiring_momentum: 0,
+      pricing_change_recency: 0,
+      vulnerability_window_status: "none",
+    });
+  });
+});
+
+describe("GET /api/competitors/:id/scores", () => {
+  it("404 when competitor missing", async () => {
+    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/scores`);
+    expect(res.status).toBe(404);
+  });
+
+  it("400 on an out-of-range limit", async () => {
+    const res = await call(app(makeDeps()), "GET", `/api/competitors/${UUID}/scores?limit=0`);
+    expect(res.status).toBe(400);
+  });
+
+  it("reverses newest-first rows to chronological order and defaults limit to 30", async () => {
+    const deps = makeDeps({
+      getLatestSignalScores: vi.fn(async () => [
+        {
+          id: "s2",
+          competitor_id: UUID,
+          score: 70,
+          components: VALID_COMPONENTS,
+          delta_7d: null,
+          delta_30d: null,
+          computed_at: new Date("2026-01-02T00:00:00.000Z"),
+        },
+        {
+          id: "s1",
+          competitor_id: UUID,
+          score: 60,
+          components: VALID_COMPONENTS,
+          delta_7d: null,
+          delta_30d: null,
+          computed_at: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      ]) as any,
+    });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/scores`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((row: any) => row.id)).toEqual(["s1", "s2"]);
+    expect(deps.getLatestSignalScores).toHaveBeenCalledWith(UUID, 30);
+  });
+
+  it("returns zeroed default components for a row with malformed components", async () => {
+    const deps = makeDeps({
+      getLatestSignalScores: vi.fn(async () => [
+        {
+          id: "s1",
+          competitor_id: UUID,
+          score: 60,
+          components: { velocity: 1 }, // legacy/malformed shape
+          delta_7d: null,
+          delta_30d: null,
+          computed_at: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      ]) as any,
+    });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/scores`);
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].components).toEqual({
+      mention_velocity: 0,
+      sentiment_trajectory: 0,
+      hiring_momentum: 0,
+      pricing_change_recency: 0,
+      vulnerability_window_status: "none",
     });
   });
 });
@@ -288,5 +390,169 @@ describe("POST /api/competitors/:id/analyze", () => {
     expect(res.body).toEqual({ error: "internal", run_id: "run-1" });
     expect(deps.failRunIfRunning).toHaveBeenCalledWith("run-1");
     expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/competitors/:id/trend", () => {
+  it("404 when competitor missing", async () => {
+    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/trend`);
+    expect(res.status).toBe(404);
+  });
+
+  it("400 on an out-of-range days query", async () => {
+    const res = await call(app(makeDeps()), "GET", `/api/competitors/${UUID}/trend?days=0`);
+    expect(res.status).toBe(400);
+  });
+
+  it("defaults days to 30 and passes it to both underlying queries", async () => {
+    const deps = makeDeps();
+    await call(app(deps), "GET", `/api/competitors/${UUID}/trend`);
+    expect(deps.getLatestSignalScores).toHaveBeenCalledWith(UUID, 30);
+    expect(deps.getSignalVolumeByDay).toHaveBeenCalledWith(UUID, 30);
+  });
+
+  it("passes a custom days query through to both underlying queries", async () => {
+    const deps = makeDeps();
+    await call(app(deps), "GET", `/api/competitors/${UUID}/trend?days=7`);
+    expect(deps.getLatestSignalScores).toHaveBeenCalledWith(UUID, 7);
+    expect(deps.getSignalVolumeByDay).toHaveBeenCalledWith(UUID, 7);
+  });
+
+  it("merges score rows (reversed to chronological) with mention volume by day, defaulting a day with no signals to 0, and degrades a malformed components row's sentiment to 0", async () => {
+    const deps = makeDeps({
+      // Newest-first, matching getLatestSignalScores' real ordering — the route reverses it.
+      getLatestSignalScores: vi.fn(async () => [
+        {
+          id: "s3",
+          score: 80,
+          components: {
+            mention_velocity: 0,
+            sentiment_trajectory: 0.5,
+            hiring_momentum: 0,
+            pricing_change_recency: 0,
+            vulnerability_window_status: "none",
+          },
+          computed_at: new Date("2026-01-03T00:00:00.000Z"),
+        },
+        {
+          id: "s2",
+          score: 70,
+          components: {}, // malformed/legacy — missing every field
+          computed_at: new Date("2026-01-02T00:00:00.000Z"),
+        },
+        {
+          id: "s1",
+          score: 60,
+          components: {
+            mention_velocity: 0,
+            sentiment_trajectory: -0.2,
+            hiring_momentum: 0,
+            pricing_change_recency: 0,
+            vulnerability_window_status: "open",
+          },
+          computed_at: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      ]) as any,
+      // No volume row for 2026-01-02 — that day has a score but no signals. Plain
+      // "YYYY-MM-DD" strings — getSignalVolumeByDay's real SQL casts ::date, not ::text, so
+      // this is what the driver actually hands back (node-postgres's default DATE parser),
+      // not an ISO timestamp string.
+      getSignalVolumeByDay: vi.fn(async () => [
+        { day: "2026-01-01", count: 5, weighted_count: 3 },
+        { day: "2026-01-03", count: 2, weighted_count: 1 },
+      ]) as any,
+    });
+
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/trend`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: [
+        { date: "2026-01-01", mention_volume: 5, sentiment: -0.2, score: 60 },
+        { date: "2026-01-02", mention_volume: 0, sentiment: 0, score: 70 },
+        { date: "2026-01-03", mention_volume: 2, sentiment: 0.5, score: 80 },
+      ],
+    });
+  });
+
+  it("returns an empty array when there are no scores yet", async () => {
+    const res = await call(app(makeDeps()), "GET", `/api/competitors/${UUID}/trend`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: [] });
+  });
+});
+
+describe("GET /api/competitors/:id/hiring", () => {
+  const NOW = new Date("2026-01-15T00:00:00.000Z");
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const daysAgo = (n: number) => new Date(NOW.getTime() - n * MS_PER_DAY);
+
+  // Only Date.now() is faked (not full fake timers) — full fake timers also stub the
+  // setTimeout machinery Node's HTTP client relies on, which hangs `call()`'s real fetch.
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW.getTime());
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("404 when competitor missing", async () => {
+    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/hiring`);
+    expect(res.status).toBe(404);
+  });
+
+  it("400 on an out-of-range days query", async () => {
+    const res = await call(app(makeDeps()), "GET", `/api/competitors/${UUID}/hiring?days=0`);
+    expect(res.status).toBe(400);
+  });
+
+  it("defaults days to 30 and fetches jobs-source signals for that window", async () => {
+    const deps = makeDeps();
+    await call(app(deps), "GET", `/api/competitors/${UUID}/hiring`);
+    expect(deps.getJobSignalsForHiringDelta).toHaveBeenCalledWith(UUID, 30);
+  });
+
+  it("classifies an unrecognized title as Other", async () => {
+    const deps = makeDeps({
+      getJobSignalsForHiringDelta: vi.fn(async () => [
+        { title: "Ping Pong Champion", created_at: daysAgo(1) },
+      ]) as any,
+    });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/hiring`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: [{ department: "Other", delta: 1 }] });
+  });
+
+  it("splits into recent/prior halves of the requested window, computes deltas, and omits zero-delta departments", async () => {
+    const deps = makeDeps({
+      getJobSignalsForHiringDelta: vi.fn(async () => [
+        { title: "Senior Software Engineer", created_at: daysAgo(5) }, // recent, Engineering
+        { title: "Software Engineer", created_at: daysAgo(20) }, // prior, Engineering
+        { title: "Software Engineer", created_at: daysAgo(22) }, // prior, Engineering
+        { title: "Sales Engineer", created_at: daysAgo(3) }, // recent, Sales (not Engineering)
+        { title: "Product Manager", created_at: daysAgo(2) }, // recent, Product
+        { title: "Product Manager", created_at: daysAgo(25) }, // prior, Product -> delta 0
+        { title: "Ping Pong Champion", created_at: daysAgo(1) }, // recent, Other
+      ]) as any,
+    });
+
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/hiring`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: [
+        { department: "Sales", delta: 1 },
+        { department: "Other", delta: 1 },
+        { department: "Engineering", delta: -1 },
+      ],
+    });
+  });
+
+  it("returns an empty array when there are no job-posting signals", async () => {
+    const res = await call(app(makeDeps()), "GET", `/api/competitors/${UUID}/hiring`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: [] });
   });
 });

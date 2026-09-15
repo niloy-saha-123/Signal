@@ -1,21 +1,26 @@
-// Root layout wrapping all pages with global styles and metadata for the Signal application.
 import type { Metadata } from "next";
+import { SiteNav } from "@/components/SiteNav";
+import { AlertBanner } from "@/components/AlertBanner";
+import { AppCommandBar } from "./app-command-bar";
+import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Signal — Competitive Intelligence",
   description: "Autonomous competitive strategy intelligence engine",
 };
 
+// Every page fetches live data from the API at request time; the API isn't reachable
+// during `next build` (CI, local build), so static prerendering must be off app-wide.
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ fontFamily: "system-ui, sans-serif", margin: 0, padding: "2rem" }}>
-        <nav style={{ marginBottom: "2rem", display: "flex", gap: "1rem" }}>
-          <a href="/">Competitors</a>
-          <a href="/chat">Chat</a>
-          <a href="/alerts">Alerts</a>
-        </nav>
-        {children}
+      <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
+        <SiteNav />
+        <AppCommandBar />
+        <AlertBanner />
+        <main className="mx-auto max-w-6xl px-8 py-10">{children}</main>
       </body>
     </html>
   );

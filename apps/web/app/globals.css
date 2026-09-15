@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  /* Categorical — signal sources (packages/shared SignalSourceSchema), fixed slot order
+     from the dataviz skill's validated reference palette. Never reassign per filter state. */
+  --color-source-reddit: #2a78d6;
+  --color-source-hn: #eb6834;
+  --color-source-jobs: #1baf7a;
+  --color-source-changelog: #eda100;
+  --color-source-pricing: #e87ba4;
+
+  /* Status — fixed, never themed, never reused for series identity */
+  --color-status-good: #0ca30c;
+  --color-status-warning: #fab219;
+  --color-status-serious: #ec835a;
+  --color-status-critical: #d03b3b;
+
+  /* Diverging pair — hiring deltas, sentiment trajectory (above/below a baseline) */
+  --color-diverging-positive: #2a78d6;
+  --color-diverging-negative: #e34948;
+  --color-diverging-neutral: #f0efec;
+
+  /* Sequential — single-series magnitude (Signal Score sparklines/lines) */
+  --color-sequential: #2a78d6;
+}
