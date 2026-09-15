@@ -27,6 +27,8 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "15.5.25",
     "jsdom": "^30.0.1",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.3.3",
