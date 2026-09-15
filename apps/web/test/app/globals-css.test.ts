@@ -11,5 +11,8 @@ describe("globals.css", () => {
     const result = await postcss([tailwindcss()]).process(css, { from: cssPath });
     expect(result.css.length).toBeGreaterThan(0);
     expect(result.css).toContain("::before");
+    // Proves Tailwind's content detection reaches components/, not just app/ —
+    // this class only exists because SiteNav.tsx uses hover:bg-indigo-50.
+    expect(result.css).toContain("hover\\:bg-indigo-50");
   });
 });
