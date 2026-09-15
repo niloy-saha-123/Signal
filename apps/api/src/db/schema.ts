@@ -473,11 +473,10 @@ export const competitorSignalScoresTable = pgTable(
 // getCompanyContext() (lib/company-context.ts) reads this row and formats
 // it into a system-prompt injection every analysis agent includes, so
 // output is specific to the user's product instead of generic commentary.
-// `singleton` + its check/unique index enforce single-row-ness at the DB
-// level (queries.ts's upsert previously relied on a select-then-write race
-// with nothing stopping two concurrent inserts from producing duplicates) —
-// forced to `true`, and unique on that value, so a second concurrent insert
-// fails loudly with a constraint violation instead of silently duplicating.
+// One row per workspace_id, enforced by company_profile_workspace_idx
+// (unique on workspace_id) — a second concurrent insert for the same
+// workspace fails loudly with a constraint violation instead of silently
+// duplicating.
 export const companyProfileTable = pgTable(
   "company_profile",
   {
