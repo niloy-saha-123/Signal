@@ -44,3 +44,18 @@ Element.prototype.getBoundingClientRect = () =>
       return this;
     },
   }) as DOMRect;
+
+// jsdom has never implemented DragEvent (https://github.com/jsdom/jsdom/issues/2913). RTL's
+// fireEvent.dragStart/dragOver/drop looks up `window.DragEvent`, finds nothing, and silently
+// falls back to a plain `Event` — whose constructor drops unrecognized init dict members, so
+// `event.clientX`/`clientY` come back `undefined` in every drag-and-drop test (Board's drag
+// math among them) even though the test passes them in. MouseEvent's constructor does honor
+// clientX/clientY, so subclassing it restores real coordinates for fireEvent's drag* helpers.
+class DragEventPolyfill extends MouseEvent implements DragEvent {
+  readonly dataTransfer: DataTransfer | null;
+  constructor(type: string, eventInitDict: DragEventInit = {}) {
+    super(type, eventInitDict);
+    this.dataTransfer = eventInitDict.dataTransfer ?? null;
+  }
+}
+globalThis.DragEvent = globalThis.DragEvent ?? (DragEventPolyfill as unknown as typeof DragEvent);

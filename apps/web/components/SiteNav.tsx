@@ -6,6 +6,7 @@ const NAV_LINKS = [
   { href: "/chat", label: "Chat" },
   { href: "/alerts", label: "Alerts" },
   { href: "/settings", label: "Settings" },
+  { href: "/board", label: "Board" },
 ] as const;
 
 export function SiteNav() {

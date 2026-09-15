@@ -11,6 +11,7 @@ describe("SiteNav", () => {
       ["Chat", "/chat"],
       ["Alerts", "/alerts"],
       ["Settings", "/settings"],
+      ["Board", "/board"],
     ] as const;
     for (const [label, href] of expected) {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
