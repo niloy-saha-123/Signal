@@ -7,7 +7,7 @@ import { createAlertRouter } from "./alerts";
 import { createChatRouter } from "./chat";
 import { createCompanyProfileRouter } from "./company-profile";
 import { createWorkspaceRouter } from "./workspaces";
-import { requireAuth } from "./auth";
+import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
 import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
 import { checkDatabaseReadiness, closeDatabase } from "../db/client";
@@ -125,6 +125,17 @@ interface ClosableSocketServer {
   close(callback?: () => void): unknown;
 }
 
+interface HandshakeSocket {
+  handshake: { auth: unknown };
+}
+
+// Minimal slice of socket.io's Server.use — matched by duck-typed check below rather than a
+// direct cast, since ApiRuntimeOverrides.io (test doubles) is only typed as ClosableSocketServer
+// and doesn't carry .use.
+interface UsableSocketServer {
+  use(fn: (socket: HandshakeSocket, next: (err?: Error) => void) => void): unknown;
+}
+
 export interface ApiRuntimeOverrides {
   app?: Express;
   server?: HttpServer;
@@ -164,6 +175,30 @@ export function createApiRuntime(overrides: ApiRuntimeOverrides = {}) {
   const app = overrides.app ?? createApiApp();
   const server = overrides.server ?? http.createServer(app);
   const io = overrides.io ?? new SocketIOServer(server, { serveClient: false });
+  // Handshake auth: rejects the connection unless the client supplies a valid access token,
+  // and stamps the verified workspaceId onto the socket for joinOrLeaveCompetitorRoom's
+  // ownership check (socket-relay.ts). Guarded by a duck-type check, not a direct cast — the
+  // ApiRuntimeOverrides.io test double only implements close(), not use().
+  const usableIo = io as unknown as Partial<UsableSocketServer>;
+  if (typeof usableIo.use === "function") {
+    usableIo.use((socket, next) => {
+      const token = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
+      if (typeof token !== "string") {
+        next(new Error("unauthorized"));
+        return;
+      }
+      verifyAccessToken(token)
+        .then(({ workspaceId }) => {
+          if (!workspaceId) {
+            next(new Error("no_workspace"));
+            return;
+          }
+          (socket as unknown as { workspaceId: string }).workspaceId = workspaceId;
+          next();
+        })
+        .catch(() => next(new Error("unauthorized")));
+    });
+  }
   // wireSocketRelay registers the competitor:join/leave connection handlers and routes
   // signal:new/discovery:status_changed to per-competitor rooms — see its own header comment.
   const socketRelay = wireSocketRelay(io as unknown as EmittableSocketServer);
