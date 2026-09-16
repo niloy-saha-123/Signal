@@ -1099,34 +1099,6 @@ export async function getCostByCompetitorDay(days = 7): Promise<CostByCompetitor
     .groupBy(llmCostsTable.competitor_id, utcDay);
 }
 
-// company_profile is single-row (no natural unique key beyond its own id —
-// see schema.ts). `.limit(1)` matches lib/company-context.ts's existing
-// direct read of this table. `.orderBy(asc(created_at))` makes a stray
-// duplicate row (race in upsertCompanyProfile's select-then-write) resolve
-// deterministically to the oldest row instead of flip-flopping between calls.
-export async function getCompanyProfile(): Promise<CompanyProfile | null> {
-  const [row] = await db
-    .select()
-    .from(companyProfileTable)
-    .orderBy(asc(companyProfileTable.created_at))
-    .limit(1);
-  return row ?? null;
-}
-
-// One atomic singleton upsert. Two concurrent profile mutations cannot both
-// observe an empty table and make one request fail on the unique constraint.
-export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<CompanyProfile> {
-  const [row] = await db
-    .insert(companyProfileTable)
-    .values({ ...input, singleton: true })
-    .onConflictDoUpdate({
-      target: companyProfileTable.singleton,
-      set: { ...input, singleton: true, updated_at: new Date() },
-    })
-    .returning();
-  return row;
-}
-
 // ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
 // Collectors (Part 6) only INSERT raw signal rows; these UPDATE the columns each
 // pipeline stage populates as a signal moves through it.
@@ -1531,12 +1503,15 @@ export async function redeemInvite(input: { inviteId: string; userId: string }):
 
 // ── workspace-scoped tenant-data query variants (Task 3) ────────────────
 // Added alongside the unscoped originals above (getCompetitorById,
-// getCompetitorsByIds, listCompetitors, getCompanyProfile, upsertCompanyProfile) —
-// those stay untouched for now since background workers still call them. Tasks 6-9
-// (the routers) call these instead. The unscoped createCompetitor was deleted in
-// Task 7: its only caller was the competitors router, now rewired to
-// createCompetitorForWorkspace, and it would violate competitors.workspace_id's
-// NOT NULL constraint if anything called it.
+// getCompetitorsByIds, listCompetitors) — those stay untouched for now since
+// background workers still call them. Tasks 6-9 (the routers) call these
+// instead. The unscoped createCompetitor was deleted in Task 7: its only
+// caller was the competitors router, now rewired to createCompetitorForWorkspace,
+// and it would violate competitors.workspace_id's NOT NULL constraint if
+// anything called it. Same reasoning removed the unscoped getCompanyProfile/
+// upsertCompanyProfile in Task 10 — the company-profile router was their only
+// caller, now rewired below, and they'd violate company_profile.workspace_id's
+// NOT NULL constraint if anything called them.
 
 export async function getCompetitorByIdForWorkspace(
   id: string,

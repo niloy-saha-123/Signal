@@ -33,22 +33,51 @@ async function call(
 
 const VALID_BODY = { product_description: "A competitive-intel tool" };
 const COMPETITOR_ID = "11111111-1111-4111-8111-111111111111";
+const USER_UUID = "33333333-3333-4333-8333-333333333333";
+const WS_UUID = "22222222-2222-4222-8222-222222222222";
 
 function makeDeps(over: Partial<CompanyProfileRouterDeps> = {}): CompanyProfileRouterDeps {
   return {
-    getCompanyProfile: vi.fn(async () => null) as any,
-    getCompetitorsByIds: vi.fn(async (ids: string[]) => ids.map((id) => ({ id }))) as any,
-    upsertCompanyProfile: vi.fn(async (input: any) => ({ id: "p1", ...input })) as any,
+    getCompanyProfileForWorkspace: vi.fn(async () => null) as any,
+    getCompetitorsByIdsForWorkspace: vi.fn(async (ids: string[]) => ids.map((id) => ({ id }))) as any,
+    upsertCompanyProfileForWorkspace: vi.fn(async (input: any) => ({ id: "p1", ...input })) as any,
     invalidateProfileCache: vi.fn(async () => 1),
     enqueue: vi.fn(async () => undefined),
     ...over,
   };
 }
 
+// Stands in for requireAuth — real middleware verifies a JWT, this just sets
+// req.user/req.workspaceId directly, matching what requireAuth would have set.
+function appWithUser(user: { id: string; workspaceId: string | null }, router: express.Router) {
+  const app = express();
+  app.use((req, _res, next) => {
+    req.user = { id: user.id, email: "test@example.com" };
+    req.workspaceId = user.workspaceId;
+    next();
+  });
+  app.use("/api/company-profile", router);
+  return app;
+}
+
 const app = (deps: CompanyProfileRouterDeps) =>
-  express().use("/api/company-profile", createCompanyProfileRouter(deps));
+  appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createCompanyProfileRouter(deps));
 
 beforeEach(() => vi.clearAllMocks());
+
+describe("workspace guard", () => {
+  it("403s with no_workspace when req.workspaceId is null", async () => {
+    const deps = makeDeps();
+    const noWorkspaceApp = appWithUser(
+      { id: USER_UUID, workspaceId: null },
+      createCompanyProfileRouter(deps)
+    );
+    const res = await call(noWorkspaceApp, "GET", "/api/company-profile");
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "no_workspace" });
+    expect(deps.getCompanyProfileForWorkspace).not.toHaveBeenCalled();
+  });
+});
 
 describe("GET /api/company-profile", () => {
   it("404 with a clear message when absent", async () => {
@@ -59,21 +88,26 @@ describe("GET /api/company-profile", () => {
     });
   });
 
-  it("200 with the row when present", async () => {
-    const deps = makeDeps({ getCompanyProfile: vi.fn(async () => ({ id: "p1" })) as any });
+  it("200 with the row when present, scoped to req.workspaceId", async () => {
+    const deps = makeDeps({ getCompanyProfileForWorkspace: vi.fn(async () => ({ id: "p1" })) as any });
     const res = await call(app(deps), "GET", "/api/company-profile");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: "p1" });
+    expect(deps.getCompanyProfileForWorkspace).toHaveBeenCalledWith(WS_UUID);
   });
 });
 
 describe("POST /api/company-profile", () => {
-  it("persists, invalidates cache, enqueues update, returns 200 with saved", async () => {
+  it("persists scoped to req.workspaceId, invalidates cache, enqueues update, returns 200 with saved", async () => {
     const deps = makeDeps();
     const res = await call(app(deps), "POST", "/api/company-profile", VALID_BODY);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: "p1", product_description: VALID_BODY.product_description });
-    expect(deps.upsertCompanyProfile).toHaveBeenCalledTimes(1);
+    expect(deps.upsertCompanyProfileForWorkspace).toHaveBeenCalledTimes(1);
+    expect(deps.upsertCompanyProfileForWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ product_description: VALID_BODY.product_description }),
+      WS_UUID
+    );
     expect(deps.invalidateProfileCache).toHaveBeenCalledTimes(1);
     expect(deps.enqueue).toHaveBeenCalledWith("company-profile-update", {});
   });
@@ -85,7 +119,7 @@ describe("POST /api/company-profile", () => {
       extra: 1,
     });
     expect(res.status).toBe(400);
-    expect(deps.upsertCompanyProfile).not.toHaveBeenCalled();
+    expect(deps.upsertCompanyProfileForWorkspace).not.toHaveBeenCalled();
   });
 
   it("400 when required product_description is missing", async () => {
@@ -99,11 +133,11 @@ describe("POST /api/company-profile", () => {
       product_description: "x".repeat(10_001),
     });
     expect(res.status).toBe(400);
-    expect(deps.upsertCompanyProfile).not.toHaveBeenCalled();
+    expect(deps.upsertCompanyProfileForWorkspace).not.toHaveBeenCalled();
   });
 
   it("rejects unknown primary competitor ids before persisting", async () => {
-    const deps = makeDeps({ getCompetitorsByIds: vi.fn(async () => []) as any });
+    const deps = makeDeps({ getCompetitorsByIdsForWorkspace: vi.fn(async () => []) as any });
     const res = await call(app(deps), "POST", "/api/company-profile", {
       ...VALID_BODY,
       primary_competitor_ids: [COMPETITOR_ID],
@@ -113,7 +147,27 @@ describe("POST /api/company-profile", () => {
       error: "unknown_primary_competitor",
       missing: [COMPETITOR_ID],
     });
-    expect(deps.upsertCompanyProfile).not.toHaveBeenCalled();
+    expect(deps.upsertCompanyProfileForWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("rejects a primary competitor id that belongs to another workspace, same as unknown", async () => {
+    // getCompetitorsByIdsForWorkspace is scoped by req.workspaceId — a competitor
+    // that exists but in a different workspace simply won't come back, which
+    // is indistinguishable from it not existing at all.
+    const deps = makeDeps({
+      getCompetitorsByIdsForWorkspace: vi.fn(async (ids: string[], workspaceId: string) => []) as any,
+    });
+    const res = await call(app(deps), "POST", "/api/company-profile", {
+      ...VALID_BODY,
+      primary_competitor_ids: [COMPETITOR_ID],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "unknown_primary_competitor",
+      missing: [COMPETITOR_ID],
+    });
+    expect(deps.getCompetitorsByIdsForWorkspace).toHaveBeenCalledWith([COMPETITOR_ID], WS_UUID);
+    expect(deps.upsertCompanyProfileForWorkspace).not.toHaveBeenCalled();
   });
 
   it("still 200 when the cache invalidation throws", async () => {
@@ -134,6 +188,6 @@ describe("POST /api/company-profile", () => {
     });
     const res = await call(app(deps), "POST", "/api/company-profile", VALID_BODY);
     expect(res.status).toBe(200);
-    expect(deps.upsertCompanyProfile).toHaveBeenCalledTimes(1);
+    expect(deps.upsertCompanyProfileForWorkspace).toHaveBeenCalledTimes(1);
   });
 });

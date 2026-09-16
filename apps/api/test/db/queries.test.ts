@@ -106,8 +106,6 @@ import {
   getLatencyPercentiles,
   getAgentLatencyReport,
   getCostByCompetitorDay,
-  getCompanyProfile,
-  upsertCompanyProfile,
   getLatestSignalCollectedAt,
   getFirstSignalCollectedAt,
   signalExistsBySourceUrl,
@@ -1522,101 +1520,6 @@ describe("db/queries — operational reporting", () => {
     expect(rawTexts.some((text) => text.includes("SUM("))).toBe(true);
     const intervalCall = sqlCalls.find((call) => rawSqlText(call).includes("INTERVAL"));
     expect(intervalCall!.at(-1)).toBe(7);
-  });
-});
-
-describe("db/queries — company profile", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    selectMock.mockReturnValue({ from: fromMock });
-    // getCompanyProfile chains .orderBy().limit(1); upsertCompanyProfile's
-    // tx.select() chains .limit(1) directly (unchanged, out of scope for
-    // this fix) — expose both off the same fromMock return so each test's
-    // limitMock.mockResolvedValue(...) reaches whichever chain it uses.
-    fromMock.mockReturnValue({ orderBy: orderByMock, limit: limitMock });
-    orderByMock.mockReturnValue({ limit: limitMock });
-    insertMock.mockReturnValue({ values: insertValuesMock });
-    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
-    updateMock.mockReturnValue({ set: updateSetMock });
-    updateSetMock.mockReturnValue({ where: updateWhereMock });
-    updateWhereMock.mockReturnValue({ returning: updateReturningMock });
-    // db.transaction runs the callback against a tx that exposes the same
-    // select/insert/update surface as `db` — matches registry.ts's pattern.
-    transactionMock.mockImplementation(async (cb: (tx: unknown) => unknown) =>
-      cb({ select: selectMock, insert: insertMock, update: updateMock })
-    );
-  });
-
-  const profileInput = {
-    product_description: "A widget factory",
-    icp_company_size: "50-200",
-    icp_industries: ["saas"],
-    icp_buyer_role: "VP Eng",
-    pricing_tiers: [{ name: "Pro", price: 99, billing: "monthly" }],
-    key_differentiators: ["fast", "cheap"],
-    primary_competitor_ids: ["c1"],
-  };
-
-  describe("getCompanyProfile", () => {
-    it("returns the single row when the table has one", async () => {
-      const row = { id: "p1", product_description: "A widget factory" };
-      limitMock.mockResolvedValue([row]);
-
-      const result = await getCompanyProfile();
-
-      expect(fromMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(orderByMock).toHaveBeenCalledWith(asc(companyProfileTable.created_at));
-      expect(limitMock).toHaveBeenCalledWith(1);
-      expect(result).toEqual(row);
-    });
-
-    it("returns null on an empty table, not throw", async () => {
-      limitMock.mockResolvedValue([]);
-
-      const result = await getCompanyProfile();
-
-      expect(result).toBeNull();
-    });
-
-    it("orders by created_at asc, so a stray duplicate row deterministically resolves to the oldest one", async () => {
-      const older = {
-        id: "p1",
-        product_description: "Older row",
-        created_at: new Date("2026-01-01T00:00:00.000Z"),
-      };
-      const newer = {
-        id: "p2",
-        product_description: "Newer row (duplicate from a race)",
-        created_at: new Date("2026-02-01T00:00:00.000Z"),
-      };
-      // orderBy(asc(created_at)) + limit(1) means Postgres itself would only
-      // ever return the oldest row here; seeding both simulates that.
-      limitMock.mockResolvedValue([older, newer]);
-
-      const result = await getCompanyProfile();
-
-      expect(orderByMock).toHaveBeenCalledWith(asc(companyProfileTable.created_at));
-      expect(result).toEqual(older);
-    });
-  });
-
-  describe("upsertCompanyProfile", () => {
-    it("atomically upserts the singleton row", async () => {
-      const inserted = { id: "p2", ...profileInput };
-      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
-      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
-      onConflictReturningMock.mockResolvedValueOnce([inserted]);
-
-      const result = await upsertCompanyProfile(profileInput);
-
-      expect(insertMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(insertValuesMock).toHaveBeenCalledWith({ ...profileInput, singleton: true });
-      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
-        target: companyProfileTable.singleton,
-        set: { ...profileInput, singleton: true, updated_at: expect.any(Date) },
-      });
-      expect(result).toEqual(inserted);
-    });
   });
 });
 
