@@ -727,3 +727,19 @@ export const workspaceInvitesTable = pgTable(
     index("workspace_invites_workspace_id_idx").on(table.workspace_id),
   ]
 );
+
+// ── chat_threads (multi-turn chat memory metadata — conversation history
+// lives in a LangGraph checkpointer, not here) ──
+export const chatThreadsTable = pgTable(
+  "chat_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    title: text("title"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("chat_threads_workspace_id_idx").on(table.workspace_id)]
+);
