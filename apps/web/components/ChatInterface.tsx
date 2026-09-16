@@ -3,8 +3,10 @@
 // Streams via lib/chat-stream.ts (live `token` draft, corrected by the final `result`). A
 // refusal (ChatAgentResult.refused === true) is a normal, successful result, rendered
 // distinctly from an operational error — never treated as one. Threads are Phase 2's
-// checkpointed multi-turn memory: select/create one, or omit thread_id so the backend
-// auto-creates on first send.
+// checkpointed multi-turn memory: when no thread is selected the UI creates one explicitly
+// (so back-to-back sends continue one conversation, since the SSE `result` frame carries no
+// thread_id to learn from) and then sends with that id. Backend auto-create-on-omit remains
+// only a direct-API fallback.
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
 import type { ChatAgentResult } from "@signal/shared";
@@ -21,6 +23,8 @@ import {
 export interface ChatInterfaceProps {
   competitorIds: string[];
 }
+
+const GENERIC_ERROR_MESSAGE = "Signal couldn't answer that. Please try again.";
 
 interface ChatTurn {
   id: string;
@@ -161,6 +165,25 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
     setQuery("");
     setSubmitting(true);
 
+    let threadId = activeThreadId;
+    if (threadId === null) {
+      let thread: ChatThreadSummary;
+      try {
+        thread = await createChatThread();
+      } catch {
+        setTurns((current) =>
+          current.map((turn) =>
+            turn.id === id ? { ...turn, error: GENERIC_ERROR_MESSAGE } : turn
+          )
+        );
+        setSubmitting(false);
+        return;
+      }
+      threadId = thread.id;
+      setActiveThreadId(thread.id);
+      setThreads((current) => [thread, ...current]);
+    }
+
     await streamChatResult(
       trimmed,
       competitorIds,
@@ -175,7 +198,7 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
         );
       },
       {
-        threadId: activeThreadId ?? undefined,
+        threadId,
         onToken: (text) => {
           setTurns((current) =>
             current.map((turn) =>
