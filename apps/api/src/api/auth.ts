@@ -21,12 +21,21 @@ import { loadRootEnv } from "../lib/env";
 // needs the same load rather than relying on another module's import order.
 loadRootEnv();
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-if (!SUPABASE_URL) {
-  throw new Error("SUPABASE_URL is required to verify auth tokens");
+// Lazy, like db/client.ts's DATABASE_URL read: importing this module must
+// never throw (CI's test job sets no SUPABASE_URL), and a missing/invalid
+// value should surface as a verifyAccessToken rejection — which requireAuth
+// already maps to 401 — not a crash at module load.
+let jwks: ReturnType<typeof jose.createRemoteJWKSet> | undefined;
+function getJwks() {
+  if (!jwks) {
+    const SUPABASE_URL = process.env.SUPABASE_URL;
+    if (!SUPABASE_URL) {
+      throw new Error("SUPABASE_URL is required to verify auth tokens");
+    }
+    jwks = jose.createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`));
+  }
+  return jwks;
 }
-
-const jwks = jose.createRemoteJWKSet(new URL(`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`));
 
 export interface VerifiedUser {
   userId: string;
@@ -35,7 +44,7 @@ export interface VerifiedUser {
 }
 
 export async function verifyAccessToken(token: string): Promise<VerifiedUser> {
-  const { payload } = await jose.jwtVerify(token, jwks);
+  const { payload } = await jose.jwtVerify(token, getJwks());
   const userId = payload.sub;
   if (!userId) throw new Error("token missing sub claim");
   const email = typeof payload.email === "string" ? payload.email : "";
