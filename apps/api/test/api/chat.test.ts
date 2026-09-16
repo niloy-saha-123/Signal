@@ -4,7 +4,7 @@ import http from "node:http";
 import express from "express";
 import type { ChatAgentResult } from "@signal/shared";
 
-vi.mock("@/agents/chat/chat-agent", () => ({ runChatAgent: vi.fn() }));
+vi.mock("@/agents/chat/chat-agent", () => ({ streamChat: vi.fn() }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -15,6 +15,7 @@ const C1 = "11111111-1111-4111-8111-111111111111";
 const C2 = "22222222-2222-4222-8222-222222222222";
 const RUN_ID = "99999999-9999-4999-8999-999999999999";
 const WORKSPACE_ID = "33333333-3333-4333-8333-333333333333";
+const THREAD_ID = "44444444-4444-4444-8444-444444444444";
 
 const ANSWER: ChatAgentResult = {
   refused: false,
@@ -51,7 +52,13 @@ function makeDeps(over: Partial<ChatRouterDeps> = {}): ChatRouterDeps {
     ) as any,
     createAgentRun: vi.fn(async () => ({ id: RUN_ID })) as any,
     completeAgentRun: vi.fn(async () => undefined) as any,
-    runChatAgent: vi.fn(async () => ANSWER) as any,
+    createChatThread: vi.fn(async () => ({ id: THREAD_ID })) as any,
+    touchChatThread: vi.fn(async () => undefined) as any,
+    streamChat: vi.fn(async function* () {
+      yield { kind: "token", text: "They" } as const;
+      yield { kind: "token", text: " shipped SSO" } as const;
+      yield { kind: "result", result: ANSWER } as const;
+    }) as any,
     finalizeRunTimeoutMs: 5_000,
     ...over,
   };
@@ -115,37 +122,103 @@ async function waitUntil(fn: () => boolean, label: string): Promise<void> {
   throw new Error(`waitUntil timed out: ${label}`);
 }
 
+const streamInput = (deps: ChatRouterDeps) => (deps.streamChat as any).mock.calls[0][0];
+
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.useRealTimers());
 
 describe("POST /api/chat", () => {
-  it("answer path: one result event with the validated result, then done, run completed", async () => {
+  it("answer path: open, tokens, one result, done in order; run completed; thread touched", async () => {
     const deps = makeDeps();
-    const res = await call(buildApp(deps).app, { query: "did they ship SSO?", competitor_ids: [C1] });
+    const res = await call(buildApp(deps).app, {
+      query: "did they ship SSO?",
+      competitor_ids: [C1],
+      thread_id: THREAD_ID,
+    });
 
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toContain("text/event-stream");
 
+    const tokens = [...res.text.matchAll(/^event: token\ndata: (.+)\n\n/gm)].map(
+      (m) => JSON.parse(m[1]).text
+    );
+    expect(tokens).toEqual(["They", " shipped SSO"]);
+
     expect([...res.text.matchAll(/^event: result$/gm)]).toHaveLength(1);
     const data = JSON.parse(/event: result\ndata: (.+)\n\n/.exec(res.text)![1]);
     expect(data).toEqual(ANSWER);
-    expect(res.text.indexOf("event: result")).toBeLessThan(res.text.indexOf("event: done"));
+
+    const open = res.text.indexOf(": open");
+    const firstToken = res.text.indexOf("event: token");
+    const result = res.text.indexOf("event: result");
+    const done = res.text.indexOf("event: done");
+    expect(open).toBeGreaterThanOrEqual(0);
+    expect(open).toBeLessThan(firstToken);
+    expect(firstToken).toBeLessThan(result);
+    expect(result).toBeLessThan(done);
 
     expect(deps.createAgentRun).toHaveBeenCalledWith({ competitor_id: C1, trigger: "manual" });
     expect(deps.completeAgentRun).toHaveBeenCalledTimes(1);
     expect(deps.completeAgentRun).toHaveBeenCalledWith(RUN_ID, "completed");
+    expect(deps.touchChatThread).toHaveBeenCalledWith(THREAD_ID);
   });
 
-  it("refusal path: delivered as a normal result event (not error, not non-200), run completed", async () => {
-    const deps = makeDeps({ runChatAgent: vi.fn(async () => REFUSAL) as any });
-    const res = await call(buildApp(deps).app, { query: "anything?", competitor_ids: [C1] });
+  it("refusal path: zero tokens, delivered as a normal result event, run completed", async () => {
+    const deps = makeDeps({
+      streamChat: vi.fn(async function* () {
+        yield { kind: "result", result: REFUSAL } as const;
+      }) as any,
+    });
+    const res = await call(buildApp(deps).app, {
+      query: "anything?",
+      competitor_ids: [C1],
+      thread_id: THREAD_ID,
+    });
 
     expect(res.status).toBe(200);
     expect(res.text).not.toContain("event: error");
+    expect(res.text).not.toContain("event: token");
     const data = JSON.parse(/event: result\ndata: (.+)\n\n/.exec(res.text)![1]);
     expect(data).toEqual(REFUSAL);
     expect(res.text).toContain("event: done");
     expect(deps.completeAgentRun).toHaveBeenCalledWith(RUN_ID, "completed");
+  });
+
+  it("thread_id omitted: auto-creates a thread with the workspace id and uses it", async () => {
+    const deps = makeDeps();
+    const res = await call(buildApp(deps).app, { query: "hi", competitor_ids: [C1] });
+
+    expect(res.status).toBe(200);
+    expect(deps.createChatThread).toHaveBeenCalledWith(WORKSPACE_ID);
+    expect(streamInput(deps).thread_id).toBe(THREAD_ID);
+    expect(deps.touchChatThread).toHaveBeenCalledWith(THREAD_ID);
+  });
+
+  it("thread_id provided: does not create a thread, streams with the provided id", async () => {
+    const deps = makeDeps();
+    const res = await call(buildApp(deps).app, {
+      query: "hi",
+      competitor_ids: [C1],
+      thread_id: THREAD_ID,
+    });
+
+    expect(res.status).toBe(200);
+    expect(deps.createChatThread).not.toHaveBeenCalled();
+    expect(streamInput(deps).thread_id).toBe(THREAD_ID);
+    expect(deps.touchChatThread).toHaveBeenCalledWith(THREAD_ID);
+  });
+
+  it("invalid thread_id: 400 before any run or thread is created", async () => {
+    const deps = makeDeps();
+    const res = await call(buildApp(deps).app, {
+      query: "hi",
+      competitor_ids: [C1],
+      thread_id: "not-a-uuid",
+    });
+
+    expect(res.status).toBe(400);
+    expect(deps.createAgentRun).not.toHaveBeenCalled();
+    expect(deps.createChatThread).not.toHaveBeenCalled();
   });
 
   it("validation fail: JSON 400 before any SSE header, no run created", async () => {
@@ -182,6 +255,7 @@ describe("POST /api/chat", () => {
     expect(body.error).toBe("unknown_competitor");
     expect(body.missing).toEqual([C2]);
     expect(deps.createAgentRun).not.toHaveBeenCalled();
+    expect(deps.createChatThread).not.toHaveBeenCalled();
   });
 
   it("competitor from another workspace: same unknown_competitor 404 as a nonexistent id", async () => {
@@ -221,7 +295,7 @@ describe("POST /api/chat", () => {
 
   it("operational failure: run failed + generic error event with the message redacted", async () => {
     const deps = makeDeps({
-      runChatAgent: vi.fn(async () => {
+      streamChat: vi.fn(async function* () {
         throw new Error("pinecone exploded: SUPERSECRET connection string");
       }) as any,
     });
@@ -238,12 +312,13 @@ describe("POST /api/chat", () => {
   });
 
   it("client disconnect mid-run: aborts the agent, finalizes the run once, writes no result", async () => {
-    const runGate = deferred<ChatAgentResult>();
+    const runGate = deferred<void>();
     let received: AbortSignal | undefined;
     const deps = makeDeps({
-      runChatAgent: vi.fn(async (_input: any, opts: any) => {
+      streamChat: vi.fn(async function* (_input: any, opts: any) {
         received = opts?.signal;
-        return runGate.promise;
+        await runGate.promise;
+        yield { kind: "result", result: ANSWER } as const;
       }) as any,
     });
     const { app, writes } = buildApp(deps);
@@ -262,13 +337,13 @@ describe("POST /api/chat", () => {
       req.on("error", () => {});
       req.end(JSON.stringify({ query: "hi", competitor_ids: [C1] }));
 
-      await waitUntil(() => (deps.runChatAgent as any).mock.calls.length > 0, "agent invoked");
-      req.socket?.destroy(); // client hangs up while runChatAgent is still pending
+      await waitUntil(() => received !== undefined, "agent invoked");
+      req.socket?.destroy(); // client hangs up while streamChat is still pending
 
       await waitUntil(() => received?.aborted === true, "agent signal aborted");
 
       // agent resolves only after the client is already gone
-      runGate.resolve(ANSWER);
+      runGate.resolve();
       await waitUntil(() => (deps.completeAgentRun as any).mock.calls.length > 0, "run finalized");
 
       expect(deps.completeAgentRun).toHaveBeenCalledTimes(1);
@@ -280,10 +355,15 @@ describe("POST /api/chat", () => {
     }
   });
 
-  it("heartbeat: writes ': ping' while runChatAgent is pending and clears the interval on end", async () => {
+  it("heartbeat: writes ': ping' while streaming and clears the interval on end", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const runGate = deferred<ChatAgentResult>();
-    const deps = makeDeps({ runChatAgent: vi.fn(async () => runGate.promise) as any });
+    const runGate = deferred<void>();
+    const deps = makeDeps({
+      streamChat: vi.fn(async function* () {
+        await runGate.promise;
+        yield { kind: "result", result: ANSWER } as const;
+      }) as any,
+    });
     const { app, writes } = buildApp(deps);
     const server = app.listen(0);
     const controller = new AbortController();
@@ -305,7 +385,7 @@ describe("POST /api/chat", () => {
       vi.advanceTimersByTime(15_000);
       expect(pings()).toBe(2);
 
-      runGate.resolve(ANSWER);
+      runGate.resolve();
       await waitUntil(() => writes.join("").includes("event: done"), "result delivered");
 
       const afterDone = pings();
