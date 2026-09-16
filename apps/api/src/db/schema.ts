@@ -117,9 +117,6 @@ export const SIGNAL_PIPELINE_STAGES = [
 ] as const;
 export type SignalPipelineStage = (typeof SIGNAL_PIPELINE_STAGES)[number];
 
-export type CompanyDocument = typeof companyDocumentsTable.$inferSelect;
-export type TrackedEntity = typeof trackedEntitiesTable.$inferSelect;
-
 // Durable intent for every persisted signal. The signal UUID is both the primary
 // key and the FK, enforcing exactly one pending pipeline position per signal.
 export const signalPipelineOutboxTable = pgTable(
@@ -596,6 +593,9 @@ export const trackedEntitiesTable = pgTable(
     index("tracked_entities_status_idx").on(table.workspace_id, table.status),
   ]
 );
+
+export type CompanyDocument = typeof companyDocumentsTable.$inferSelect;
+export type TrackedEntity = typeof trackedEntitiesTable.$inferSelect;
 
 // ── competitor_discovery_log ─────────────────────────────────────────────
 // One row per field CompetitorDiscoveryAgent attempted to discover — what

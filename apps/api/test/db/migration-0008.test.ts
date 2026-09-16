@@ -10,7 +10,9 @@ describe("0008 company profile v2 + competitor discovery migration", () => {
     const sql = await readFile(resolve(drizzleDir, migrationName!), "utf8");
 
     for (const requiredFragment of [
-      'ADD COLUMN "signal_goal"',
+      '"company_profile" ADD COLUMN "signal_goal"',
+      '"company_profile" ADD COLUMN "signal_goal_confidence"',
+      '"company_profile" ADD COLUMN "signal_goal_inferred_at"',
       'CREATE TABLE "company_documents"',
       'CREATE TABLE "tracked_entities"',
       "company_documents_doc_type_check",
