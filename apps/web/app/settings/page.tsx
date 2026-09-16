@@ -9,7 +9,10 @@ import {
   saveCompanyProfile,
   type Competitor,
 } from "../../lib/api";
+import { getSupabaseBrowserClient } from "../../lib/supabase-browser";
 import type { CompanyProfile } from "@signal/shared";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 
 interface PricingTierDraft {
   name: string;
@@ -42,6 +45,10 @@ export default function Page() {
   );
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [invitePending, setInvitePending] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     Promise.all([getCompanyProfile(), listCompetitors()]).then(([profile, competitorList]) => {
@@ -111,6 +118,39 @@ export default function Page() {
     } catch {
       setError("Couldn't save your profile. Check the form and try again.");
     }
+  }
+
+  async function handleInvite() {
+    setInvitePending(true);
+    setInviteError(null);
+    setCopied(false);
+    const supabase = getSupabaseBrowserClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) {
+      setInviteError("Session expired — please log in again.");
+      setInvitePending(false);
+      return;
+    }
+    const res = await fetch(`${API_BASE}/api/workspaces/invites`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (!res.ok) {
+      setInviteError("Could not create an invite — try again.");
+      setInvitePending(false);
+      return;
+    }
+    const { token } = await res.json();
+    setInviteLink(`${window.location.origin}/join/${token}`);
+    setInvitePending(false);
+  }
+
+  function handleCopyInvite() {
+    if (!inviteLink) return;
+    navigator.clipboard.writeText(inviteLink);
+    setCopied(true);
   }
 
   if (!loaded) return <p className="text-sm text-slate-500">Loading…</p>;
@@ -232,6 +272,34 @@ export default function Page() {
         {saved ? <p className="text-sm text-emerald-600">Saved.</p> : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
       </form>
+      <div className="flex flex-col gap-2 border-t border-slate-200 pt-4">
+        <h2 className="text-lg font-semibold text-slate-900">Invite teammate</h2>
+        <button
+          type="button"
+          onClick={handleInvite}
+          disabled={invitePending}
+          className="self-start rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {invitePending ? "Generating…" : "Invite teammate"}
+        </button>
+        {inviteError ? <p className="text-sm text-red-600">{inviteError}</p> : null}
+        {inviteLink ? (
+          <div className="flex items-center gap-2">
+            <input
+              readOnly
+              value={inviteLink}
+              className="rounded-md border border-slate-200 px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={handleCopyInvite}
+              className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
