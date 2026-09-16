@@ -7,7 +7,8 @@
 process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { HumanMessage } from "@langchain/core/messages";
+import { randomUUID } from "node:crypto";
+import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 import type { RerankedChunk } from "@/retrieval";
 
 // Real-DB checkpoint round-trips are a handful of SQL transactions per invoke;
@@ -58,12 +59,18 @@ const { trackLatencyMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/latency-tracker", () => ({ trackLatency: trackLatencyMock }));
 
-const { anthropicStreamMock, chatAnthropicMock } = vi.hoisted(() => {
+const { anthropicStreamMock, anthropicInvokeMock, chatAnthropicMock } = vi.hoisted(() => {
   const anthropicStreamMock = vi.fn();
+  const anthropicInvokeMock = vi.fn();
   class ChatAnthropicMockClass {
     stream = anthropicStreamMock;
+    invoke = anthropicInvokeMock;
   }
-  return { anthropicStreamMock, chatAnthropicMock: vi.fn(ChatAnthropicMockClass) };
+  return {
+    anthropicStreamMock,
+    anthropicInvokeMock,
+    chatAnthropicMock: vi.fn(ChatAnthropicMockClass),
+  };
 });
 vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 
@@ -106,7 +113,7 @@ function streamOf(content: unknown, usage?: unknown): () => AsyncGenerator<unkno
   };
 }
 
-function turn(messages: HumanMessage[], runId: string) {
+function turn(messages: BaseMessage[], runId: string) {
   return {
     messages,
     workspace_id: WORKSPACE_ID,
@@ -151,6 +158,10 @@ describe("agents/chat/chat-graph", () => {
     anthropicStreamMock.mockImplementation(
       streamOf(ANSWER, { input_tokens: 20, output_tokens: 5 })
     );
+    anthropicInvokeMock.mockResolvedValue({
+      content: "PRIOR SUMMARY",
+      usage_metadata: { input_tokens: 30, output_tokens: 10 },
+    });
   });
 
   dbIt("makes the first turn's messages visible to the second turn's generate node", async () => {
@@ -162,6 +173,63 @@ describe("agents/chat/chat-graph", () => {
     expect(turn2Prompt[1][1]).toContain("What changed in Acme pricing?");
     expect(turn2Prompt[1][1]).toContain("Any recent hiring changes?");
     expect(turn2Prompt[1][1]).toContain(ANSWER);
+  });
+
+  dbIt("compacts a thread over the window into a cheap-model summary, not the raw prefix", async () => {
+    const seeded = [
+      new HumanMessage("seed-h1"),
+      new AIMessage("seed-a1"),
+      new HumanMessage("seed-h2"),
+      new AIMessage("seed-a2"),
+      new HumanMessage("seed-h3"),
+      new AIMessage("seed-a3"),
+      new HumanMessage("seed-h4"),
+      new AIMessage("seed-a4"),
+      new HumanMessage("seed-h5"),
+      new AIMessage("seed-a5"),
+      new HumanMessage("seed-h6"),
+      new AIMessage("seed-a6"),
+      new HumanMessage("seed-h7"),
+    ];
+
+    await invokeGraph(
+      {
+        messages: seeded,
+        workspace_id: WORKSPACE_ID,
+        competitor_ids: [COMPETITOR_1],
+        run_id: RUN_ID,
+        summary: "",
+      },
+      randomUUID()
+    );
+
+    expect(anthropicInvokeMock).toHaveBeenCalledTimes(1);
+    expect(selectModelMock).toHaveBeenCalledWith("claude-haiku", true);
+
+    // The summarizer saw only the messages beyond the verbatim window.
+    const summaryInput = anthropicInvokeMock.mock.calls[0][0] as Array<[string, string]>;
+    expect(summaryInput[1][1]).toContain("seed-h1");
+    expect(summaryInput[1][1]).toContain("seed-a1");
+    expect(summaryInput[1][1]).not.toContain("seed-h2");
+
+    // The generate prompt renders the summary ahead of the last 10 verbatim
+    // messages, never the collapsed prefix.
+    const genInput = anthropicStreamMock.mock.calls[0][0] as Array<[string, string]>;
+    const human = genInput[1][1];
+    expect(human).toContain("CONVERSATION SUMMARY:");
+    expect(human).toContain("PRIOR SUMMARY");
+    expect(human).toContain("seed-h2");
+    expect(human).toContain("seed-a6");
+    expect(human).not.toContain("seed-h1");
+    expect(human).not.toContain("seed-a1");
+  });
+
+  dbIt("does not summarize while the thread fits the window", async () => {
+    const threadId = randomUUID();
+    await invokeGraph(turn([new HumanMessage("First question?")], RUN_ID), threadId);
+    await invokeGraph(turn([new HumanMessage("Second question?")], RUN_ID_2), threadId);
+
+    expect(anthropicInvokeMock).not.toHaveBeenCalled();
   });
 
   dbIt("returns a citation-enforced answer after streaming and enforcing", async () => {

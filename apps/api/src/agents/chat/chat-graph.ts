@@ -1,6 +1,6 @@
 // Checkpointed chat graph — the multi-turn successor to the single-turn
 // runChatAgent. The retrieval → rerank → citation-enforcement pipeline is
-// unchanged from chat-agent.ts Phase 1; this file restructures it into three
+// unchanged from chat-agent.ts Phase 1; this file restructures it into four
 // LangGraph nodes and adds a PostgresSaver-checkpointed `messages` channel so
 // a thread carries its conversation across invokes.
 //
@@ -8,10 +8,13 @@
 //   1. retrieveNode — hybridRetrieve + rerankChunks; short-circuits to a
 //      first-class RefusalResult (never a thrown error, never an LLM call)
 //      when there is no usable evidence.
-//   2. generateNode — builds the prompt from summary + last-N verbatim
+//   2. compactNode — once the thread exceeds MESSAGE_WINDOW_SIZE, collapses
+//      everything older than the last window into a rolling `summary` via one
+//      cheap-model call. No-op when the window holds the whole thread.
+//   3. generateNode — builds the prompt from summary + last-N verbatim
 //      messages + formatted evidence + company context, streams Claude, and
 //      tracks cost/latency. Retried natively on retryable LLM errors.
-//   3. citationCheckNode — enforceCitations on the assembled draft, sets
+//   4. citationCheckNode — enforceCitations on the assembled draft, sets
 //      citation_result to a verified answer or a refusal.
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -54,13 +57,20 @@ const LLM_MAX_RETRIES = 2;
 const DEFAULT_MAX_TOKENS = 2_000;
 const HARD_MAX_TOKENS = 4_096;
 const PREFERRED_MODEL = "claude-sonnet";
-const HISTORY_MESSAGES = 10;
+// "claude-haiku" has no DOWNGRADE_MAP entry, so selectModel(name, true) always
+// hands it straight back — compaction is cheap by construction, never upgraded.
+const COMPACT_MODEL = "claude-haiku";
+export const MESSAGE_WINDOW_SIZE = 10;
 
 export const CHAT_RECURSION_LIMIT = 10;
 
 const DEFAULT_SYSTEM_PROMPT =
   "You are Signal's competitive-intelligence analyst. Answer only from the supplied evidence. " +
   "Be concise, distinguish direct observations from inference, and do not use outside knowledge.";
+
+const COMPACTION_SYSTEM_PROMPT =
+  "Summarize the conversation so far into a concise rolling summary that preserves specific " +
+  "facts, decisions, and open questions a later turn will need. Do not add outside knowledge.";
 
 // The delimiter carries a per-request nonce: chunk text is attacker-authorable
 // (reddit/HN/job posts), so a static EVIDENCE_END marker inside a signal body
@@ -213,9 +223,38 @@ function lastHumanText(messages: BaseMessage[]): string {
 function formatHistory(messages: BaseMessage[]): string {
   return messages
     .slice(0, -1)
-    .slice(-HISTORY_MESSAGES)
+    .slice(-MESSAGE_WINDOW_SIZE)
     .map((m) => `${m.getType() === "human" ? "User" : "Assistant"}: ${messageText(m)}`)
     .join("\n");
+}
+
+// The verbatim window (formatHistory) is "the last MESSAGE_WINDOW_SIZE messages
+// before the in-flight question" — the question renders separately as QUESTION:.
+// Collapse is therefore bounded to the messages before that window, not the raw
+// messages.slice(0, messages.length - MESSAGE_WINDOW_SIZE) slice, which would
+// overlap the window by one turn early and put the same message in both summary
+// and verbatim history.
+export function needsCompaction(messages: BaseMessage[]): boolean {
+  return messages.slice(0, -1).length > MESSAGE_WINDOW_SIZE;
+}
+
+export function messagesToSummarize(messages: BaseMessage[]): BaseMessage[] {
+  const prior = messages.slice(0, -1);
+  return prior.slice(0, prior.length - MESSAGE_WINDOW_SIZE);
+}
+
+// Extracted so tests can assert prompt composition without a checkpointer
+// round-trip: summary (when non-empty) ahead of the verbatim last-window —
+// never both the full history and the summary at once.
+export function buildConversationBlock(messages: BaseMessage[], summary: string): string {
+  const history = formatHistory(messages);
+  const trimmed = summary.trim();
+  return [
+    trimmed ? `CONVERSATION SUMMARY:\n${trimmed}` : "",
+    history ? `CONVERSATION:\n${history}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function assistantMessage(result: ChatAgentResult): AIMessage {
@@ -247,6 +286,52 @@ async function retrieveNode(
   signal?.throwIfAborted();
 
   return { evidence };
+}
+
+async function summarizeConversation(
+  state: ChatGraphStateType,
+  config: LangGraphRunnableConfig
+): Promise<string> {
+  const transcript = messagesToSummarize(state.messages)
+    .map((m) => `${m.getType() === "human" ? "User" : "Assistant"}: ${messageText(m)}`)
+    .join("\n");
+
+  const modelAlias = await selectModel(COMPACT_MODEL, true);
+  const model = new ChatAnthropic({
+    model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
+    clientOptions: { timeout: LLM_TIMEOUT_MS },
+    maxTokens: maxOutputTokens(),
+  });
+
+  const response = (await model.invoke(
+    [
+      ["system", COMPACTION_SYSTEM_PROMPT],
+      ["human", transcript],
+    ],
+    { signal: config.signal }
+  )) as AIMessage;
+
+  const summary = messageText(response);
+  await trackCost(
+    "chat_agent",
+    modelAlias,
+    response.usage_metadata?.input_tokens ?? 0,
+    response.usage_metadata?.output_tokens ?? 0,
+    {
+      competitorId: state.competitor_ids[0],
+      identity: { kind: "run", runId: state.run_id },
+    }
+  );
+  return summary;
+}
+
+async function compactNode(
+  state: ChatGraphStateType,
+  config: LangGraphRunnableConfig
+): Promise<Partial<ChatGraphStateType>> {
+  if (!needsCompaction(state.messages)) return {};
+  const summary = await summarizeConversation(state, config);
+  return { summary };
 }
 
 async function generateNode(
@@ -285,11 +370,8 @@ async function generateNode(
         maxTokens: maxOutputTokens(),
       });
 
-      const summary = state.summary.trim();
-      const history = formatHistory(state.messages);
       const human = [
-        summary ? `CONVERSATION SUMMARY:\n${summary}` : "",
-        history ? `CONVERSATION:\n${history}` : "",
+        buildConversationBlock(state.messages, state.summary),
         `QUESTION:\n${query}`,
         formatEvidence(boundedEvidence, nonce),
       ]
@@ -338,19 +420,21 @@ async function citationCheckNode(
 }
 
 // Both refusal short-circuits leave `evidence` empty; a non-empty channel is the
-// one condition for proceeding to generation. Evidence is last-value, so
+// one condition for proceeding past retrieval. Evidence is last-value, so
 // conditional-on-evidence (rather than on citation_result) avoids a stale
 // turn-N-1 citation_result from the checkpoint short-circuiting turn N.
-function afterRetrieve(state: ChatGraphStateType): "generate" | "end" {
-  return state.evidence.length > 0 ? "generate" : "end";
+function afterRetrieve(state: ChatGraphStateType): "compact" | "end" {
+  return state.evidence.length > 0 ? "compact" : "end";
 }
 
 const builder = new StateGraph(ChatGraphState)
   .addNode("retrieve", retrieveNode)
+  .addNode("compact", compactNode, { retryPolicy: RETRY_POLICY })
   .addNode("generate", generateNode, { retryPolicy: RETRY_POLICY })
   .addNode("citationCheck", citationCheckNode)
   .addEdge(START, "retrieve")
-  .addConditionalEdges("retrieve", afterRetrieve, { generate: "generate", end: END })
+  .addConditionalEdges("retrieve", afterRetrieve, { compact: "compact", end: END })
+  .addEdge("compact", "generate")
   .addEdge("generate", "citationCheck")
   .addEdge("citationCheck", END);
 
