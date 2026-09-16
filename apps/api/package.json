@@ -33,6 +33,7 @@
     "express": "^4.21.2",
     "flexsearch": "^0.7.43",
     "ioredis": "^6.0.0",
+    "jose": "^5.10.0",
     "pg": "^8.13.1",
     "playwright": "^1.63.0",
     "rss-parser": "^3.13.0",
