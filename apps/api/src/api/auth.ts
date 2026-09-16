@@ -9,22 +9,17 @@
 // Supabase project exists yet to confirm against (that happens at Task 19).
 // If a deployed project turns out to be on legacy HS256, swap
 // createRemoteJWKSet for jwtVerify(token, encoded SUPABASE_JWT_SECRET).
-import { existsSync } from "node:fs";
-import path from "node:path";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import * as jose from "jose";
 import { getWorkspaceIdForUser } from "../db/queries";
 import { logger } from "../lib/logger";
+import { loadRootEnv } from "../lib/env";
 
 // db/client.ts normally loads the repo-root .env as a side effect of the
 // first real import in the process — but a test that mocks @/db/queries (as
 // this middleware's own tests do) never runs that import, so this module
-// needs the same idempotent load rather than relying on another module's
-// import order. loadEnvFile never overwrites an already-set process.env key.
-const rootEnvPath = path.resolve(__dirname, "../../../../.env");
-if (existsSync(rootEnvPath)) {
-  process.loadEnvFile(rootEnvPath);
-}
+// needs the same load rather than relying on another module's import order.
+loadRootEnv();
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 if (!SUPABASE_URL) {
