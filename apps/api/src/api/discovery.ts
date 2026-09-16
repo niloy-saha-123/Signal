@@ -58,6 +58,12 @@ export function createDiscoveryRouter(
   router.post(
     "/:threadId/resume",
     wrap(async (req, res) => {
+      // thread_id is the workspace UUID by construction — resuming another
+      // workspace's interrupted graph would be an IDOR. Enforce the match.
+      if (req.params.threadId !== req.workspaceId) {
+        res.status(403).json({ error: "forbidden" });
+        return;
+      }
       const parsed = ResumeBodySchema.safeParse(req.body);
       if (!parsed.success) {
         res.status(400).json({ error: "validation", issues: parsed.error.issues });

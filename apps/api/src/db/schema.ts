@@ -503,10 +503,12 @@ export const companyProfileTable = pgTable(
       .notNull()
       .default(sql`'{}'::uuid[]`),
     // Why the user is using Signal at all — catching up, defending a niche,
-    // benchmarking a bigger player. Inferred from usage, user-correctable;
-    // see the LangGraph Store in agents/discovery-search/memory-store.ts for
-    // the actual inference/correction mechanism — these columns are the
-    // durable snapshot the rest of the app reads.
+    // benchmarking a bigger player. Inferred from usage and user-correctable.
+    // These columns are the durable Postgres snapshot intended once the
+    // signal-goal inference/correction path lands; they are not yet read or
+    // written anywhere. For now getCompanyContext reads the inferred goal from
+    // the LangGraph Store in agents/discovery-search/memory-store.ts
+    // (getSignalGoalMemory).
     signal_goal: text("signal_goal"),
     signal_goal_confidence: real("signal_goal_confidence"),
     signal_goal_inferred_at: timestamp("signal_goal_inferred_at", { withTimezone: true }),

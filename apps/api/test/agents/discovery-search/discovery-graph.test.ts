@@ -128,4 +128,35 @@ describe("discovery-graph", () => {
 
     expect(result).toEqual({ candidates: [] });
   });
+
+  it("serializes Tavily results into readable text instead of [object Object]", async () => {
+    tavilyInvokeMock.mockResolvedValue({
+      query: "companies competing with...",
+      results: [
+        { title: "Acme Inc", content: "Sells competitor tracking", score: 0.9, raw_content: null },
+      ],
+      response_time: 0.1,
+    });
+    anthropicInvokeMock.mockResolvedValue({ parsed: { candidates: [] } });
+
+    await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
+
+    expect(anthropicInvokeMock).toHaveBeenCalledTimes(1);
+    const messages = anthropicInvokeMock.mock.calls[0][0];
+    const userMessage = messages.find((m: { role: string }) => m.role === "user");
+    expect(userMessage.content).toContain("Acme Inc");
+    expect(userMessage.content).toContain("Sells competitor tracking");
+    expect(userMessage.content).not.toContain("[object Object]");
+  });
+
+  it("renders the Tavily error message when the search fails", async () => {
+    tavilyInvokeMock.mockResolvedValue({ error: "Tavily API key not found" });
+    anthropicInvokeMock.mockResolvedValue({ parsed: { candidates: [] } });
+
+    await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
+
+    const messages = anthropicInvokeMock.mock.calls[0][0];
+    const userMessage = messages.find((m: { role: string }) => m.role === "user");
+    expect(userMessage.content).toContain("Search error: Tavily API key not found");
+  });
 });

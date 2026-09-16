@@ -45,19 +45,32 @@ describe("POST /api/discovery/:threadId/resume", () => {
     const deps = { enqueueDiscovery: vi.fn(), resumeDiscovery: vi.fn().mockResolvedValue(undefined) };
     const app = buildTestApp(deps);
 
-    const res = await request(app).post("/thread-1/resume").send({ decision: "confirm" });
+    const res = await request(app).post(`/${WORKSPACE_ID}/resume`).send({ decision: "confirm" });
 
     expect(res.status).toBe(200);
-    expect(deps.resumeDiscovery).toHaveBeenCalledWith("thread-1", "confirm");
+    expect(deps.resumeDiscovery).toHaveBeenCalledWith(WORKSPACE_ID, "confirm");
   });
 
   it("rejects an invalid decision without resuming", async () => {
     const deps = { enqueueDiscovery: vi.fn(), resumeDiscovery: vi.fn() };
     const app = buildTestApp(deps);
 
-    const res = await request(app).post("/thread-1/resume").send({ decision: "maybe" });
+    const res = await request(app).post(`/${WORKSPACE_ID}/resume`).send({ decision: "maybe" });
 
     expect(res.status).toBe(400);
+    expect(deps.resumeDiscovery).not.toHaveBeenCalled();
+  });
+
+  it("forbids resuming a thread that belongs to another workspace", async () => {
+    const deps = { enqueueDiscovery: vi.fn(), resumeDiscovery: vi.fn().mockResolvedValue(undefined) };
+    const app = buildTestApp(deps);
+
+    const res = await request(app)
+      .post("/22222222-2222-2222-2222-222222222222/resume")
+      .send({ decision: "confirm" });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "forbidden" });
     expect(deps.resumeDiscovery).not.toHaveBeenCalled();
   });
 });

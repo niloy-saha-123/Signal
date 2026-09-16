@@ -11,6 +11,7 @@ import { z } from "zod";
 import { classifyDocument as classifyDocumentImpl } from "../lib/document-classifier";
 import { parseDocument } from "../lib/document-parser";
 import { embedText as embedTextImpl } from "../lib/embeddings";
+import { invalidateCompanyContextCache as invalidateCompanyContextCacheImpl } from "../lib/company-context";
 import { pineconeUpsert as pineconeUpsertRecords } from "../vector/pinecone";
 import * as queries from "../db/queries";
 import type { CompanyProfileInput } from "../db/queries";
@@ -30,6 +31,7 @@ export interface CompanyDocumentsRouterDeps {
     fields: Partial<CompanyProfileInput>
   ) => Promise<unknown>;
   createCompanyDocument: (input: queries.CompanyDocumentCreateInput) => Promise<{ id: string }>;
+  invalidateCompanyContextCache: (workspaceId: string) => Promise<unknown>;
 }
 
 export const defaultCompanyDocumentsRouterDeps: CompanyDocumentsRouterDeps = {
@@ -45,6 +47,7 @@ export const defaultCompanyDocumentsRouterDeps: CompanyDocumentsRouterDeps = {
   upsertCompanyProfileForWorkspace: (workspaceId, fields) =>
     queries.upsertCompanyProfileForWorkspace(fields as CompanyProfileInput, workspaceId),
   createCompanyDocument: queries.createCompanyDocument,
+  invalidateCompanyContextCache: invalidateCompanyContextCacheImpl,
 };
 
 const TextBodySchema = z.object({ text: z.string().trim().min(1).max(50_000) }).strict();
@@ -75,6 +78,8 @@ async function ingest(
     const vector = await deps.embedText(text);
     await deps.pineconeUpsert(namespace, `${workspaceId}:${filename}`, vector, text);
   }
+
+  await deps.invalidateCompanyContextCache(workspaceId);
 
   return deps.createCompanyDocument({
     workspace_id: workspaceId,

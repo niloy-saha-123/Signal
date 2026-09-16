@@ -52,6 +52,29 @@ const RETRY_POLICY = {
   },
 };
 
+// TavilySearch.invoke returns either `{ query, results: [{ title, content, ... }], ... }`
+// or `{ error: string }` on failure. Interpolating that object into a template
+// string yields "[object Object]", so this flattens it into text the LLM can read.
+function formatTavilyResults(searchResults: unknown): string {
+  if (
+    typeof searchResults === "object" &&
+    searchResults !== null &&
+    "error" in searchResults
+  ) {
+    return `Search error: ${(searchResults as { error: string }).error}`;
+  }
+  const results = (searchResults as { results?: unknown })?.results;
+  if (!Array.isArray(results) || results.length === 0) {
+    return "(no search results)";
+  }
+  return results
+    .map((item, i) => {
+      const { title, content } = (item ?? {}) as { title?: string; content?: string };
+      return `${i + 1}. ${title ?? "Untitled"}\n   ${content ?? ""}`;
+    })
+    .join("\n");
+}
+
 async function searchNode(
   state: typeof DiscoveryGraphState.State
 ): Promise<Partial<typeof DiscoveryGraphState.State>> {
@@ -80,7 +103,7 @@ async function searchNode(
         "competitor candidates with their domain and a one-sentence reason each. " +
         "Only propose companies that genuinely compete for the same customers.",
     },
-    { role: "user", content: `Company:\n${companyContext}\n\nSearch results:\n${searchResults}` },
+    { role: "user", content: `Company:\n${companyContext}\n\nSearch results:\n${formatTavilyResults(searchResults)}` },
   ]);
 
   if (!result.parsed) return { candidates: [] };

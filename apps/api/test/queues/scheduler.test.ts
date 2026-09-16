@@ -29,7 +29,6 @@ vi.mock("@/queues/registry", () => ({
     "collect-changelog": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
     "pipeline-recovery": { upsertJobScheduler: upsertJobSchedulerMock },
-    "discovery-search": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -42,8 +41,6 @@ import {
   collectorSchedulerId,
   PIPELINE_RECOVERY_CRON,
   PIPELINE_RECOVERY_SCHEDULER_ID,
-  DISCOVERY_SEARCH_CRON,
-  DISCOVERY_SEARCH_SCHEDULER_ID,
 } from "@/queues/scheduler";
 
 describe("queues/scheduler", () => {
@@ -161,13 +158,13 @@ describe("queues/scheduler", () => {
     expect(config["company-profile-update"]).toBeUndefined();
   });
 
-  it("idempotently upserts every collector, pipeline-recovery, and the weekly discovery sweep under a stable scheduler id", async () => {
+  it("idempotently upserts every collector and pipeline-recovery under a stable scheduler id", async () => {
     delete process.env.COLLECT_INTERVAL_HOURS;
     upsertJobSchedulerMock.mockClear();
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(7);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(6);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
@@ -178,20 +175,6 @@ describe("queues/scheduler", () => {
       PIPELINE_RECOVERY_SCHEDULER_ID,
       { pattern: PIPELINE_RECOVERY_CRON },
       { name: "pipeline-recovery", data: {} }
-    );
-  });
-
-  it("upserts the weekly discovery sweep with a day-of-week cron, not a collector cadence", async () => {
-    delete process.env.COLLECT_INTERVAL_HOURS;
-    upsertJobSchedulerMock.mockClear();
-
-    await registerQueueSchedules();
-
-    expect(DISCOVERY_SEARCH_CRON).toBe("0 0 * * 0");
-    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
-      DISCOVERY_SEARCH_SCHEDULER_ID,
-      { pattern: DISCOVERY_SEARCH_CRON },
-      { name: "discovery-search", data: {} }
     );
   });
 });

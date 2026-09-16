@@ -12,6 +12,7 @@ describe("POST /api/company-documents/text", () => {
       getCompanyProfileForWorkspace: vi.fn(),
       upsertCompanyProfileForWorkspace: vi.fn(),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-1" }),
+      invalidateCompanyContextCache: vi.fn().mockResolvedValue(0),
     };
     const app = express();
     app.use(express.json());
@@ -28,6 +29,9 @@ describe("POST /api/company-documents/text", () => {
     expect(res.status).toBe(201);
     expect(deps.embedText).toHaveBeenCalled();
     expect(deps.upsertCompanyProfileForWorkspace).not.toHaveBeenCalled();
+    expect(deps.invalidateCompanyContextCache).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111"
+    );
   });
 
   it("routes structured text into the company profile, not the vector store", async () => {
@@ -42,6 +46,7 @@ describe("POST /api/company-documents/text", () => {
       getCompanyProfileForWorkspace: vi.fn().mockResolvedValue(null),
       upsertCompanyProfileForWorkspace: vi.fn().mockResolvedValue(undefined),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-2" }),
+      invalidateCompanyContextCache: vi.fn().mockResolvedValue(0),
     };
     const app = express();
     app.use(express.json());
@@ -59,6 +64,9 @@ describe("POST /api/company-documents/text", () => {
       expect.objectContaining({ product_description: "A competitor tracker" })
     );
     expect(deps.embedText).not.toHaveBeenCalled();
+    expect(deps.invalidateCompanyContextCache).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111"
+    );
   });
 
   it("defaults product_description to \"\" when the classifier doesn't extract one and no profile exists yet", async () => {
@@ -73,6 +81,7 @@ describe("POST /api/company-documents/text", () => {
       getCompanyProfileForWorkspace: vi.fn().mockResolvedValue(null),
       upsertCompanyProfileForWorkspace: vi.fn().mockResolvedValue(undefined),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-3" }),
+      invalidateCompanyContextCache: vi.fn().mockResolvedValue(0),
     };
     const app = express();
     app.use(express.json());

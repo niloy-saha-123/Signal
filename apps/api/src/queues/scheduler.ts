@@ -92,19 +92,13 @@ export function collectorSchedulerId(queueName: QueueName): string {
 export const PIPELINE_RECOVERY_CRON = "*/2 * * * *";
 export const PIPELINE_RECOVERY_SCHEDULER_ID = "signal-pipeline-recovery-v1";
 
-// Weekly sweep (every Sunday at midnight). A week is a standard cron
-// day-of-week field, so no day-of-month-step workaround applies here unlike
-// the multi-day hour-based collector cadences above.
-export const DISCOVERY_SEARCH_CRON = "0 0 * * 0";
-export const DISCOVERY_SEARCH_SCHEDULER_ID = "signal-discovery-search-v1";
-
 // Upserts every collector's schedule plus pipeline-recovery's — kept in one
 // function because both are the same "idempotent upsertJobScheduler at
 // worker startup" operation, not two separate concerns.
 export async function registerQueueSchedules(
   queueMap: Pick<
     typeof queues,
-    (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery" | "discovery-search"
+    (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery"
   > = queues
 ): Promise<void> {
   const config = getCollectorScheduleConfig();
@@ -124,9 +118,8 @@ export async function registerQueueSchedules(
     { pattern: PIPELINE_RECOVERY_CRON },
     { name: "pipeline-recovery", data: {} }
   );
-  await queueMap["discovery-search"].upsertJobScheduler(
-    DISCOVERY_SEARCH_SCHEDULER_ID,
-    { pattern: DISCOVERY_SEARCH_CRON },
-    { name: "discovery-search", data: {} }
-  );
+  // No discovery-search schedule here: a weekly sweep would be a poison job as
+  // written (DiscoveryJobDataSchema requires a workspace_id, but a repeat job
+  // has no per-workspace fan-out). Before it can be scheduled, this needs to
+  // list workspaces and enqueue one discovery-search job per workspace.
 }
