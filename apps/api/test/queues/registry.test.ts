@@ -674,9 +674,9 @@ describe("company-profile-update worker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listCompetitorsMock.mockResolvedValue([
-      { id: "active-1", is_active: true },
-      { id: "inactive-1", is_active: false },
-      { id: "active-2", is_active: true },
+      { id: "active-1", is_active: true, workspace_id: "workspace-a" },
+      { id: "inactive-1", is_active: false, workspace_id: "workspace-a" },
+      { id: "active-2", is_active: true, workspace_id: "workspace-b" },
     ]);
     createAgentRunMock
       .mockResolvedValueOnce({ id: "run-1" })
@@ -706,7 +706,12 @@ describe("company-profile-update worker", () => {
     const job = { data: {} };
 
     await expect(processor(job)).resolves.toBeUndefined();
-    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile");
+    // One invalidation per distinct workspace among the active competitors —
+    // this job carries no workspace_id of its own, unlike the API's own
+    // post-write invalidation.
+    expect(cacheDeleteMock).toHaveBeenCalledTimes(2);
+    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile:workspace-a");
+    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile:workspace-b");
     expect(createAgentRunMock).toHaveBeenCalledTimes(2);
     expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
       competitor_id: "active-1",
@@ -718,11 +723,13 @@ describe("company-profile-update worker", () => {
     });
     expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
       competitor_id: "active-1",
+      workspace_id: "workspace-a",
       run_id: "run-1",
       has_pricing_diff: true,
     });
     expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
       competitor_id: "active-2",
+      workspace_id: "workspace-b",
       run_id: "run-2",
       has_pricing_diff: false,
     });
@@ -730,7 +737,7 @@ describe("company-profile-update worker", () => {
   });
 
   it("does not fan out stale context when cache invalidation fails", async () => {
-    cacheDeleteMock.mockRejectedValueOnce(new Error("redis down"));
+    cacheDeleteMock.mockRejectedValue(new Error("redis down"));
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
 
     await expect(processor({ data: {} })).rejects.toThrow("redis down");

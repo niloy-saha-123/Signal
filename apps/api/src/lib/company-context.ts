@@ -27,6 +27,9 @@
 // Exports: getCompanyContext(workspaceId: string): Promise<string>
 //   If no company_profile row exists for that workspace, returns "" —
 //   agents must work without it and just produce generic output, not throw.
+// Exports: invalidateCompanyContextCache(workspaceId: string): Promise<unknown>
+//   Deletes that workspace's cache entry — called by POST /api/company-profile
+//   and the company-profile-update worker after a profile write.
 
 import { getCompanyProfileForWorkspace } from "../db/queries";
 import { cacheRedis } from "./redis-client";
@@ -69,4 +72,8 @@ export async function getCompanyContext(workspaceId: string): Promise<string> {
 
   await cacheRedis.setex(key, CACHE_TTL_SECONDS, context);
   return context;
+}
+
+export async function invalidateCompanyContextCache(workspaceId: string): Promise<unknown> {
+  return cacheRedis.del(cacheKey(workspaceId));
 }

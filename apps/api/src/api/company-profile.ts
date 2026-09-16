@@ -9,25 +9,22 @@
 //   the company profile. Validates the body with CompanyProfileSchema
 //   (packages/shared/src/signals.ts). On success, enqueue a
 //   'company-profile-update' BullMQ job (see queues/registry.ts) so any
-//   pending analysis picks up the new context, and invalidate the
-//   'company:profile' Redis cache key that lib/company-context.ts reads.
+//   pending analysis picks up the new context, and invalidate this
+//   workspace's Redis cache entry that lib/company-context.ts reads.
 //   Returns 200 with the saved profile.
 import express, { Router } from "express";
 import { CompanyProfileSchema } from "@signal/shared";
 import * as queries from "../db/queries";
-import { cacheRedis } from "../lib/redis-client";
+import { invalidateCompanyContextCache } from "../lib/company-context";
 import { queues, type QueueName } from "../queues/registry";
 import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler } from "./http";
-
-// The exact key lib/company-context.ts reads (its CACHE_KEY const).
-const PROFILE_CACHE_KEY = "company:profile";
 
 export interface CompanyProfileRouterDeps {
   getCompanyProfileForWorkspace: typeof queries.getCompanyProfileForWorkspace;
   getCompetitorsByIdsForWorkspace: typeof queries.getCompetitorsByIdsForWorkspace;
   upsertCompanyProfileForWorkspace: typeof queries.upsertCompanyProfileForWorkspace;
-  invalidateProfileCache: () => Promise<unknown>;
+  invalidateProfileCache: (workspaceId: string) => Promise<unknown>;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
 }
 
@@ -35,7 +32,7 @@ export const defaultCompanyProfileRouterDeps: CompanyProfileRouterDeps = {
   getCompanyProfileForWorkspace: queries.getCompanyProfileForWorkspace,
   getCompetitorsByIdsForWorkspace: queries.getCompetitorsByIdsForWorkspace,
   upsertCompanyProfileForWorkspace: queries.upsertCompanyProfileForWorkspace,
-  invalidateProfileCache: () => cacheRedis.del(PROFILE_CACHE_KEY),
+  invalidateProfileCache: invalidateCompanyContextCache,
   enqueue: (queue, data) => queues[queue].add(queue, data),
 };
 
@@ -103,7 +100,7 @@ export function createCompanyProfileRouter(
       // The write succeeded. A stale cache self-heals on TTL and the update
       // queue is documented no-retry, so neither failure fails the request.
       try {
-        await deps.invalidateProfileCache();
+        await deps.invalidateProfileCache(req.workspaceId!);
       } catch (err) {
         logger.warn("Failed to invalidate company:profile cache", {
           error: err instanceof Error ? err.message : String(err),

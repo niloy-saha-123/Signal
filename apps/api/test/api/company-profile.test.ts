@@ -109,6 +109,7 @@ describe("POST /api/company-profile", () => {
       WS_UUID
     );
     expect(deps.invalidateProfileCache).toHaveBeenCalledTimes(1);
+    expect(deps.invalidateProfileCache).toHaveBeenCalledWith(WS_UUID);
     expect(deps.enqueue).toHaveBeenCalledWith("company-profile-update", {});
   });
 

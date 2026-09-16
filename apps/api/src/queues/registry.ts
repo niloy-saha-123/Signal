@@ -28,7 +28,8 @@
 import { Queue, Worker, type ConnectionOptions, type Job, type Processor } from "bullmq";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { cacheRedis, redis } from "../lib/redis-client";
+import { redis } from "../lib/redis-client";
+import { invalidateCompanyContextCache } from "../lib/company-context";
 import { db } from "../db/client";
 import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
@@ -365,16 +366,23 @@ async function companyProfileUpdateProcessor(
   _job: Job<CompanyProfileUpdateJobData>
 ): Promise<void> {
   CompanyProfileUpdateJobDataSchema.parse(_job.data);
-  // The API already attempts this after the DB write. Repeat it at the worker
-  // boundary so a transient API-side cache failure cannot make the queued
-  // analyses read stale company context.
-  await cacheRedis.del("company:profile");
 
   // Bounded by the active competitor set, which is admin-controlled and small
   // in Phase 0. This never replays historical runs or signals.
   const activeCompetitors = (await listCompetitors()).filter(
     (competitor) => competitor.is_active
   );
+
+  // The API already attempts this after the DB write. Repeat it at the worker
+  // boundary so a transient API-side cache failure cannot make the queued
+  // analyses read stale company context. This job carries no workspace_id of
+  // its own — invalidate every distinct workspace represented among the
+  // active competitors being re-analyzed here.
+  const workspaceIds = new Set(activeCompetitors.map((competitor) => competitor.workspace_id));
+  await Promise.all(
+    [...workspaceIds].map((workspaceId) => invalidateCompanyContextCache(workspaceId))
+  );
+
   let failed = 0;
 
   for (const competitor of activeCompetitors) {
