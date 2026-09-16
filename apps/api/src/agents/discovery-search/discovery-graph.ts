@@ -118,9 +118,10 @@ const builder = new StateGraph(DiscoveryGraphState)
 
 // PostgresSaver does NOT auto-create its tables (unlike PostgresStore), so the
 // worker must call setupDiscoveryCheckpointer() before its first invoke — see
-// Ruling B. Constructed lazily here so importing this module never throws or
-// opens a connection when DATABASE_URL is unset; the pg.Pool it wraps connects
-// lazily too.
+// Ruling B. The PostgresSaver is built eagerly at import (see compile() below),
+// but it is a thin handle: pg.Pool defers its connection until .setup()/first
+// invoke, so importing this module never throws or opens a connection when
+// DATABASE_URL is unset.
 let checkpointer: PostgresSaver | undefined;
 
 export function getDiscoveryCheckpointer(): PostgresSaver {
@@ -140,9 +141,11 @@ export async function setupDiscoveryCheckpointer(): Promise<void> {
 }
 
 // npm hoisting gives @langchain/langgraph-checkpoint-postgres (under
-// apps/api/node_modules) its own @langchain/core copy, so its PostgresSaver's
-// BaseCheckpointSaver is nominally distinct from the root copy @langchain/langgraph
-// types compile() against. Duck-typed at runtime; cast this one boundary (same
+// apps/api/node_modules) its own @langchain/langgraph-checkpoint copy (nested
+// 1.1.5 vs root 1.1.3), so its PostgresSaver's BaseCheckpointSaver is nominally
+// distinct from the root copy @langchain/langgraph types compile() against. The
+// two are structurally identical (abstract class, no private members) and pregel
+// duck-types the checkpointer, so this cast is safe at this one boundary (same
 // dual-copy situation registry.ts documents for bullmq/ioredis).
 export const discoveryGraph = builder.compile({
   checkpointer: getDiscoveryCheckpointer() as unknown as BaseCheckpointSaver,
