@@ -17,6 +17,8 @@ import { discoverCompetitor } from "@/agents/discovery/competitor-discovery";
 import { createCompetitorRouter, type CompetitorRouterDeps } from "@/api/competitors";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+const USER_UUID = "33333333-3333-4333-8333-333333333333";
+const WS_UUID = "22222222-2222-4222-8222-222222222222";
 
 const VALID_COMPONENTS = {
   mention_velocity: 0.4,
@@ -49,14 +51,14 @@ async function call(
 
 function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDeps {
   return {
-    createCompetitor: vi.fn(async (input: any) => ({
+    createCompetitorForWorkspace: vi.fn(async (input: any) => ({
       id: UUID,
       name: input.name,
       domain: input.domain,
       discovery_status: "pending",
     })) as any,
-    getCompetitorById: vi.fn(async () => ({ id: UUID, discovery_status: "pending" })) as any,
-    listCompetitors: vi.fn(async () => [{ id: UUID }]) as any,
+    getCompetitorByIdForWorkspace: vi.fn(async () => ({ id: UUID, discovery_status: "pending" })) as any,
+    listCompetitorsForWorkspace: vi.fn(async () => [{ id: UUID }]) as any,
     getCompetitorDiscoveryLog: vi.fn(async () => [{ field_name: "subreddits" }]) as any,
     getLatestSignalScores: vi.fn(async () => []) as any,
     getSignalVolumeByDay: vi.fn(async () => []) as any,
@@ -70,9 +72,37 @@ function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDep
   };
 }
 
-const app = (deps: CompetitorRouterDeps) => express().use("/api/competitors", createCompetitorRouter(deps));
+// Stands in for requireAuth — real middleware verifies a JWT, this just sets
+// req.user/req.workspaceId directly, matching what requireAuth would have set.
+function appWithUser(user: { id: string; workspaceId: string | null }, router: express.Router) {
+  const app = express();
+  app.use((req, _res, next) => {
+    req.user = { id: user.id, email: "test@example.com" };
+    req.workspaceId = user.workspaceId;
+    next();
+  });
+  app.use("/api/competitors", router);
+  return app;
+}
+
+const app = (deps: CompetitorRouterDeps) =>
+  appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createCompetitorRouter(deps));
 
 beforeEach(() => vi.clearAllMocks());
+
+describe("workspace guard", () => {
+  it("403s with no_workspace when req.workspaceId is null", async () => {
+    const deps = makeDeps();
+    const noWorkspaceApp = appWithUser(
+      { id: USER_UUID, workspaceId: null },
+      createCompetitorRouter(deps)
+    );
+    const res = await call(noWorkspaceApp, "GET", "/api/competitors");
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "no_workspace" });
+    expect(deps.listCompetitorsForWorkspace).not.toHaveBeenCalled();
+  });
+});
 
 describe("POST /api/competitors", () => {
   it("creates the row, enqueues discovery after commit, returns 201", async () => {
@@ -89,7 +119,7 @@ describe("POST /api/competitors", () => {
       name: "Acme",
       domain: "acme.com",
     });
-    const createOrder = (deps.createCompetitor as any).mock.invocationCallOrder[0];
+    const createOrder = (deps.createCompetitorForWorkspace as any).mock.invocationCallOrder[0];
     const enqueueOrder = (deps.enqueue as any).mock.invocationCallOrder[0];
     expect(createOrder).toBeLessThan(enqueueOrder);
     expect(discoverCompetitor).not.toHaveBeenCalled();
@@ -104,7 +134,7 @@ describe("POST /api/competitors", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("validation");
-    expect(deps.createCompetitor).not.toHaveBeenCalled();
+    expect(deps.createCompetitorForWorkspace).not.toHaveBeenCalled();
   });
 
   it("rejects a missing required field with 400", async () => {
@@ -119,7 +149,7 @@ describe("POST /api/competitors", () => {
       domain: "acme.com",
     });
     expect(res.status).toBe(400);
-    expect(deps.createCompetitor).not.toHaveBeenCalled();
+    expect(deps.createCompetitorForWorkspace).not.toHaveBeenCalled();
   });
 
   it("rejects a pricing_url whose host is not public with 400", async () => {
@@ -131,7 +161,7 @@ describe("POST /api/competitors", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/public URL/);
-    expect(deps.createCompetitor).not.toHaveBeenCalled();
+    expect(deps.createCompetitorForWorkspace).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -146,7 +176,7 @@ describe("POST /api/competitors", () => {
       pricing_url,
     });
     expect(res.status).toBe(400);
-    expect(deps.createCompetitor).not.toHaveBeenCalled();
+    expect(deps.createCompetitorForWorkspace).not.toHaveBeenCalled();
   });
 
   it("returns 500 enqueue_failed with the id when the queue throws (row kept)", async () => {
@@ -161,7 +191,33 @@ describe("POST /api/competitors", () => {
     });
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "enqueue_failed", competitor_id: UUID });
-    expect(deps.createCompetitor).toHaveBeenCalledTimes(1);
+    expect(deps.createCompetitorForWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  // CompetitorCreateInputSchema.strict() already 400s a body carrying an unknown
+  // `workspace_id` key (verified below), so an attacker can't smuggle scope through the
+  // body at all. This is the belt-and-suspenders half: even setting that defense aside,
+  // confirm the router only ever reads workspace scope from req.workspaceId.
+  it("rejects a body-supplied workspace_id with 400 validation, never calling createCompetitorForWorkspace", async () => {
+    const deps = makeDeps();
+    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createCompetitorRouter(deps));
+    const res = await call(app, "POST", "/api/competitors", {
+      name: "Acme",
+      domain: "acme.com",
+      workspace_id: "attacker-supplied",
+    });
+    expect(res.status).toBe(400);
+    expect(deps.createCompetitorForWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("passes req.workspaceId through to createCompetitorForWorkspace as the scope argument", async () => {
+    const deps = makeDeps();
+    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createCompetitorRouter(deps));
+    await call(app, "POST", "/api/competitors", { name: "Acme", domain: "acme.com" });
+    expect(deps.createCompetitorForWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Acme", domain: "acme.com" }),
+      WS_UUID
+    );
   });
 });
 
@@ -180,7 +236,7 @@ describe("GET /api/competitors/:id", () => {
   });
 
   it("404 when the competitor is missing", async () => {
-    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
     const res = await call(app(deps), "GET", `/api/competitors/${UUID}`);
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "not_found" });
@@ -193,7 +249,7 @@ describe("GET /api/competitors/:id", () => {
 
   it("500 { error: internal } when a query throws unexpectedly", async () => {
     const deps = makeDeps({
-      getCompetitorById: vi.fn(async () => {
+      getCompetitorByIdForWorkspace: vi.fn(async () => {
         throw new Error("pg exploded");
       }) as any,
     });
@@ -214,7 +270,7 @@ describe("GET /api/competitors/:id/discovery", () => {
   });
 
   it("404 when competitor missing", async () => {
-    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
     const res = await call(app(deps), "GET", `/api/competitors/${UUID}/discovery`);
     expect(res.status).toBe(404);
   });
@@ -278,7 +334,7 @@ describe("GET /api/competitors/:id/score", () => {
 
 describe("GET /api/competitors/:id/scores", () => {
   it("404 when competitor missing", async () => {
-    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
     const res = await call(app(deps), "GET", `/api/competitors/${UUID}/scores`);
     expect(res.status).toBe(404);
   });
@@ -359,7 +415,7 @@ describe("POST /api/competitors/:id/analyze", () => {
   });
 
   it("404 when competitor missing (no run created)", async () => {
-    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
     const res = await call(app(deps), "POST", `/api/competitors/${UUID}/analyze`);
     expect(res.status).toBe(404);
     expect(deps.createAgentRun).not.toHaveBeenCalled();
@@ -395,7 +451,7 @@ describe("POST /api/competitors/:id/analyze", () => {
 
 describe("GET /api/competitors/:id/trend", () => {
   it("404 when competitor missing", async () => {
-    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
     const res = await call(app(deps), "GET", `/api/competitors/${UUID}/trend`);
     expect(res.status).toBe(404);
   });
@@ -498,7 +554,7 @@ describe("GET /api/competitors/:id/hiring", () => {
   });
 
   it("404 when competitor missing", async () => {
-    const deps = makeDeps({ getCompetitorById: vi.fn(async () => undefined) as any });
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
     const res = await call(app(deps), "GET", `/api/competitors/${UUID}/hiring`);
     expect(res.status).toBe(404);
   });

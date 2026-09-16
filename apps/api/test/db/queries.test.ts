@@ -92,7 +92,6 @@ import {
   workspaceInvitesTable,
 } from "@/db/schema";
 import {
-  createCompetitor,
   getCompetitorsByIds,
   getCompetitorById,
   listCompetitors,
@@ -173,48 +172,6 @@ describe("db/queries — competitors", () => {
     insertValuesMock.mockReturnValue({ returning: insertReturningMock });
     updateMock.mockReturnValue({ set: updateSetMock });
     updateSetMock.mockReturnValue({ where: updateWhereMock });
-  });
-
-  describe("createCompetitor", () => {
-    it("inserts with discovery_status defaulted to pending and returns the created row", async () => {
-      const row = { id: "c1", name: "Acme", domain: "acme.com", discovery_status: "pending" };
-      insertReturningMock.mockResolvedValue([row]);
-
-      const result = await createCompetitor({ name: "Acme", domain: "acme.com" });
-
-      expect(insertMock).toHaveBeenCalledWith(competitorsTable);
-      expect(insertValuesMock).toHaveBeenCalledWith({
-        name: "Acme",
-        domain: "acme.com",
-        discovery_status: "pending",
-      });
-      expect(result).toEqual(row);
-    });
-
-    it("persists caller-supplied discovery overrides using schema column names", async () => {
-      insertReturningMock.mockResolvedValue([{ id: "c1" }]);
-
-      await createCompetitor({
-        name: "Acme",
-        domain: "acme.com",
-        subreddits: ["acme"],
-        greenhouse_token: "acmehq",
-        lever_token: "acme",
-        pricing_url: "https://acme.com/pricing",
-        rss_url: "https://acme.com/changelog.xml",
-      });
-
-      expect(insertValuesMock).toHaveBeenCalledWith({
-        name: "Acme",
-        domain: "acme.com",
-        subreddits: ["acme"],
-        greenhouse_token: "acmehq",
-        lever_token: "acme",
-        pricing_url: "https://acme.com/pricing",
-        changelog_rss: "https://acme.com/changelog.xml",
-        discovery_status: "pending",
-      });
-    });
   });
 
   describe("getCompetitorsByIds", () => {

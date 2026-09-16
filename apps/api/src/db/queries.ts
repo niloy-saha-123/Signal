@@ -581,25 +581,6 @@ export async function persistRagEvaluation(
   return { id: runId, summary };
 }
 
-export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
-  const [row] = await db
-    .insert(competitorsTable)
-    .values({
-      name: input.name,
-      domain: input.domain,
-      ...(input.subreddits === undefined ? {} : { subreddits: input.subreddits }),
-      ...(input.greenhouse_token === undefined
-        ? {}
-        : { greenhouse_token: input.greenhouse_token }),
-      ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
-      ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
-      ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
-      discovery_status: "pending",
-    })
-    .returning();
-  return row;
-}
-
 export async function getCompetitorById(id: string): Promise<Competitor | undefined> {
   const [row] = await db.select().from(competitorsTable).where(eq(competitorsTable.id, id));
   return row;
@@ -1549,10 +1530,13 @@ export async function redeemInvite(input: { inviteId: string; userId: string }):
 }
 
 // ── workspace-scoped tenant-data query variants (Task 3) ────────────────
-// Added alongside the unscoped originals above (createCompetitor,
-// getCompetitorById, getCompetitorsByIds, listCompetitors, getCompanyProfile,
-// upsertCompanyProfile) — those stay untouched for now since background
-// workers still call them. Tasks 6-9 (the routers) call these instead.
+// Added alongside the unscoped originals above (getCompetitorById,
+// getCompetitorsByIds, listCompetitors, getCompanyProfile, upsertCompanyProfile) —
+// those stay untouched for now since background workers still call them. Tasks 6-9
+// (the routers) call these instead. The unscoped createCompetitor was deleted in
+// Task 7: its only caller was the competitors router, now rewired to
+// createCompetitorForWorkspace, and it would violate competitors.workspace_id's
+// NOT NULL constraint if anything called it.
 
 export async function getCompetitorByIdForWorkspace(
   id: string,
