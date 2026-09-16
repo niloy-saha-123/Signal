@@ -6,6 +6,7 @@ import { createSignalRouter } from "./signals";
 import { createAlertRouter } from "./alerts";
 import { createChatRouter } from "./chat";
 import { createCompanyProfileRouter } from "./company-profile";
+import { requireAuth } from "./auth";
 import { queues } from "../queues/registry";
 import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
 import { checkDatabaseReadiness, closeDatabase } from "../db/client";
@@ -21,7 +22,6 @@ export interface ApiEnvironment {
   REDIS_URL?: string;
   PORT?: string;
   NODE_ENV?: string;
-  ALLOW_UNAUTHENTICATED_API?: string;
 }
 
 export function validateApiEnvironment(env: ApiEnvironment = process.env): { port: number } {
@@ -30,11 +30,6 @@ export function validateApiEnvironment(env: ApiEnvironment = process.env): { por
   );
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
-  }
-  if (env.NODE_ENV === "production" && env.ALLOW_UNAUTHENTICATED_API !== "true") {
-    throw new Error(
-      "ALLOW_UNAUTHENTICATED_API must be exactly true when NODE_ENV=production"
-    );
   }
 
   const port = Number(env.PORT ?? 3000);
@@ -113,6 +108,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
       res.status(503).json({ status: "unavailable" });
     }
   });
+  app.use("/api", requireAuth);
   app.use("/api/competitors", createCompetitorRouter());
   app.use("/api/signals", createSignalRouter());
   app.use("/api/alerts", createAlertRouter());

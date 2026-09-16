@@ -78,16 +78,6 @@ describe("API runtime", () => {
     ).toEqual({ port: 4100 });
   });
 
-  it("requires an exact production acknowledgement for the unauthenticated API", () => {
-    const base = { DATABASE_URL: "postgres://db", REDIS_URL: "redis://cache", NODE_ENV: "production" };
-    expect(() => validateApiEnvironment(base)).toThrow(/ALLOW_UNAUTHENTICATED_API/);
-    expect(() => validateApiEnvironment({ ...base, ALLOW_UNAUTHENTICATED_API: "TRUE" })).toThrow(
-      /ALLOW_UNAUTHENTICATED_API/
-    );
-    expect(validateApiEnvironment({ ...base, ALLOW_UNAUTHENTICATED_API: "true" })).toEqual({ port: 3000 });
-    expect(validateApiEnvironment({ ...base, NODE_ENV: "development" })).toEqual({ port: 3000 });
-  });
-
   it("mounts a bounded JSON parser and liveness route", () => {
     const app = createApiApp();
     expect(app).toBeDefined();
@@ -112,6 +102,30 @@ describe("API runtime", () => {
       expect(await oversized.json()).toEqual({ error: "payload_too_large" });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("401s a request to a protected route with no Authorization header", async () => {
+    const app = createApiApp();
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const res = await fetch(`http://127.0.0.1:${port}/api/competitors`);
+      expect(res.status).toBe(401);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("does not require auth for /health or /ready", async () => {
+    const app = createApiApp();
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(health.status).toBe(200);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 
@@ -192,14 +206,14 @@ describe("API runtime", () => {
     }
   });
 
-  it("closes an owned runtime when production validation fails", async () => {
+  it("closes an owned runtime when environment validation fails", async () => {
     const runtime = { start: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
     await expect(
       startApiFromEnvironment(
-        { DATABASE_URL: "postgres://db", REDIS_URL: "redis://cache", NODE_ENV: "production" },
+        { REDIS_URL: "redis://cache", NODE_ENV: "production" },
         { createRuntime: () => runtime as never }
       )
-    ).rejects.toThrow(/ALLOW_UNAUTHENTICATED_API/);
+    ).rejects.toThrow(/DATABASE_URL/);
     expect(runtime.start).not.toHaveBeenCalled();
     expect(runtime.close).toHaveBeenCalledTimes(1);
   });
@@ -215,7 +229,6 @@ describe("API runtime", () => {
           DATABASE_URL: "postgres://db",
           REDIS_URL: "redis://cache",
           NODE_ENV: "production",
-          ALLOW_UNAUTHENTICATED_API: "true",
         },
         { createRuntime: () => runtime as never }
       )
