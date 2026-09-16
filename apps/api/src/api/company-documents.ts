@@ -20,6 +20,7 @@ export interface CompanyDocumentsRouterDeps {
   classifyDocument: typeof classifyDocumentImpl;
   embedText: typeof embedTextImpl;
   pineconeUpsert: (namespace: string, id: string, vector: number[], text: string) => Promise<void>;
+  getCompanyProfileForWorkspace: typeof queries.getCompanyProfileForWorkspace;
   // Not `typeof queries.upsertCompanyProfileForWorkspace` (whose signature is
   // (input, workspaceId)) — this router only ever writes a partial field set extracted by
   // the classifier, and (workspaceId, fields) reads better at the call site here. The
@@ -40,6 +41,7 @@ export const defaultCompanyDocumentsRouterDeps: CompanyDocumentsRouterDeps = {
   // just a single-record adapter over it, not a new client.
   pineconeUpsert: (namespace, id, vector, text) =>
     pineconeUpsertRecords(namespace, [{ id, values: vector, metadata: { text } }]),
+  getCompanyProfileForWorkspace: queries.getCompanyProfileForWorkspace,
   upsertCompanyProfileForWorkspace: (workspaceId, fields) =>
     queries.upsertCompanyProfileForWorkspace(fields as CompanyProfileInput, workspaceId),
   createCompanyDocument: queries.createCompanyDocument,
@@ -59,7 +61,16 @@ async function ingest(
   const namespace = `profile:${workspaceId}`;
 
   if (classification.mode === "structured" && classification.structured_fields) {
-    await deps.upsertCompanyProfileForWorkspace(workspaceId, classification.structured_fields);
+    // company_profile.product_description is NOT NULL with no default. The classifier
+    // doesn't always extract one (and the heuristic fallback never does) — fall back to
+    // the existing profile's value, or "" on a workspace's very first upload.
+    const existingProfile = await deps.getCompanyProfileForWorkspace(workspaceId);
+    const product_description =
+      classification.structured_fields.product_description ?? existingProfile?.product_description ?? "";
+    await deps.upsertCompanyProfileForWorkspace(workspaceId, {
+      ...classification.structured_fields,
+      product_description,
+    });
   } else {
     const vector = await deps.embedText(text);
     await deps.pineconeUpsert(namespace, `${workspaceId}:${filename}`, vector, text);

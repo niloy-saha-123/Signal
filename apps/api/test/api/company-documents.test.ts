@@ -9,6 +9,7 @@ describe("POST /api/company-documents/text", () => {
       classifyDocument: vi.fn().mockResolvedValue({ doc_type: "other", mode: "narrative" }),
       embedText: vi.fn().mockResolvedValue([0.1, 0.2]),
       pineconeUpsert: vi.fn().mockResolvedValue(undefined),
+      getCompanyProfileForWorkspace: vi.fn(),
       upsertCompanyProfileForWorkspace: vi.fn(),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-1" }),
     };
@@ -38,6 +39,7 @@ describe("POST /api/company-documents/text", () => {
       }),
       embedText: vi.fn(),
       pineconeUpsert: vi.fn(),
+      getCompanyProfileForWorkspace: vi.fn().mockResolvedValue(null),
       upsertCompanyProfileForWorkspace: vi.fn().mockResolvedValue(undefined),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-2" }),
     };
@@ -57,5 +59,38 @@ describe("POST /api/company-documents/text", () => {
       expect.objectContaining({ product_description: "A competitor tracker" })
     );
     expect(deps.embedText).not.toHaveBeenCalled();
+  });
+
+  it("defaults product_description to \"\" when the classifier doesn't extract one and no profile exists yet", async () => {
+    const deps = {
+      classifyDocument: vi.fn().mockResolvedValue({
+        doc_type: "other",
+        mode: "structured",
+        structured_fields: { pricing_tiers: [{ name: "Starter", price: 29, billing: "monthly" }] },
+      }),
+      embedText: vi.fn(),
+      pineconeUpsert: vi.fn(),
+      getCompanyProfileForWorkspace: vi.fn().mockResolvedValue(null),
+      upsertCompanyProfileForWorkspace: vi.fn().mockResolvedValue(undefined),
+      createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-3" }),
+    };
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.workspaceId = "11111111-1111-1111-1111-111111111111";
+      next();
+    });
+    app.use("/", createCompanyDocumentsRouter(deps));
+
+    const res = await request(app).post("/text").send({ text: "Starter: $29/month" });
+
+    expect(res.status).toBe(201);
+    expect(deps.getCompanyProfileForWorkspace).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111"
+    );
+    expect(deps.upsertCompanyProfileForWorkspace).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111",
+      expect.objectContaining({ product_description: "" })
+    );
   });
 });
