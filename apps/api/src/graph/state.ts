@@ -67,6 +67,7 @@ const overwrite = <T>(_left: T, right: T): T => right;
 
 export const AnalysisGraphState = Annotation.Root({
   competitor_id: Annotation<string>,
+  workspace_id: Annotation<string>(),
   run_id: Annotation<string>,
   has_pricing_diff: Annotation<boolean>({ reducer: overwrite, default: () => false }),
   hiring_intent: Annotation<HiringIntentResult | null>({ reducer: overwrite, default: () => null }),

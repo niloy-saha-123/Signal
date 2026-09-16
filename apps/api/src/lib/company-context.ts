@@ -4,7 +4,7 @@
 // competitor commentary.
 //
 // Usage in agent system prompts:
-//   const context = await getCompanyContext()
+//   const context = await getCompanyContext(state.workspace_id)
 //   const systemPrompt = `${BASE_SYSTEM_PROMPT}\n\n${context}`
 //
 // Injected format:
@@ -19,29 +19,32 @@
 //    context of this company's positioning, pricing, and target customers.
 //    Make recommendations specific to this company, not generic advice."
 //
-// Cached in Redis at key 'company:profile', 1h TTL — the profile changes
-// rarely (only via POST /api/company-profile, which invalidates this key),
-// so there's no reason to hit PostgreSQL on every agent call.
+// Cached in Redis per-workspace at key 'company:profile:{workspaceId}', 1h TTL
+// — the profile changes rarely (only via POST /api/company-profile, which
+// invalidates this key), so there's no reason to hit PostgreSQL on every
+// agent call.
 //
-// Exports: getCompanyContext(): Promise<string>
-//   If no company_profile row exists, returns "" — agents must work
-//   without it and just produce generic output, not throw.
+// Exports: getCompanyContext(workspaceId: string): Promise<string>
+//   If no company_profile row exists for that workspace, returns "" —
+//   agents must work without it and just produce generic output, not throw.
 
-import { db } from "../db/client";
+import { getCompanyProfileForWorkspace } from "../db/queries";
 import { cacheRedis } from "./redis-client";
-import { companyProfileTable } from "../db/schema";
 
-const CACHE_KEY = "company:profile";
 const CACHE_TTL_SECONDS = 3600;
 
-export async function getCompanyContext(): Promise<string> {
-  const cached = await cacheRedis.get(CACHE_KEY);
+function cacheKey(workspaceId: string): string {
+  return `company:profile:${workspaceId}`;
+}
+
+export async function getCompanyContext(workspaceId: string): Promise<string> {
+  const key = cacheKey(workspaceId);
+  const cached = await cacheRedis.get(key);
   if (cached) return cached;
 
-  const rows = await db.select().from(companyProfileTable).limit(1);
-  if (rows.length === 0) return "";
+  const profile = await getCompanyProfileForWorkspace(workspaceId);
+  if (!profile) return "";
 
-  const profile = rows[0];
   const pricingLines = (profile.pricing_tiers ?? [])
     .map((tier) => {
       const t = tier as { name?: string; price?: number; billing?: string };
@@ -64,6 +67,6 @@ export async function getCompanyContext(): Promise<string> {
     "to this company, not generic advice.",
   ].join("\n");
 
-  await cacheRedis.setex(CACHE_KEY, CACHE_TTL_SECONDS, context);
+  await cacheRedis.setex(key, CACHE_TTL_SECONDS, context);
   return context;
 }

@@ -386,6 +386,7 @@ async function companyProfileUpdateProcessor(
       const hasPricingDiff = (await getRecentPricingDiffs(competitor.id, 7)).length > 0;
       await queues.analysis.add("analysis", {
         competitor_id: competitor.id,
+        workspace_id: competitor.workspace_id,
         run_id: run.id,
         has_pricing_diff: hasPricingDiff,
       });

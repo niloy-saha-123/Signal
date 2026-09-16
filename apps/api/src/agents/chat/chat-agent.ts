@@ -68,12 +68,14 @@ const ChatAgentInputSchema = z.object({
     .min(1)
     .transform((ids) => [...new Set(ids)])
     .pipe(z.array(z.string().uuid()).max(MAX_COMPETITORS)),
+  workspace_id: z.string().uuid(),
   run_id: z.string().uuid(),
 });
 
 export interface ChatAgentInput {
   query: string;
   competitor_ids: string[];
+  workspace_id: string;
   run_id: string;
 }
 
@@ -88,6 +90,7 @@ function noEvidenceRefusal(reason: string): RefusalResult {
 function cacheKey(
   query: string,
   competitorIds: string[],
+  workspaceId: string,
   activePrompt: string | null,
   companyContext: string,
   citationThreshold: number
@@ -101,6 +104,7 @@ function cacheKey(
       JSON.stringify([
         normalizedQuery,
         [...competitorIds].sort(),
+        workspaceId,
         activePrompt ?? DEFAULT_SYSTEM_PROMPT,
         companyContext,
         citationThreshold,
@@ -309,13 +313,14 @@ export async function runChatAgent(
     // answer generated under the previous operating context.
     const [activePrompt, companyContext] = await Promise.all([
       getActivePrompt("chat_agent"),
-      getCompanyContext(),
+      getCompanyContext(parsed.workspace_id),
     ]);
     const citationThreshold = getCitationEnforcementThreshold();
     signal.throwIfAborted();
     const key = cacheKey(
       parsed.query,
       parsed.competitor_ids,
+      parsed.workspace_id,
       activePrompt,
       companyContext,
       citationThreshold

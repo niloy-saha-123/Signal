@@ -21,6 +21,7 @@ function uuid(seed: string): string {
 
 const COMPETITOR_A = uuid("1");
 const COMPETITOR_B = uuid("2");
+const WORKSPACE_ID = uuid("999");
 const SIGNAL_1 = uuid("101");
 const SIGNAL_2 = uuid("102");
 const RUN_ID = uuid("900");
@@ -75,6 +76,7 @@ function baseDeps(overrides: Partial<RagEvaluationDeps> = {}): RagEvaluationDeps
     getSignals: vi.fn(async (ids: readonly string[]) =>
       ids.includes(SIGNAL_1) ? [citationSignal()] : []
     ),
+    getCompetitorById: vi.fn(async () => ({ workspace_id: WORKSPACE_ID })),
     createAgentRun: vi.fn(async () => ({ id: RUN_ID })),
     completeAgentRun: vi.fn(async () => undefined),
     failRunIfRunning: vi.fn(async () => undefined),
