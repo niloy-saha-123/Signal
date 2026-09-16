@@ -831,6 +831,7 @@ export interface FeedCursor {
 
 export interface SignalFeedQuery {
   limit: number;
+  workspace_id: string; // new — always required, always enforced below
   competitor_ids?: string[];
   sources?: SignalSource[];
   min_quality?: number;
@@ -859,6 +860,18 @@ export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> 
   if (input.competitor_ids?.length === 0 || input.sources?.length === 0) return [];
 
   const predicates: SQL[] = [];
+  // Always-AND workspace scope, regardless of client-supplied competitor_ids —
+  // a competitor id from another workspace passed here now matches zero rows
+  // instead of leaking that workspace's signals.
+  predicates.push(
+    inArray(
+      signalsTable.competitor_id,
+      db
+        .select({ id: competitorsTable.id })
+        .from(competitorsTable)
+        .where(eq(competitorsTable.workspace_id, input.workspace_id))
+    )
+  );
   if (input.competitor_ids) {
     predicates.push(inArray(signalsTable.competitor_id, input.competitor_ids));
   }
@@ -891,6 +904,7 @@ export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> 
 
 export interface AlertFeedQuery {
   limit: number;
+  workspace_id: string; // new — always required, always enforced below
   competitor_ids?: string[];
   cursor?: FeedCursor;
 }
@@ -899,6 +913,18 @@ export async function listAlertFeed(input: AlertFeedQuery): Promise<Alert[]> {
   if (input.competitor_ids?.length === 0) return [];
 
   const predicates: SQL[] = [];
+  // Always-AND workspace scope, regardless of client-supplied competitor_ids —
+  // a competitor id from another workspace passed here now matches zero rows
+  // instead of leaking that workspace's alerts.
+  predicates.push(
+    inArray(
+      alertsTable.competitor_id,
+      db
+        .select({ id: competitorsTable.id })
+        .from(competitorsTable)
+        .where(eq(competitorsTable.workspace_id, input.workspace_id))
+    )
+  );
   if (input.competitor_ids) {
     predicates.push(inArray(alertsTable.competitor_id, input.competitor_ids));
   }
@@ -1520,4 +1546,84 @@ export async function redeemInvite(input: { inviteId: string; userId: string }):
       role: "member",
     });
   });
+}
+
+// ── workspace-scoped tenant-data query variants (Task 3) ────────────────
+// Added alongside the unscoped originals above (createCompetitor,
+// getCompetitorById, getCompetitorsByIds, listCompetitors, getCompanyProfile,
+// upsertCompanyProfile) — those stay untouched for now since background
+// workers still call them. Tasks 6-9 (the routers) call these instead.
+
+export async function getCompetitorByIdForWorkspace(
+  id: string,
+  workspaceId: string
+): Promise<Competitor | undefined> {
+  const [row] = await db
+    .select()
+    .from(competitorsTable)
+    .where(and(eq(competitorsTable.id, id), eq(competitorsTable.workspace_id, workspaceId)));
+  return row;
+}
+
+export async function listCompetitorsForWorkspace(workspaceId: string): Promise<Competitor[]> {
+  return db
+    .select()
+    .from(competitorsTable)
+    .where(eq(competitorsTable.workspace_id, workspaceId))
+    .orderBy(desc(competitorsTable.created_at));
+}
+
+export async function getCompetitorsByIdsForWorkspace(
+  ids: string[],
+  workspaceId: string
+): Promise<Competitor[]> {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(competitorsTable)
+    .where(and(inArray(competitorsTable.id, ids), eq(competitorsTable.workspace_id, workspaceId)));
+}
+
+export async function createCompetitorForWorkspace(
+  input: CompetitorCreateInput,
+  workspaceId: string
+): Promise<Competitor> {
+  const [row] = await db
+    .insert(competitorsTable)
+    .values({
+      workspace_id: workspaceId,
+      name: input.name,
+      domain: input.domain,
+      ...(input.subreddits === undefined ? {} : { subreddits: input.subreddits }),
+      ...(input.greenhouse_token === undefined ? {} : { greenhouse_token: input.greenhouse_token }),
+      ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
+      ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
+      ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
+      discovery_status: "pending",
+    })
+    .returning();
+  return row;
+}
+
+export async function getCompanyProfileForWorkspace(workspaceId: string): Promise<CompanyProfile | null> {
+  const [row] = await db
+    .select()
+    .from(companyProfileTable)
+    .where(eq(companyProfileTable.workspace_id, workspaceId));
+  return row ?? null;
+}
+
+export async function upsertCompanyProfileForWorkspace(
+  input: CompanyProfileInput,
+  workspaceId: string
+): Promise<CompanyProfile> {
+  const [row] = await db
+    .insert(companyProfileTable)
+    .values({ ...input, workspace_id: workspaceId })
+    .onConflictDoUpdate({
+      target: companyProfileTable.workspace_id,
+      set: { ...input, updated_at: new Date() },
+    })
+    .returning();
+  return row;
 }
