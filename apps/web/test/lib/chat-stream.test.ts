@@ -1,6 +1,17 @@
 // apps/web/test/lib/chat-stream.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitationResult, RefusalResult } from "@signal/shared";
+
+const { getSessionMock } = vi.hoisted(() => ({
+  getSessionMock: vi.fn(),
+}));
+
+vi.mock("../../lib/supabase-browser", () => ({
+  getSupabaseBrowserClient: () => ({
+    auth: { getSession: getSessionMock },
+  }),
+}));
+
 import { parseSseEvent, streamChatResult } from "../../lib/chat-stream";
 
 describe("parseSseEvent", () => {
@@ -53,6 +64,8 @@ describe("streamChatResult", () => {
 
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_API_URL", BASE);
+    getSessionMock.mockReset();
+    getSessionMock.mockResolvedValue({ data: { session: null } });
   });
 
   afterEach(() => {
@@ -74,6 +87,40 @@ describe("streamChatResult", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ query: "What changed?", competitor_ids: ["comp-1"] }),
+      })
+    );
+  });
+
+  it("accumulates onToken across token frames, then settles with onResult", async () => {
+    const body = streamOf(
+      ": open\n\n",
+      'event: token\ndata: {"text":"Acme "}\n\n',
+      'event: token\ndata: {"text":"cut pricing"}\n\n',
+      `event: result\ndata: ${JSON.stringify(citationResult)}\n\n`,
+      "event: done\ndata: {}\n\n"
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const onResult = vi.fn();
+    const onToken = vi.fn();
+    await streamChatResult("q", ["comp-1"], onResult, vi.fn(), { onToken });
+    expect(onToken.mock.calls.map((c) => c[0])).toEqual(["Acme ", "cut pricing"]);
+    expect(onResult).toHaveBeenCalledWith(citationResult);
+  });
+
+  it("includes thread_id in the body only when a threadId option is supplied", async () => {
+    const body = streamOf("event: done\ndata: {}\n\n");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    await streamChatResult("q", ["comp-1"], vi.fn(), vi.fn(), {
+      threadId: "33333333-3333-3333-3333-333333333333",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      `${BASE}/api/chat`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          query: "q",
+          competitor_ids: ["comp-1"],
+          thread_id: "33333333-3333-3333-3333-333333333333",
+        }),
       })
     );
   });

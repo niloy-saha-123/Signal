@@ -39,7 +39,7 @@ export class ApiError extends Error {
 // supabase-server.ts's getServerAccessToken — imported directly by the page, never
 // through this module, since next/headers can't reach client bundles that also import
 // this file, e.g. settings/page.tsx).
-async function authHeader(token?: string): Promise<Record<string, string>> {
+export async function authHeader(token?: string): Promise<Record<string, string>> {
   if (token) return { Authorization: `Bearer ${token}` };
   const supabase = getSupabaseBrowserClient();
   const {
@@ -281,4 +281,35 @@ export async function saveCompanyProfile(input: CompanyProfile): Promise<Company
   return CompanyProfileSchema.parse(
     await request("/api/company-profile", { method: "POST", body: JSON.stringify(body) })
   );
+}
+
+// --- Chat threads (apps/api/src/api/chat-threads.ts) ---
+
+export interface ChatThreadSummary {
+  id: string;
+  title: string | null;
+  updated_at: string;
+}
+
+export function listChatThreads(token?: string): Promise<ChatThreadSummary[]> {
+  return request<ChatThreadSummary[]>("/api/chat-threads", undefined, token);
+}
+
+export function createChatThread(): Promise<ChatThreadSummary> {
+  return request<ChatThreadSummary>("/api/chat-threads", { method: "POST", body: "{}" });
+}
+
+export interface ChatThreadMessage {
+  type: string;
+  content: string;
+}
+
+export async function getChatThreadMessages(id: string): Promise<ChatThreadMessage[]> {
+  const raw = await request<{ messages: { type?: string; content?: unknown }[] }>(
+    `/api/chat-threads/${id}/messages`
+  );
+  return raw.messages.map((m) => ({
+    type: m.type ?? "message",
+    content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+  }));
 }

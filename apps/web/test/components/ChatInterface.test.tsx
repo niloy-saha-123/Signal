@@ -3,12 +3,20 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitationResult, RefusalResult } from "@signal/shared";
 
-const { streamChatResultMock } = vi.hoisted(() => ({
+const { streamChatResultMock, listChatThreadsMock, createChatThreadMock } = vi.hoisted(() => ({
   streamChatResultMock: vi.fn(),
+  listChatThreadsMock: vi.fn(),
+  createChatThreadMock: vi.fn(),
 }));
 
 vi.mock("../../lib/chat-stream", () => ({
   streamChatResult: streamChatResultMock,
+}));
+
+vi.mock("../../lib/api", () => ({
+  listChatThreads: listChatThreadsMock,
+  createChatThread: createChatThreadMock,
+  getChatThreadMessages: vi.fn(),
 }));
 
 import { ChatInterface } from "../../components/ChatInterface";
@@ -30,9 +38,14 @@ const refusalResult: RefusalResult = {
 describe("ChatInterface", () => {
   beforeEach(() => {
     streamChatResultMock.mockReset();
+    listChatThreadsMock.mockReset();
+    listChatThreadsMock.mockResolvedValue([]);
+    createChatThreadMock.mockReset();
   });
   afterEach(() => {
     streamChatResultMock.mockReset();
+    listChatThreadsMock.mockReset();
+    createChatThreadMock.mockReset();
   });
 
   function typeAndSubmit(query: string) {
@@ -58,7 +71,8 @@ describe("ChatInterface", () => {
       "What changed?",
       ["comp-1", "comp-2"],
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      { threadId: undefined, onToken: expect.any(Function) }
     );
   });
 
