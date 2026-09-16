@@ -37,6 +37,7 @@ import {
   agentTestCasesTable,
   ragEvalDatasetTable,
   ragEvalRunsTable,
+  trackedEntitiesTable,
   workspacesTable,
   workspaceMembersTable,
   type SignalPipelineStage,
@@ -1504,6 +1505,32 @@ export async function createCompetitorForWorkspace(
       ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
       ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
       discovery_status: "pending",
+    })
+    .returning();
+  return row;
+}
+
+export interface TrackedEntityCandidateInput {
+  workspace_id: string;
+  source: string;
+  status: string;
+  candidate_name: string;
+  candidate_domain: string;
+  candidate_reason: string;
+}
+
+export async function createTrackedEntityCandidate(
+  input: TrackedEntityCandidateInput
+): Promise<typeof trackedEntitiesTable.$inferSelect> {
+  const [row] = await db
+    .insert(trackedEntitiesTable)
+    .values({
+      workspace_id: input.workspace_id,
+      source: input.source,
+      status: input.status,
+      candidate_name: input.candidate_name,
+      candidate_domain: input.candidate_domain,
+      candidate_reason: input.candidate_reason,
     })
     .returning();
   return row;
