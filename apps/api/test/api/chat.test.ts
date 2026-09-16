@@ -50,6 +50,7 @@ function makeDeps(over: Partial<ChatRouterDeps> = {}): ChatRouterDeps {
     getCompetitorsByIdsForWorkspace: vi.fn(async (ids: string[]) =>
       ids.map((id) => ({ id }))
     ) as any,
+    getChatThreadForWorkspace: vi.fn(async () => ({ id: THREAD_ID })) as any,
     createAgentRun: vi.fn(async () => ({ id: RUN_ID })) as any,
     completeAgentRun: vi.fn(async () => undefined) as any,
     createChatThread: vi.fn(async () => ({ id: THREAD_ID })) as any,
@@ -203,9 +204,29 @@ describe("POST /api/chat", () => {
     });
 
     expect(res.status).toBe(200);
+    expect(deps.getChatThreadForWorkspace).toHaveBeenCalledWith(THREAD_ID, WORKSPACE_ID);
     expect(deps.createChatThread).not.toHaveBeenCalled();
     expect(streamInput(deps).thread_id).toBe(THREAD_ID);
     expect(deps.touchChatThread).toHaveBeenCalledWith(THREAD_ID);
+  });
+
+  it("supplied thread_id from another workspace: 404 unknown_thread, no run, no SSE", async () => {
+    const deps = makeDeps({
+      getChatThreadForWorkspace: vi.fn(async () => undefined) as any,
+    });
+    const res = await call(buildApp(deps).app, {
+      query: "hi",
+      competitor_ids: [C1],
+      thread_id: THREAD_ID,
+    });
+
+    expect(res.status).toBe(404);
+    expect(JSON.parse(res.text).error).toBe("unknown_thread");
+    expect(res.headers["content-type"]).not.toContain("text/event-stream");
+    expect(deps.getChatThreadForWorkspace).toHaveBeenCalledWith(THREAD_ID, WORKSPACE_ID);
+    expect(deps.createAgentRun).not.toHaveBeenCalled();
+    expect(deps.createChatThread).not.toHaveBeenCalled();
+    expect(deps.touchChatThread).not.toHaveBeenCalled();
   });
 
   it("invalid thread_id: 400 before any run or thread is created", async () => {

@@ -6,20 +6,25 @@
 //   2. Batch-verify every competitor id exists in the caller's workspace — 404
 //      unknown_competitor listing the ids that don't (an id from another
 //      workspace is indistinguishable from a nonexistent one, by design).
-//   3. Create one agent_runs row (trigger 'manual', primary = first id) so the
+//   3. Resolve/validate the thread: a supplied thread_id must belong to this
+//      workspace (404 unknown_thread) — the checkpointer keys solely on
+//      thread_id, so an unchecked foreign id would resume + append to another
+//      workspace's thread; an omitted id auto-creates an untitled thread. This
+//      happens before the agent_runs row so a 4xx leaves no orphan run.
+//   4. Create one agent_runs row (trigger 'manual', primary = first id) so the
 //      latency rows ChatAgent writes have a run to foreign-key to (ruling 5).
-//   4. Open text/event-stream, send `: open`, heartbeat every 15s, and abort the
+//   5. Open text/event-stream, send `: open`, heartbeat every 15s, and abort the
 //      agent when the client disconnects.
-//   5. Stream the generateNode draft as zero-or-more `event: token` frames
+//   6. Stream the generateNode draft as zero-or-more `event: token` frames
 //      (`data: {"text": "..."}`), then — after the citation check has corrected
 //      or refused the draft — exactly one `event: result` carrying the whole
 //      runtime-validated ChatAgentResult (a refusal is a normal, successful
 //      result — never an error), then `event: done`. The result frame is the
 //      correction frame: Phase 5's frontend reconciles it against the tokens
 //      already rendered.
-//   6. Operational failure after headers → a single `event: error` with a generic
+//   7. Operational failure after headers → a single `event: error` with a generic
 //      body; err.message / stack never reach the client.
-//   7. Complete the run 'completed' on a delivered result, 'failed' on an
+//   8. Complete the run 'completed' on a delivered result, 'failed' on an
 //      operational error — exactly once. Nothing is written after disconnect.
 //
 // A `thread_id` may be supplied so a turn lands on an existing thread; when
@@ -35,6 +40,7 @@ import { wrap, fallbackErrorHandler } from "./http";
 
 export interface ChatRouterDeps {
   getCompetitorsByIdsForWorkspace: typeof queries.getCompetitorsByIdsForWorkspace;
+  getChatThreadForWorkspace: typeof queries.getChatThreadForWorkspace;
   createAgentRun: typeof queries.createAgentRun;
   completeAgentRun: typeof queries.completeAgentRun;
   createChatThread: typeof queries.createChatThread;
@@ -45,6 +51,7 @@ export interface ChatRouterDeps {
 
 export const defaultChatRouterDeps: ChatRouterDeps = {
   getCompetitorsByIdsForWorkspace: queries.getCompetitorsByIdsForWorkspace,
+  getChatThreadForWorkspace: queries.getChatThreadForWorkspace,
   createAgentRun: queries.createAgentRun,
   completeAgentRun: queries.completeAgentRun,
   createChatThread: queries.createChatThread,
@@ -100,13 +107,27 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
         return;
       }
 
+      // Resolve/validate the thread before opening the stream OR creating an
+      // agent_runs row: a supplied thread_id must belong to this workspace
+      // (the checkpointer keys solely on thread_id, so an un-checked foreign id
+      // would resume and append to another workspace's thread); an omitted one
+      // auto-creates an untitled thread.
+      let threadId: string;
+      if (parsed.data.thread_id) {
+        const owned = await deps.getChatThreadForWorkspace(parsed.data.thread_id, req.workspaceId!);
+        if (!owned) {
+          res.status(404).json({ error: "unknown_thread" });
+          return;
+        }
+        threadId = parsed.data.thread_id;
+      } else {
+        threadId = (await deps.createChatThread(req.workspaceId!)).id;
+      }
+
       const run = await deps.createAgentRun({
         competitor_id: competitorIds[0],
         trigger: "manual",
       });
-
-      const threadId =
-        parsed.data.thread_id ?? (await deps.createChatThread(req.workspaceId!)).id;
 
       // --- SSE open: from here only stream events, never a status code ---
       res.writeHead(200, {
