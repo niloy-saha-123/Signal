@@ -34,6 +34,7 @@ vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
 
 import {
   hybridRetrieve,
+  hybridRetrieveProfile,
   MIN_QUALITY_SCORE_FOR_RETRIEVAL,
   type RetrievedChunk,
 } from "@/retrieval/hybrid-retrieval";
@@ -285,5 +286,52 @@ describe("retrieval/hybrid-retrieval — hybridRetrieve", () => {
 
     expect(pineconeQueryMock).toHaveBeenCalled();
     expect(getRecentSignalsByCompetitorIdsMock).toHaveBeenCalledWith(["c1"]);
+  });
+});
+
+describe("retrieval/hybrid-retrieval — hybridRetrieveProfile", () => {
+  const workspaceId = "ws-123";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    embedTextMock.mockResolvedValue([0.5, 0.5]);
+    pineconeQueryMock.mockResolvedValue([]);
+  });
+
+  it("queries the profile:<workspaceId> namespace instead of a competitor namespace", async () => {
+    await hybridRetrieveProfile("what is our pricing", workspaceId);
+
+    expect(pineconeQueryMock).toHaveBeenCalledWith(
+      `profile:${workspaceId}`,
+      expect.any(Array),
+      expect.any(Number)
+    );
+  });
+
+  it("returns chunks whose text is the stored metadata.text (not hydrated from Postgres)", async () => {
+    pineconeQueryMock.mockResolvedValue([
+      { id: "ws-123:pricing", score: 0.9, metadata: { text: "Our pricing is $10/mo per seat." } },
+    ]);
+
+    const results = await hybridRetrieveProfile("pricing", workspaceId);
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        id: "ws-123:pricing",
+        text: "Our pricing is $10/mo per seat.",
+        origin: "both",
+      }),
+    ]);
+  });
+
+  it("drops semantic matches whose metadata.text is empty or missing", async () => {
+    pineconeQueryMock.mockResolvedValue([
+      { id: "ws-123:empty", score: 0.9, metadata: { text: "" } },
+      { id: "ws-123:missing", score: 0.8, metadata: {} },
+    ]);
+
+    const results = await hybridRetrieveProfile("pricing", workspaceId);
+
+    expect(results).toEqual([]);
   });
 });
