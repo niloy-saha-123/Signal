@@ -107,7 +107,7 @@ export function createCompanyProfileRouter(
         });
       }
       try {
-        await deps.enqueue("company-profile-update", {});
+        await deps.enqueue("company-profile-update", { workspace_id: req.workspaceId! });
       } catch (err) {
         logger.warn("Failed to enqueue company-profile-update", {
           error: err instanceof Error ? err.message : String(err),

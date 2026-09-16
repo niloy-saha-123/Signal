@@ -17,7 +17,7 @@ const {
   updateDiscoveryStatusMock,
   finalizeDiscoveryMock,
   discoverCompetitorMock,
-  listCompetitorsMock,
+  listCompetitorsForWorkspaceMock,
   createAgentRunMock,
   getRecentPricingDiffsMock,
   failRunIfRunningMock,
@@ -26,7 +26,7 @@ const {
   updateDiscoveryStatusMock: vi.fn(),
   finalizeDiscoveryMock: vi.fn(),
   discoverCompetitorMock: vi.fn(),
-  listCompetitorsMock: vi.fn(),
+  listCompetitorsForWorkspaceMock: vi.fn(),
   createAgentRunMock: vi.fn(),
   getRecentPricingDiffsMock: vi.fn(),
   failRunIfRunningMock: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock("@/db/queries", () => ({
   getCompetitorById: getCompetitorByIdMock,
   updateDiscoveryStatus: updateDiscoveryStatusMock,
   finalizeDiscovery: finalizeDiscoveryMock,
-  listCompetitors: listCompetitorsMock,
+  listCompetitorsForWorkspace: listCompetitorsForWorkspaceMock,
   createAgentRun: createAgentRunMock,
   getRecentPricingDiffs: getRecentPricingDiffsMock,
   failRunIfRunning: failRunIfRunningMock,
@@ -685,17 +685,12 @@ describe("competitor-discovery worker", () => {
 describe("company-profile-update worker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listCompetitorsMock.mockResolvedValue([
-      { id: "active-1", is_active: true, workspace_id: "workspace-a" },
-      { id: "inactive-1", is_active: false, workspace_id: "workspace-a" },
-      { id: "active-2", is_active: true, workspace_id: "workspace-b" },
+    listCompetitorsForWorkspaceMock.mockResolvedValue([
+      { id: "active-1", is_active: true, workspace_id: COMP_42_ID },
+      { id: "inactive-1", is_active: false, workspace_id: COMP_42_ID },
     ]);
-    createAgentRunMock
-      .mockResolvedValueOnce({ id: "run-1" })
-      .mockResolvedValueOnce({ id: "run-2" });
-    getRecentPricingDiffsMock
-      .mockResolvedValueOnce([{ id: "diff-1" }])
-      .mockResolvedValueOnce([]);
+    createAgentRunMock.mockResolvedValueOnce({ id: "run-1" });
+    getRecentPricingDiffsMock.mockResolvedValueOnce([{ id: "diff-1" }]);
     failRunIfRunningMock.mockResolvedValue(undefined);
     queueAddMock.mockResolvedValue(undefined);
     cacheDeleteMock.mockResolvedValue(1);
@@ -715,35 +710,24 @@ describe("company-profile-update worker", () => {
 
   it("creates one scheduled run and analysis job per active competitor", async () => {
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
-    const job = { data: {} };
+    const job = { data: { workspace_id: COMP_42_ID } };
 
     await expect(processor(job)).resolves.toBeUndefined();
-    // One invalidation per distinct workspace among the active competitors —
-    // this job carries no workspace_id of its own, unlike the API's own
-    // post-write invalidation.
-    expect(cacheDeleteMock).toHaveBeenCalledTimes(2);
-    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile:workspace-a");
-    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile:workspace-b");
-    expect(createAgentRunMock).toHaveBeenCalledTimes(2);
-    expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
+    // One invalidation, scoped to the changed workspace.
+    expect(listCompetitorsForWorkspaceMock).toHaveBeenCalledWith(COMP_42_ID);
+    expect(cacheDeleteMock).toHaveBeenCalledTimes(1);
+    expect(cacheDeleteMock).toHaveBeenCalledWith(`company:profile:${COMP_42_ID}`);
+    expect(createAgentRunMock).toHaveBeenCalledTimes(1);
+    expect(createAgentRunMock).toHaveBeenCalledWith({
       competitor_id: "active-1",
       trigger: "scheduled",
     });
-    expect(createAgentRunMock).toHaveBeenNthCalledWith(2, {
-      competitor_id: "active-2",
-      trigger: "scheduled",
-    });
-    expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
+    expect(queueAddMock).toHaveBeenCalledTimes(1);
+    expect(queueAddMock).toHaveBeenCalledWith("analysis", {
       competitor_id: "active-1",
-      workspace_id: "workspace-a",
+      workspace_id: COMP_42_ID,
       run_id: "run-1",
       has_pricing_diff: true,
-    });
-    expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
-      competitor_id: "active-2",
-      workspace_id: "workspace-b",
-      run_id: "run-2",
-      has_pricing_diff: false,
     });
     expect(getRecentPricingDiffsMock).not.toHaveBeenCalledWith("inactive-1", expect.anything());
   });
@@ -752,7 +736,7 @@ describe("company-profile-update worker", () => {
     cacheDeleteMock.mockRejectedValue(new Error("redis down"));
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
 
-    await expect(processor({ data: {} })).rejects.toThrow("redis down");
+    await expect(processor({ data: { workspace_id: COMP_42_ID } })).rejects.toThrow("redis down");
     expect(createAgentRunMock).not.toHaveBeenCalled();
     expect(queueAddMock).not.toHaveBeenCalled();
   });
@@ -760,6 +744,13 @@ describe("company-profile-update worker", () => {
   it("rejects unknown company-profile job fields", async () => {
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
     await expect(processor({ data: { unexpected: true } })).rejects.toThrow();
+    expect(cacheDeleteMock).not.toHaveBeenCalled();
+    expect(createAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-UUID workspace_id", async () => {
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+    await expect(processor({ data: { workspace_id: "not-a-uuid" } })).rejects.toThrow();
     expect(cacheDeleteMock).not.toHaveBeenCalled();
     expect(createAgentRunMock).not.toHaveBeenCalled();
   });

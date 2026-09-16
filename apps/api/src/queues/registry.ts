@@ -41,7 +41,7 @@ import {
   finalizeDiscovery,
   getCompetitorById,
   getRecentPricingDiffs,
-  listCompetitors,
+  listCompetitorsForWorkspace,
   updateDiscoveryStatus,
 } from "../db/queries";
 import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
@@ -363,29 +363,27 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
   });
 }
 
-const CompanyProfileUpdateJobDataSchema = z.object({}).strict();
+const CompanyProfileUpdateJobDataSchema = z
+  .object({ workspace_id: z.string().uuid() })
+  .strict();
 type CompanyProfileUpdateJobData = z.infer<typeof CompanyProfileUpdateJobDataSchema>;
 
 async function companyProfileUpdateProcessor(
   _job: Job<CompanyProfileUpdateJobData>
 ): Promise<void> {
-  CompanyProfileUpdateJobDataSchema.parse(_job.data);
+  const { workspace_id } = CompanyProfileUpdateJobDataSchema.parse(_job.data);
 
-  // Bounded by the active competitor set, which is admin-controlled and small
-  // in Phase 0. This never replays historical runs or signals.
-  const activeCompetitors = (await listCompetitors()).filter(
+  // Bounded by the active competitor set for the one workspace whose profile
+  // changed, which is admin-controlled and small in Phase 0. This never
+  // replays historical runs or signals.
+  const activeCompetitors = (await listCompetitorsForWorkspace(workspace_id)).filter(
     (competitor) => competitor.is_active
   );
 
   // The API already attempts this after the DB write. Repeat it at the worker
   // boundary so a transient API-side cache failure cannot make the queued
-  // analyses read stale company context. This job carries no workspace_id of
-  // its own — invalidate every distinct workspace represented among the
-  // active competitors being re-analyzed here.
-  const workspaceIds = new Set(activeCompetitors.map((competitor) => competitor.workspace_id));
-  await Promise.all(
-    [...workspaceIds].map((workspaceId) => invalidateCompanyContextCache(workspaceId))
-  );
+  // analyses read stale company context — scoped to the changed workspace.
+  await invalidateCompanyContextCache(workspace_id);
 
   let failed = 0;
 
