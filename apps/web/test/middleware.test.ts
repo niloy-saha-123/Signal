@@ -47,13 +47,10 @@ describe("middleware", () => {
       expect(response.headers.get("location")).toBe(`${BASE}/login`);
     });
 
-    it.each(["/login", "/signup", "/join/abc123"])(
-      "passes %s through without redirecting",
-      async (pathname) => {
-        const response = await middleware(makeRequest(pathname));
-        expect(response.headers.get("location")).toBeNull();
-      }
-    );
+    it.each(["/login", "/signup"])("passes %s through without redirecting", async (pathname) => {
+      const response = await middleware(makeRequest(pathname));
+      expect(response.headers.get("location")).toBeNull();
+    });
   });
 
   describe("session but no workspace", () => {
@@ -70,7 +67,7 @@ describe("middleware", () => {
       expect(response.headers.get("location")).toBe(`${BASE}/onboarding`);
     });
 
-    it.each(["/onboarding", "/login", "/signup", "/join/abc123"])(
+    it.each(["/onboarding", "/login", "/signup"])(
       "passes %s through without redirecting",
       async (pathname) => {
         const response = await middleware(makeRequest(pathname));

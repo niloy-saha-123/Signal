@@ -1,5 +1,4 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { randomBytes } from "node:crypto";
 import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type {
@@ -39,7 +38,6 @@ import {
   ragEvalRunsTable,
   workspacesTable,
   workspaceMembersTable,
-  workspaceInvitesTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -69,7 +67,6 @@ export type LlmCost = typeof llmCostsTable.$inferSelect;
 export type Alert = typeof alertsTable.$inferSelect;
 export type Workspace = typeof workspacesTable.$inferSelect;
 export type WorkspaceMember = typeof workspaceMembersTable.$inferSelect;
-export type WorkspaceInvite = typeof workspaceInvitesTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
@@ -1445,60 +1442,6 @@ export async function getWorkspaceIdForUser(userId: string): Promise<string | nu
     .from(workspaceMembersTable)
     .where(eq(workspaceMembersTable.user_id, userId));
   return row?.workspace_id ?? null;
-}
-
-// URL-safe, no padding — goes straight into a /join/<token> path segment.
-function generateInviteToken(): string {
-  return randomBytes(32).toString("base64url");
-}
-
-export async function createWorkspaceInvite(input: {
-  workspaceId: string;
-  createdBy: string;
-  ttlHours: number;
-}): Promise<WorkspaceInvite> {
-  const [invite] = await db
-    .insert(workspaceInvitesTable)
-    .values({
-      workspace_id: input.workspaceId,
-      created_by: input.createdBy,
-      token: generateInviteToken(),
-      expires_at: new Date(Date.now() + input.ttlHours * 60 * 60 * 1000),
-    })
-    .returning();
-  return invite;
-}
-
-export async function getValidInviteByToken(token: string): Promise<WorkspaceInvite | null> {
-  const [row] = await db
-    .select()
-    .from(workspaceInvitesTable)
-    .where(eq(workspaceInvitesTable.token, token));
-  if (!row) return null;
-  if (row.used_at !== null) return null;
-  if (row.expires_at.getTime() < Date.now()) return null;
-  return row;
-}
-
-// Atomic: marks the invite used and adds the member in one transaction so a
-// double-submit (two tabs, same link) can't both succeed and violate the
-// one-workspace-per-user unique index with a confusing error.
-export async function redeemInvite(input: { inviteId: string; userId: string }): Promise<void> {
-  await db.transaction(async (tx) => {
-    const [invite] = await tx
-      .update(workspaceInvitesTable)
-      .set({ used_at: new Date() })
-      .where(and(eq(workspaceInvitesTable.id, input.inviteId), sql`${workspaceInvitesTable.used_at} IS NULL`))
-      .returning();
-    if (!invite) {
-      throw new Error("invite already used or not found");
-    }
-    await tx.insert(workspaceMembersTable).values({
-      workspace_id: invite.workspace_id,
-      user_id: input.userId,
-      role: "member",
-    });
-  });
 }
 
 // ── workspace-scoped tenant-data query variants (Task 3) ────────────────

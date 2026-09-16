@@ -35,13 +35,6 @@ function makeDeps(over: Partial<WorkspaceRouterDeps> = {}): WorkspaceRouterDeps 
       name: input.name,
       owner_id: input.ownerId,
     })) as any,
-    createWorkspaceInvite: vi.fn(async () => ({
-      id: "inv-1",
-      token: "tok-abc",
-      expires_at: new Date("2026-09-22T00:00:00.000Z"),
-    })) as any,
-    getValidInviteByToken: vi.fn(async () => ({ id: "inv-1", workspace_id: WS_UUID })) as any,
-    redeemInvite: vi.fn(async () => undefined) as any,
     ...over,
   };
 }
@@ -88,56 +81,5 @@ describe("POST /api/workspaces", () => {
     const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(makeDeps()));
     const res = await call(app, "POST", "/", {});
     expect(res.status).toBe(400);
-  });
-});
-
-describe("POST /api/workspaces/invites", () => {
-  it("generates an invite token scoped to the caller's workspace", async () => {
-    const deps = makeDeps();
-    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createWorkspaceRouter(deps));
-    const res = await call(app, "POST", "/invites", {});
-    expect(res.status).toBe(201);
-    expect(deps.createWorkspaceInvite).toHaveBeenCalledWith({
-      workspaceId: WS_UUID,
-      createdBy: USER_UUID,
-      ttlHours: 168,
-    });
-    expect(res.body).toEqual({ token: "tok-abc", expires_at: "2026-09-22T00:00:00.000Z" });
-  });
-
-  it("409s if the caller has no workspace yet", async () => {
-    const deps = makeDeps();
-    const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(deps));
-    const res = await call(app, "POST", "/invites", {});
-    expect(res.status).toBe(409);
-    expect(deps.createWorkspaceInvite).not.toHaveBeenCalled();
-  });
-});
-
-describe("POST /api/workspaces/join/:token", () => {
-  it("redeems a valid invite", async () => {
-    const deps = makeDeps({
-      getValidInviteByToken: vi.fn(async () => ({ id: "inv-1", workspace_id: WS_UUID })) as any,
-    });
-    const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(deps));
-    const res = await call(app, "POST", "/join/some-token", {});
-    expect(res.status).toBe(200);
-    expect(deps.redeemInvite).toHaveBeenCalledWith({ inviteId: "inv-1", userId: USER_UUID });
-  });
-
-  it("404s an expired or unknown token", async () => {
-    const deps = makeDeps({ getValidInviteByToken: vi.fn(async () => null) });
-    const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(deps));
-    const res = await call(app, "POST", "/join/bad-token", {});
-    expect(res.status).toBe(404);
-    expect(deps.redeemInvite).not.toHaveBeenCalled();
-  });
-
-  it("409s if the caller already has a workspace", async () => {
-    const deps = makeDeps();
-    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createWorkspaceRouter(deps));
-    const res = await call(app, "POST", "/join/some-token", {});
-    expect(res.status).toBe(409);
-    expect(deps.getValidInviteByToken).not.toHaveBeenCalled();
   });
 });

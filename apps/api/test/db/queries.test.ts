@@ -89,7 +89,6 @@ import {
   ragEvalRunsTable,
   workspacesTable,
   workspaceMembersTable,
-  workspaceInvitesTable,
 } from "@/db/schema";
 import {
   getCompetitorsByIds,
@@ -143,9 +142,6 @@ import {
   RagEvalDatasetIntegrityError,
   createWorkspace,
   getWorkspaceIdForUser,
-  createWorkspaceInvite,
-  getValidInviteByToken,
-  redeemInvite,
   getCompetitorByIdForWorkspace,
   listCompetitorsForWorkspace,
   getCompetitorsByIdsForWorkspace,
@@ -2581,7 +2577,6 @@ describe("db/queries — workspaces", () => {
   const OWNER_UUID = "11111111-1111-4111-8111-111111111111";
   const UNKNOWN_UUID = "22222222-2222-4222-8222-222222222222";
   const WS_UUID = "33333333-3333-4333-8333-333333333333";
-  const INVITE_UUID = "44444444-4444-4444-8444-444444444444";
 
   describe("createWorkspace", () => {
     beforeEach(() => {
@@ -2665,142 +2660,6 @@ describe("db/queries — workspaces", () => {
     });
   });
 
-  describe("createWorkspaceInvite", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-      insertMock.mockReturnValue({ values: insertValuesMock });
-      insertValuesMock.mockReturnValue({ returning: insertReturningMock });
-    });
-
-    it("generates a token expiring ttlHours from now", async () => {
-      let insertedValues: Record<string, unknown> | undefined;
-      insertValuesMock.mockImplementation((values: Record<string, unknown>) => {
-        insertedValues = values;
-        return { returning: insertReturningMock };
-      });
-      insertReturningMock.mockImplementation(async () => [{ id: INVITE_UUID, used_at: null, ...insertedValues }]);
-
-      const invite = await createWorkspaceInvite({ workspaceId: WS_UUID, createdBy: OWNER_UUID, ttlHours: 72 });
-
-      expect(insertMock).toHaveBeenCalledWith(workspaceInvitesTable);
-      expect(insertedValues).toMatchObject({ workspace_id: WS_UUID, created_by: OWNER_UUID });
-      // base64url of 32 random bytes, no padding
-      expect(invite.token).toHaveLength(43);
-      expect(invite.expires_at.getTime()).toBeGreaterThan(Date.now());
-    });
-  });
-
-  describe("getValidInviteByToken", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-      selectMock.mockReturnValue({ from: fromMock });
-      fromMock.mockReturnValue({ where: whereMock });
-    });
-
-    it("returns the invite row for a valid, unused, unexpired token", async () => {
-      const row = {
-        id: INVITE_UUID,
-        workspace_id: WS_UUID,
-        token: "good-token",
-        created_by: OWNER_UUID,
-        used_at: null,
-        expires_at: new Date(Date.now() + 60_000),
-      };
-      whereMock.mockResolvedValue([row]);
-
-      const result = await getValidInviteByToken("good-token");
-
-      expect(eq).toHaveBeenCalledWith(workspaceInvitesTable.token, "good-token");
-      expect(result).toEqual(row);
-    });
-
-    it("returns null for an unknown token", async () => {
-      whereMock.mockResolvedValue([]);
-
-      expect(await getValidInviteByToken("unknown-token")).toBeNull();
-    });
-
-    it("returns null for an already-used invite", async () => {
-      whereMock.mockResolvedValue([
-        {
-          id: INVITE_UUID,
-          workspace_id: WS_UUID,
-          token: "used-token",
-          created_by: OWNER_UUID,
-          used_at: new Date(),
-          expires_at: new Date(Date.now() + 60_000),
-        },
-      ]);
-
-      expect(await getValidInviteByToken("used-token")).toBeNull();
-    });
-
-    it("returns null for an expired invite", async () => {
-      whereMock.mockResolvedValue([
-        {
-          id: INVITE_UUID,
-          workspace_id: WS_UUID,
-          token: "expired-token",
-          created_by: OWNER_UUID,
-          used_at: null,
-          expires_at: new Date(Date.now() - 60_000),
-        },
-      ]);
-
-      expect(await getValidInviteByToken("expired-token")).toBeNull();
-    });
-  });
-
-  describe("redeemInvite", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it("marks the invite used and adds the member in one transaction", async () => {
-      const updateReturning = vi.fn(async () => [{ id: INVITE_UUID, workspace_id: WS_UUID }]);
-      const memberValues = vi.fn(async () => undefined);
-      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
-        callback({
-          update: updateMock,
-          insert: insertMock,
-        })
-      );
-      updateMock.mockReturnValue({ set: updateSetMock });
-      updateSetMock.mockReturnValue({ where: updateWhereMock });
-      updateWhereMock.mockReturnValue({ returning: updateReturning });
-      insertMock.mockReturnValue({ values: memberValues });
-
-      await redeemInvite({ inviteId: INVITE_UUID, userId: UNKNOWN_UUID });
-
-      expect(transactionMock).toHaveBeenCalledTimes(1);
-      expect(updateMock).toHaveBeenCalledWith(workspaceInvitesTable);
-      expect(updateSetMock).toHaveBeenCalledWith({ used_at: expect.any(Date) });
-      expect(insertMock).toHaveBeenCalledWith(workspaceMembersTable);
-      expect(memberValues).toHaveBeenCalledWith({
-        workspace_id: WS_UUID,
-        user_id: UNKNOWN_UUID,
-        role: "member",
-      });
-    });
-
-    it("throws instead of adding a member when the invite is already used or missing", async () => {
-      const updateReturning = vi.fn(async () => []);
-      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
-        callback({
-          update: updateMock,
-          insert: insertMock,
-        })
-      );
-      updateMock.mockReturnValue({ set: updateSetMock });
-      updateSetMock.mockReturnValue({ where: updateWhereMock });
-      updateWhereMock.mockReturnValue({ returning: updateReturning });
-
-      await expect(redeemInvite({ inviteId: INVITE_UUID, userId: UNKNOWN_UUID })).rejects.toThrow(
-        "invite already used or not found"
-      );
-      expect(insertMock).not.toHaveBeenCalled();
-    });
-  });
 });
 
 describe("workspace-scoped competitor/profile queries", () => {
