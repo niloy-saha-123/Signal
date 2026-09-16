@@ -1,4 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { getSessionMock } = vi.hoisted(() => ({
+  getSessionMock: vi.fn(),
+}));
+
+vi.mock("../../lib/supabase-browser", () => ({
+  getSupabaseBrowserClient: () => ({
+    auth: { getSession: getSessionMock },
+  }),
+}));
+
 import {
   ApiError,
   analyzeCompetitor,
@@ -28,6 +39,19 @@ function mockFetchOnce(status: number, body: unknown) {
   );
 }
 
+function lastFetchInit(): RequestInit {
+  const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+  return calls[calls.length - 1][1] as RequestInit;
+}
+
+// Applies across every describe block below: request() calls getSession() on every fetch,
+// so without a default mocked resolution the pre-existing tests (which never mention auth)
+// would hang on an unresolved mock promise.
+beforeEach(() => {
+  getSessionMock.mockReset();
+  getSessionMock.mockResolvedValue({ data: { session: { access_token: "token-123" } } });
+});
+
 describe("lib/api competitor endpoints", () => {
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_API_URL", BASE);
@@ -35,6 +59,20 @@ describe("lib/api competitor endpoints", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("attaches the session access token as a Bearer Authorization header", async () => {
+    mockFetchOnce(200, []);
+    await listCompetitors();
+    expect(lastFetchInit().headers).toMatchObject({ Authorization: "Bearer token-123" });
+  });
+
+  it("sends no Authorization header when there is no session", async () => {
+    getSessionMock.mockResolvedValue({ data: { session: null } });
+    mockFetchOnce(200, []);
+    await listCompetitors();
+    const headers = lastFetchInit().headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
   });
 
   it("listCompetitors GETs /api/competitors and returns the parsed array", async () => {
@@ -285,6 +323,12 @@ describe("lib/api company-profile endpoints", () => {
     key_differentiators: [],
     primary_competitor_ids: [],
   };
+
+  it("getCompanyProfile attaches the Bearer Authorization header (direct fetch, bypasses request())", async () => {
+    mockFetchOnce(200, profile);
+    await getCompanyProfile();
+    expect(lastFetchInit().headers).toMatchObject({ Authorization: "Bearer token-123" });
+  });
 
   it("getCompanyProfile returns null on 404", async () => {
     mockFetchOnce(404, { message: "No company profile configured. POST to create one." });

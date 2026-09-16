@@ -18,6 +18,7 @@ import {
   type SignalScore,
 } from "@signal/shared";
 import { z } from "zod";
+import { getSupabaseBrowserClient } from "./supabase-browser";
 
 export type { CompanyProfile, SignalSource } from "@signal/shared";
 
@@ -33,10 +34,18 @@ export class ApiError extends Error {
   }
 }
 
+async function authHeader(): Promise<Record<string, string>> {
+  const supabase = getSupabaseBrowserClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { "Content-Type": "application/json", ...(await authHeader()), ...init?.headers },
   });
   if (!res.ok) {
     const body = await res.json().catch(() => undefined);
@@ -217,7 +226,7 @@ export function listAlerts(params: ListAlertsParams): Promise<Paginated<Alert>> 
 // --- Company profile ---
 
 export async function getCompanyProfile(): Promise<CompanyProfile | null> {
-  const res = await fetch(`${API_BASE}/api/company-profile`);
+  const res = await fetch(`${API_BASE}/api/company-profile`, { headers: await authHeader() });
   if (res.status === 404) return null;
   if (!res.ok) {
     const body = await res.json().catch(() => undefined);
