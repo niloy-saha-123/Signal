@@ -158,7 +158,7 @@ describe("queues/scheduler", () => {
     expect(config["company-profile-update"]).toBeUndefined();
   });
 
-  it("idempotently upserts every collector under a stable scheduler id", async () => {
+  it("idempotently upserts every collector and pipeline-recovery under a stable scheduler id", async () => {
     delete process.env.COLLECT_INTERVAL_HOURS;
     upsertJobSchedulerMock.mockClear();
 

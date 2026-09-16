@@ -28,7 +28,8 @@
 import { Queue, Worker, type ConnectionOptions, type Job, type Processor } from "bullmq";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { cacheRedis, redis } from "../lib/redis-client";
+import { redis } from "../lib/redis-client";
+import { invalidateCompanyContextCache } from "../lib/company-context";
 import { db } from "../db/client";
 import { competitorsTable, competitorDiscoveryLogTable } from "../db/schema";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
@@ -40,7 +41,7 @@ import {
   finalizeDiscovery,
   getCompetitorById,
   getRecentPricingDiffs,
-  listCompetitors,
+  listCompetitorsForWorkspace,
   updateDiscoveryStatus,
 } from "../db/queries";
 import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
@@ -65,7 +66,8 @@ export type QueueName =
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
   | "pipeline-recovery"
-  | "analysis";
+  | "analysis"
+  | "discovery-search";
 
 export interface QueueConfig {
   concurrency: number;
@@ -177,6 +179,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "pipeline-deduplication": DEFAULT_CONFIG,
   "pipeline-recovery": { ...DEFAULT_CONFIG, concurrency: 1 },
   analysis: DEFAULT_CONFIG,
+  // One discovery sweep at a time is enough — this is not latency-sensitive,
+  // and each sweep holds the workspace's thread_id checkpoint while it runs.
+  "discovery-search": { concurrency: 1, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
@@ -358,23 +363,28 @@ async function writeDiscoveryFailure(competitorId: string, err: Error): Promise<
   });
 }
 
-const CompanyProfileUpdateJobDataSchema = z.object({}).strict();
+const CompanyProfileUpdateJobDataSchema = z
+  .object({ workspace_id: z.string().uuid() })
+  .strict();
 type CompanyProfileUpdateJobData = z.infer<typeof CompanyProfileUpdateJobDataSchema>;
 
 async function companyProfileUpdateProcessor(
   _job: Job<CompanyProfileUpdateJobData>
 ): Promise<void> {
-  CompanyProfileUpdateJobDataSchema.parse(_job.data);
-  // The API already attempts this after the DB write. Repeat it at the worker
-  // boundary so a transient API-side cache failure cannot make the queued
-  // analyses read stale company context.
-  await cacheRedis.del("company:profile");
+  const { workspace_id } = CompanyProfileUpdateJobDataSchema.parse(_job.data);
 
-  // Bounded by the active competitor set, which is admin-controlled and small
-  // in Phase 0. This never replays historical runs or signals.
-  const activeCompetitors = (await listCompetitors()).filter(
+  // Bounded by the active competitor set for the one workspace whose profile
+  // changed, which is admin-controlled and small in Phase 0. This never
+  // replays historical runs or signals.
+  const activeCompetitors = (await listCompetitorsForWorkspace(workspace_id)).filter(
     (competitor) => competitor.is_active
   );
+
+  // The API already attempts this after the DB write. Repeat it at the worker
+  // boundary so a transient API-side cache failure cannot make the queued
+  // analyses read stale company context — scoped to the changed workspace.
+  await invalidateCompanyContextCache(workspace_id);
+
   let failed = 0;
 
   for (const competitor of activeCompetitors) {
@@ -386,6 +396,7 @@ async function companyProfileUpdateProcessor(
       const hasPricingDiff = (await getRecentPricingDiffs(competitor.id, 7)).length > 0;
       await queues.analysis.add("analysis", {
         competitor_id: competitor.id,
+        workspace_id: competitor.workspace_id,
         run_id: run.id,
         has_pricing_diff: hasPricingDiff,
       });
@@ -457,4 +468,12 @@ export function initWorkers(): {
   );
 
   return { competitorDiscoveryWorker, companyProfileUpdateWorker };
+}
+
+// Inline payload shape (not imported from discovery-worker.ts) so the registry
+// never depends on the worker module — that would close a registry↔worker
+// circular-import loop. Express enqueues the immutable workspace_id; the worker
+// is the only side that runs the graph.
+export function addDiscoveryJob(input: { workspace_id: string }): Promise<unknown> {
+  return queues["discovery-search"].add("discovery-search", input);
 }

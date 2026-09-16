@@ -502,11 +502,102 @@ export const companyProfileTable = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::uuid[]`),
+    // Why the user is using Signal at all — catching up, defending a niche,
+    // benchmarking a bigger player. Inferred from usage and user-correctable.
+    // These columns are the durable Postgres snapshot intended once the
+    // signal-goal inference/correction path lands; they are not yet read or
+    // written anywhere. For now getCompanyContext reads the inferred goal from
+    // the LangGraph Store in agents/discovery-search/memory-store.ts
+    // (getSignalGoalMemory).
+    signal_goal: text("signal_goal"),
+    signal_goal_confidence: real("signal_goal_confidence"),
+    signal_goal_inferred_at: timestamp("signal_goal_inferred_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("company_profile_workspace_idx").on(table.workspace_id)]
 );
+
+// ── company_documents ────────────────────────────────────────────────────
+// One row per uploaded/pasted piece of company material. narrative content
+// is chunked and embedded into Pinecone (profile:<workspace_id> namespace,
+// see retrieval/hybrid-retrieval.ts); structured content is merged directly
+// into company_profile instead and this row just records that it happened.
+export const companyDocumentsTable = pgTable(
+  "company_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    mime_type: text("mime_type").notNull(),
+    doc_type: text("doc_type"),
+    extraction_status: text("extraction_status").notNull().default("pending"),
+    pinecone_namespace: text("pinecone_namespace"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "company_documents_doc_type_check",
+      sql`${table.doc_type} IS NULL OR ${table.doc_type} IN ('pitch_deck', 'financials', 'website_snapshot', 'other')`
+    ),
+    check(
+      "company_documents_extraction_status_check",
+      sql`${table.extraction_status} IN ('pending', 'structured', 'embedded', 'failed')`
+    ),
+    index("company_documents_workspace_id_idx").on(table.workspace_id),
+  ]
+);
+
+// ── tracked_entities ─────────────────────────────────────────────────────
+// Makes "is this a direct competitor, or a bigger company we're benchmarking
+// against" representable (was previously an implicit, unstated assumption
+// that every competitors row = adversary), and makes a discovery-agent
+// candidate representable before it's ever promoted to actually tracked.
+export const trackedEntitiesTable = pgTable(
+  "tracked_entities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    competitor_id: uuid("competitor_id").references(() => competitorsTable.id, {
+      onDelete: "cascade",
+    }),
+    relationship_type: text("relationship_type").notNull().default("competitor"),
+    relationship_confidence: real("relationship_confidence"),
+    source: text("source").notNull(),
+    status: text("status").notNull().default("candidate"),
+    candidate_name: text("candidate_name"),
+    candidate_domain: text("candidate_domain"),
+    candidate_reason: text("candidate_reason"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "tracked_entities_relationship_type_check",
+      sql`${table.relationship_type} IN ('competitor', 'aspirational', 'other')`
+    ),
+    check("tracked_entities_source_check", sql`${table.source} IN ('user_added', 'discovered')`),
+    check(
+      "tracked_entities_status_check",
+      sql`${table.status} IN ('confirmed', 'candidate', 'dismissed')`
+    ),
+    // A candidate has no competitor_id yet (nothing's been created); a
+    // confirmed/dismissed row must reference a real competitor once resolved.
+    check(
+      "tracked_entities_competitor_id_when_confirmed_check",
+      sql`${table.status} = 'candidate' OR ${table.competitor_id} IS NOT NULL`
+    ),
+    index("tracked_entities_workspace_id_idx").on(table.workspace_id),
+    index("tracked_entities_status_idx").on(table.workspace_id, table.status),
+  ]
+);
+
+export type CompanyDocument = typeof companyDocumentsTable.$inferSelect;
+export type TrackedEntity = typeof trackedEntitiesTable.$inferSelect;
 
 // ── competitor_discovery_log ─────────────────────────────────────────────
 // One row per field CompetitorDiscoveryAgent attempted to discover — what

@@ -57,6 +57,13 @@
       "when": 1789508615873,
       "tag": "0007_same_stephen_strange",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789546849848,
+      "tag": "0008_moaning_sunspot",
+      "breakpoints": true
     }
   ]
 }

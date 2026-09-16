@@ -437,7 +437,12 @@ export function createCompetitorRouter(
       try {
         const has_pricing_diff = (await deps.getRecentPricingDiffs(id, 7)).length > 0;
         enqueueAttempted = true;
-        await deps.enqueue("analysis", { competitor_id: id, run_id: run.id, has_pricing_diff });
+        await deps.enqueue("analysis", {
+          competitor_id: id,
+          workspace_id: competitor.workspace_id,
+          run_id: run.id,
+          has_pricing_diff,
+        });
       } catch (err) {
         logger.error("Failed to prepare or enqueue analysis", {
           competitor_id: id,

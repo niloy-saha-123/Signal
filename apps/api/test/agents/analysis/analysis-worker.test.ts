@@ -32,10 +32,12 @@ import {
 } from "@/agents/analysis/analysis-worker";
 
 const COMPETITOR_ID = "11111111-1111-4111-8111-111111111111";
+const WORKSPACE_ID = "33333333-3333-4333-8333-333333333333";
 const RUN_ID = "22222222-2222-4222-8222-222222222222";
 
 function job(data: unknown = {
   competitor_id: COMPETITOR_ID,
+  workspace_id: WORKSPACE_ID,
   run_id: RUN_ID,
   has_pricing_diff: true,
 }) {
@@ -73,6 +75,7 @@ describe("analysis job processor", () => {
 
     expect(invokeMock).toHaveBeenCalledWith({
       competitor_id: COMPETITOR_ID,
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
       has_pricing_diff: true,
     });

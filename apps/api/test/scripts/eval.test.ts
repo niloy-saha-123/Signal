@@ -45,6 +45,7 @@ const providerMocks = vi.hoisted(() => {
     selectModel: vi.fn(async (model: string) => model),
     getCompanyContext: vi.fn(async () => "COMPANY CONTEXT"),
     getActivePrompt: vi.fn(),
+    getCompetitorById: vi.fn(async () => ({ workspace_id: "00000000-0000-0000-0000-000000000000" })),
   };
 });
 
@@ -72,6 +73,9 @@ vi.mock("../../src/lib/company-context", () => ({
 }));
 vi.mock("../../src/llm/prompt-registry", () => ({
   getActivePrompt: providerMocks.getActivePrompt,
+}));
+vi.mock("../../src/db/queries", () => ({
+  getCompetitorById: providerMocks.getCompetitorById,
 }));
 
 const createdAt = new Date("2026-09-12T12:00:00.000Z");

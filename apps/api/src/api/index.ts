@@ -7,6 +7,8 @@ import { createSignalRouter } from "./signals";
 import { createAlertRouter } from "./alerts";
 import { createChatRouter } from "./chat";
 import { createCompanyProfileRouter } from "./company-profile";
+import { createCompanyDocumentsRouter } from "./company-documents";
+import { createDiscoveryRouter } from "./discovery";
 import { createWorkspaceRouter } from "./workspaces";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
@@ -117,6 +119,8 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/alerts", createAlertRouter());
   app.use("/api/chat", createChatRouter());
   app.use("/api/company-profile", createCompanyProfileRouter());
+  app.use("/api/company-documents", createCompanyDocumentsRouter());
+  app.use("/api/discovery", createDiscoveryRouter());
   app.use("/api/workspaces", createWorkspaceRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);

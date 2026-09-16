@@ -74,6 +74,7 @@ import { runChatAgent } from "@/agents/chat/chat-agent";
 const COMPETITOR_1 = "11111111-1111-4111-8111-111111111111";
 const COMPETITOR_2 = "22222222-2222-4222-8222-222222222222";
 const RUN_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
 const TEST_CITATION = {
   claim: "Acme customers report slower support response times.",
   chunk_id: "signal-1",
@@ -100,7 +101,7 @@ function reranked(overrides: Partial<RerankedChunk> = {}): RerankedChunk {
 }
 
 function input() {
-  return { query: "What changed?", competitor_ids: [COMPETITOR_1], run_id: RUN_ID };
+  return { query: "What changed?", competitor_ids: [COMPETITOR_1], workspace_id: WORKSPACE_ID, run_id: RUN_ID };
 }
 
 afterEach(() => {
@@ -138,6 +139,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     await runChatAgent({
       query: "  What changed?  ",
       competitor_ids: [COMPETITOR_2, COMPETITOR_1, COMPETITOR_2],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
 
@@ -156,6 +158,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     await runChatAgent({
       query: "What changed?",
       competitor_ids: [COMPETITOR_1],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
 
@@ -171,6 +174,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     const result = await runChatAgent({
       query: "What changed?",
       competitor_ids: [COMPETITOR_1],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
 
@@ -184,6 +188,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     const result = await runChatAgent({
       query: "What changed?",
       competitor_ids: [COMPETITOR_1],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
 
@@ -208,7 +213,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     { label: "invalid run UUID", query: "question", competitors: [COMPETITOR_1], runId: "bad-run" },
   ])("rejects $label before latency or retrieval", async ({ query, competitors, runId }) => {
     await expect(
-      runChatAgent({ query, competitor_ids: competitors, run_id: runId })
+      runChatAgent({ query, competitor_ids: competitors, workspace_id: WORKSPACE_ID, run_id: runId })
     ).rejects.toThrow();
 
     expect(trackLatencyMock).not.toHaveBeenCalled();
@@ -219,7 +224,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     hybridRetrieveMock.mockRejectedValueOnce(new Error("retrieval unavailable"));
 
     await expect(
-      runChatAgent({ query: "question", competitor_ids: [COMPETITOR_1], run_id: RUN_ID })
+      runChatAgent({ query: "question", competitor_ids: [COMPETITOR_1], workspace_id: WORKSPACE_ID, run_id: RUN_ID })
     ).rejects.toThrow("retrieval unavailable");
 
     expect(trackLatencyMock).toHaveBeenCalledTimes(1);
@@ -231,6 +236,7 @@ describe("agents/chat/chat-agent — input and retrieval boundary", () => {
     await runChatAgent({
       query: "What changed?",
       competitor_ids: [COMPETITOR_1],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
 
@@ -462,11 +468,13 @@ describe("agents/chat/chat-agent — final-result cache", () => {
     await runChatAgent({
       query: "Question",
       competitor_ids: [COMPETITOR_1, COMPETITOR_2],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
     await runChatAgent({
       query: "Question",
       competitor_ids: [COMPETITOR_2, COMPETITOR_1],
+      workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
     });
 
@@ -590,8 +598,8 @@ describe("agents/chat/chat-agent — final-result cache", () => {
   });
 
   it("keys different scopes apart even when the query contains the separator", async () => {
-    await runChatAgent({ query: `a|${COMPETITOR_2}`, competitor_ids: [COMPETITOR_1], run_id: RUN_ID });
-    await runChatAgent({ query: "a", competitor_ids: [COMPETITOR_1, COMPETITOR_2], run_id: RUN_ID });
+    await runChatAgent({ query: `a|${COMPETITOR_2}`, competitor_ids: [COMPETITOR_1], workspace_id: WORKSPACE_ID, run_id: RUN_ID });
+    await runChatAgent({ query: "a", competitor_ids: [COMPETITOR_1, COMPETITOR_2], workspace_id: WORKSPACE_ID, run_id: RUN_ID });
 
     expect(cacheGetMock.mock.calls[0][0]).not.toBe(cacheGetMock.mock.calls[1][0]);
   });

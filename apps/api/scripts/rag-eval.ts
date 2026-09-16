@@ -118,6 +118,7 @@ function missingRequiredEnvVars(env: NodeJS.ProcessEnv): string[] {
 export type RagEvaluationDeps = {
   listCases: (competitorId?: string) => Promise<RagEvalCase[]>;
   getSignals: (ids: readonly string[]) => Promise<RagEvalCitationSignal[]>;
+  getCompetitorById: (id: string) => Promise<{ workspace_id: string } | undefined>;
   createAgentRun: (input: { competitor_id: string; trigger: "manual" }) => Promise<{ id: string }>;
   completeAgentRun: (runId: string, status: "completed" | "failed") => Promise<void>;
   failRunIfRunning: (runId: string) => Promise<void>;
@@ -230,8 +231,17 @@ async function runChatAgentPhase(
 
     let raw: unknown;
     try {
+      const competitor = await deps.getCompetitorById(testCase.competitor_id);
+      if (!competitor) {
+        throw new Error(`rag-eval: competitor ${testCase.competitor_id} not found`);
+      }
       raw = await deps.runChatAgent(
-        { query: testCase.question, competitor_ids: [testCase.competitor_id], run_id: run.id },
+        {
+          query: testCase.question,
+          competitor_ids: [testCase.competitor_id],
+          workspace_id: competitor.workspace_id,
+          run_id: run.id,
+        },
         { signal: caseSignal }
       );
     } catch {
@@ -557,6 +567,7 @@ async function loadDefaultRuntime(): Promise<RagEvalRuntime> {
     {
       listRagEvalCases,
       getRagEvalCitationSignals,
+      getCompetitorById,
       createAgentRun,
       completeAgentRun,
       failRunIfRunning,
@@ -577,6 +588,7 @@ async function loadDefaultRuntime(): Promise<RagEvalRuntime> {
   const deps: RagEvaluationDeps = {
     listCases: listRagEvalCases,
     getSignals: getRagEvalCitationSignals,
+    getCompetitorById,
     createAgentRun,
     completeAgentRun,
     failRunIfRunning,

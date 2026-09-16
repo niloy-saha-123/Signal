@@ -362,7 +362,7 @@ export async function synthesisNode(
   // decision-call failure between the INSERT and completeAgentRun would otherwise leave an
   // orphan score row that a job retry then duplicates. (The full fix — a unique index +
   // upsert — is a deferred follow-up needing a migration.)
-  const companyContext = await getCompanyContext();
+  const companyContext = await getCompanyContext(state.workspace_id);
   const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
   const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
 

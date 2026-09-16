@@ -111,7 +111,7 @@ export async function changeDetectorNode(
     const model = await selectModel(MODEL, true);
     const promptText = (await getActivePrompt(AGENT_NAME)) ?? SYSTEM_PROMPT_BASE;
 
-    const companyContext = await getCompanyContext();
+    const companyContext = await getCompanyContext(state.workspace_id);
     const systemPrompt = companyContext ? `${promptText}\n\n${companyContext}` : promptText;
 
     const chatModel = new ChatOpenAI({

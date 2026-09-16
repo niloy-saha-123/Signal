@@ -17,7 +17,7 @@ const {
   updateDiscoveryStatusMock,
   finalizeDiscoveryMock,
   discoverCompetitorMock,
-  listCompetitorsMock,
+  listCompetitorsForWorkspaceMock,
   createAgentRunMock,
   getRecentPricingDiffsMock,
   failRunIfRunningMock,
@@ -26,7 +26,7 @@ const {
   updateDiscoveryStatusMock: vi.fn(),
   finalizeDiscoveryMock: vi.fn(),
   discoverCompetitorMock: vi.fn(),
-  listCompetitorsMock: vi.fn(),
+  listCompetitorsForWorkspaceMock: vi.fn(),
   createAgentRunMock: vi.fn(),
   getRecentPricingDiffsMock: vi.fn(),
   failRunIfRunningMock: vi.fn(),
@@ -44,7 +44,7 @@ vi.mock("@/db/queries", () => ({
   getCompetitorById: getCompetitorByIdMock,
   updateDiscoveryStatus: updateDiscoveryStatusMock,
   finalizeDiscovery: finalizeDiscoveryMock,
-  listCompetitors: listCompetitorsMock,
+  listCompetitorsForWorkspace: listCompetitorsForWorkspaceMock,
   createAgentRun: createAgentRunMock,
   getRecentPricingDiffs: getRecentPricingDiffsMock,
   failRunIfRunning: failRunIfRunningMock,
@@ -302,6 +302,13 @@ describe("queues/registry", () => {
     });
   });
 
+  it("configures discovery-search per the stub: concurrency 1, no retry", () => {
+    expect(QUEUE_CONFIG["discovery-search"]).toEqual({
+      concurrency: 1,
+      attempts: 1,
+    });
+  });
+
   it("defaults every other queue to concurrency 2, 3 attempts, exponential backoff from 5s", () => {
     for (const name of OTHER_QUEUES) {
       expect(QUEUE_CONFIG[name]).toEqual({
@@ -316,7 +323,12 @@ describe("queues/registry", () => {
   });
 
   it("creates a Queue instance for every configured queue name, on the shared connection", () => {
-    const allNames: QueueName[] = ["competitor-discovery", "company-profile-update", ...OTHER_QUEUES];
+    const allNames: QueueName[] = [
+    "competitor-discovery",
+    "company-profile-update",
+    "discovery-search",
+    ...OTHER_QUEUES,
+  ];
     expect(Object.keys(queues).sort()).toEqual(allNames.sort());
     for (const name of allNames) {
       expect(queues[name]).toBeDefined();
@@ -673,17 +685,12 @@ describe("competitor-discovery worker", () => {
 describe("company-profile-update worker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listCompetitorsMock.mockResolvedValue([
-      { id: "active-1", is_active: true },
-      { id: "inactive-1", is_active: false },
-      { id: "active-2", is_active: true },
+    listCompetitorsForWorkspaceMock.mockResolvedValue([
+      { id: "active-1", is_active: true, workspace_id: COMP_42_ID },
+      { id: "inactive-1", is_active: false, workspace_id: COMP_42_ID },
     ]);
-    createAgentRunMock
-      .mockResolvedValueOnce({ id: "run-1" })
-      .mockResolvedValueOnce({ id: "run-2" });
-    getRecentPricingDiffsMock
-      .mockResolvedValueOnce([{ id: "diff-1" }])
-      .mockResolvedValueOnce([]);
+    createAgentRunMock.mockResolvedValueOnce({ id: "run-1" });
+    getRecentPricingDiffsMock.mockResolvedValueOnce([{ id: "diff-1" }]);
     failRunIfRunningMock.mockResolvedValue(undefined);
     queueAddMock.mockResolvedValue(undefined);
     cacheDeleteMock.mockResolvedValue(1);
@@ -703,37 +710,33 @@ describe("company-profile-update worker", () => {
 
   it("creates one scheduled run and analysis job per active competitor", async () => {
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
-    const job = { data: {} };
+    const job = { data: { workspace_id: COMP_42_ID } };
 
     await expect(processor(job)).resolves.toBeUndefined();
-    expect(cacheDeleteMock).toHaveBeenCalledWith("company:profile");
-    expect(createAgentRunMock).toHaveBeenCalledTimes(2);
-    expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
+    // One invalidation, scoped to the changed workspace.
+    expect(listCompetitorsForWorkspaceMock).toHaveBeenCalledWith(COMP_42_ID);
+    expect(cacheDeleteMock).toHaveBeenCalledTimes(1);
+    expect(cacheDeleteMock).toHaveBeenCalledWith(`company:profile:${COMP_42_ID}`);
+    expect(createAgentRunMock).toHaveBeenCalledTimes(1);
+    expect(createAgentRunMock).toHaveBeenCalledWith({
       competitor_id: "active-1",
       trigger: "scheduled",
     });
-    expect(createAgentRunMock).toHaveBeenNthCalledWith(2, {
-      competitor_id: "active-2",
-      trigger: "scheduled",
-    });
-    expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
+    expect(queueAddMock).toHaveBeenCalledTimes(1);
+    expect(queueAddMock).toHaveBeenCalledWith("analysis", {
       competitor_id: "active-1",
+      workspace_id: COMP_42_ID,
       run_id: "run-1",
       has_pricing_diff: true,
-    });
-    expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
-      competitor_id: "active-2",
-      run_id: "run-2",
-      has_pricing_diff: false,
     });
     expect(getRecentPricingDiffsMock).not.toHaveBeenCalledWith("inactive-1", expect.anything());
   });
 
   it("does not fan out stale context when cache invalidation fails", async () => {
-    cacheDeleteMock.mockRejectedValueOnce(new Error("redis down"));
+    cacheDeleteMock.mockRejectedValue(new Error("redis down"));
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
 
-    await expect(processor({ data: {} })).rejects.toThrow("redis down");
+    await expect(processor({ data: { workspace_id: COMP_42_ID } })).rejects.toThrow("redis down");
     expect(createAgentRunMock).not.toHaveBeenCalled();
     expect(queueAddMock).not.toHaveBeenCalled();
   });
@@ -741,6 +744,13 @@ describe("company-profile-update worker", () => {
   it("rejects unknown company-profile job fields", async () => {
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
     await expect(processor({ data: { unexpected: true } })).rejects.toThrow();
+    expect(cacheDeleteMock).not.toHaveBeenCalled();
+    expect(createAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-UUID workspace_id", async () => {
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+    await expect(processor({ data: { workspace_id: "not-a-uuid" } })).rejects.toThrow();
     expect(cacheDeleteMock).not.toHaveBeenCalled();
     expect(createAgentRunMock).not.toHaveBeenCalled();
   });

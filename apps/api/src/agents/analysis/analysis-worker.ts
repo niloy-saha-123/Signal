@@ -8,6 +8,7 @@ import { registerWorker } from "../../queues/registry";
 export const AnalysisJobDataSchema = z
   .object({
     competitor_id: z.string().uuid(),
+    workspace_id: z.string().uuid(),
     run_id: z.string().uuid(),
     has_pricing_diff: z.boolean(),
   })
@@ -39,6 +40,7 @@ async function invokeWithTimeout(data: AnalysisJobData, timeoutMs: number): Prom
     await Promise.race([
       analysisGraph.invoke({
         competitor_id: data.competitor_id,
+        workspace_id: data.workspace_id,
         run_id: data.run_id,
         has_pricing_diff: data.has_pricing_diff,
       }),

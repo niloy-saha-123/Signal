@@ -159,7 +159,7 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
 
       try {
         const result = await deps.runChatAgent(
-          { query, competitor_ids: competitorIds, run_id: run.id },
+          { query, competitor_ids: competitorIds, workspace_id: req.workspaceId!, run_id: run.id },
           { signal: ac.signal }
         );
         if (clientGone) {

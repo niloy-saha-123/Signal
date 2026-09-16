@@ -204,6 +204,7 @@ export async function invokeDefaultCandidate(
     { trackCost, getDailySpend },
     { selectModel, getDailyBudget, ANTHROPIC_MODEL_IDS },
     { getCompanyContext },
+    { getCompetitorById },
   ] = await Promise.all([
     import("@langchain/openai"),
     import("@langchain/anthropic"),
@@ -211,13 +212,18 @@ export async function invokeDefaultCandidate(
     import("../src/llm/cost-tracker.js"),
     import("../src/llm/adaptive-router.js"),
     import("../src/lib/company-context.js"),
+    import("../src/db/queries.js"),
   ]);
 
   if ((await getDailySpend()) >= getDailyBudget()) {
     throw new Error("Daily LLM budget is exhausted; prompt evaluation was not run");
   }
 
-  const companyContext = await getCompanyContext();
+  const competitor = await getCompetitorById(input.competitor_id);
+  if (!competitor) {
+    throw new Error(`eval: competitor ${input.competitor_id} not found`);
+  }
+  const companyContext = await getCompanyContext(competitor.workspace_id);
   const systemPrompt = companyContext
     ? `${request.prompt.prompt_text}\n\n${companyContext}`
     : request.prompt.prompt_text;

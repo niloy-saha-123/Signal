@@ -118,4 +118,8 @@ export async function registerQueueSchedules(
     { pattern: PIPELINE_RECOVERY_CRON },
     { name: "pipeline-recovery", data: {} }
   );
+  // No discovery-search schedule here: a weekly sweep would be a poison job as
+  // written (DiscoveryJobDataSchema requires a workspace_id, but a repeat job
+  // has no per-workspace fan-out). Before it can be scheduled, this needs to
+  // list workspaces and enqueue one discovery-search job per workspace.
 }
