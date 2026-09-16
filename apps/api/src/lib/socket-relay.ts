@@ -105,7 +105,19 @@ export async function joinOrLeaveCompetitorRoom(
     socket.leave(competitorRoom(parsed.data));
     return;
   }
-  const competitor = await deps.getCompetitorByIdForWorkspace(parsed.data, socket.workspaceId);
+  let competitor;
+  try {
+    competitor = await deps.getCompetitorByIdForWorkspace(parsed.data, socket.workspaceId);
+  } catch (error) {
+    // A DB blip here must not become an unhandled rejection — this call is invoked
+    // fire-and-forget (`void joinOrLeaveCompetitorRoom(...)`) from wireSocketRelay's
+    // socket.on listener, so an uncaught throw would have nothing downstream to catch it.
+    logger.error("Failed to check competitor workspace ownership for competitor:join", {
+      competitorId: parsed.data,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
   if (!competitor) {
     logger.warn("Rejected competitor:join outside caller's workspace", { competitorId: parsed.data });
     return;
@@ -119,8 +131,10 @@ export function wireSocketRelay(io: EmittableSocketServer): { close: () => Promi
   io.on("connection", (socket) => {
     // ClientToServerEvents' listener signatures return void — joinOrLeaveCompetitorRoom is now
     // async (it awaits a workspace-ownership DB check on join), so the promise it returns is
-    // intentionally not awaited here. Errors are already handled inside (malformed/rejected ids
-    // are logged, never thrown), so there is nothing a caller here would do with the rejection.
+    // intentionally not awaited here. Safe to fire-and-forget: every path inside (malformed id,
+    // rejected workspace, a thrown DB error) is caught and logged internally, so the returned
+    // promise never rejects — a `void`-fired but *rejecting* promise would otherwise be an
+    // unhandled rejection and, on Node's default config, crash the process.
     socket.on("competitor:join", (id) => void joinOrLeaveCompetitorRoom(socket, "join", id));
     socket.on("competitor:leave", (id) => void joinOrLeaveCompetitorRoom(socket, "leave", id));
   });

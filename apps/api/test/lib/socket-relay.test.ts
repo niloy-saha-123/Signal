@@ -253,6 +253,21 @@ describe("joinOrLeaveCompetitorRoom", () => {
     expect(socket.join).toHaveBeenCalledWith(`competitor:${COMPETITOR_UUID}`);
   });
 
+  it("logs and swallows a workspace-check DB error instead of rejecting", async () => {
+    const getCompetitorByIdForWorkspace = vi.fn().mockRejectedValue(new Error("db down"));
+    const socket = { join: vi.fn(), leave: vi.fn(), on: vi.fn(), workspaceId: "ws-1" } as unknown as RelaySocket;
+    await expect(
+      joinOrLeaveCompetitorRoom(socket, "join", COMPETITOR_UUID, {
+        getCompetitorByIdForWorkspace: getCompetitorByIdForWorkspace as never,
+      })
+    ).resolves.toBeUndefined();
+    expect(socket.join).not.toHaveBeenCalled();
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      "Failed to check competitor workspace ownership for competitor:join",
+      { competitorId: COMPETITOR_UUID, error: "db down" }
+    );
+  });
+
   it("leaves without consulting the workspace check", async () => {
     const getCompetitorByIdForWorkspace = vi.fn();
     const socket = { join: vi.fn(), leave: vi.fn(), on: vi.fn(), workspaceId: "ws-1" } as unknown as RelaySocket;

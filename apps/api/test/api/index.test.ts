@@ -31,6 +31,11 @@ const { wireSocketRelayMock } = vi.hoisted(() => ({
   wireSocketRelayMock: vi.fn(() => ({ close: vi.fn().mockResolvedValue(undefined) })),
 }));
 vi.mock("@/lib/socket-relay", () => ({ wireSocketRelay: wireSocketRelayMock }));
+const { verifyAccessTokenMock } = vi.hoisted(() => ({ verifyAccessTokenMock: vi.fn() }));
+vi.mock("@/api/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/auth")>();
+  return { ...actual, verifyAccessToken: verifyAccessTokenMock };
+});
 vi.mock("@/db/client", () => ({
   closeDatabase: closeDatabaseMock,
   checkDatabaseReadiness: checkDatabaseReadinessMock,
@@ -276,5 +281,57 @@ describe("API runtime", () => {
     expect(closeQueueMock).toHaveBeenCalledTimes(1);
     expect(closeRedisMock).toHaveBeenCalledTimes(1);
     expect(closeDatabaseMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Socket.IO handshake auth", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function getHandshakeMiddleware() {
+    const server = new FakeServer();
+    const io = { close: vi.fn(), use: vi.fn() };
+    createApiRuntime({ server: server as any, io: io as any });
+    const call = io.use.mock.calls[0];
+    if (!call) throw new Error("handshake middleware not registered on io.use");
+    return call[0] as (socket: { handshake: { auth: unknown }; workspaceId?: string }, next: (err?: Error) => void) => void;
+  }
+
+  it("rejects a connection with no token", () => {
+    const middleware = getHandshakeMiddleware();
+    const next = vi.fn();
+    middleware({ handshake: { auth: {} } }, next);
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
+    expect(verifyAccessTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a connection when verifyAccessToken throws (invalid/expired token)", async () => {
+    verifyAccessTokenMock.mockRejectedValue(new Error("invalid token"));
+    const middleware = getHandshakeMiddleware();
+    const next = vi.fn();
+    middleware({ handshake: { auth: { token: "bad" } } }, next);
+    await vi.waitFor(() => expect(next).toHaveBeenCalled());
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it("rejects a valid token that resolves to no workspace", async () => {
+    verifyAccessTokenMock.mockResolvedValue({ userId: "u1", email: "a@b.com", workspaceId: null });
+    const middleware = getHandshakeMiddleware();
+    const next = vi.fn();
+    const socket = { handshake: { auth: { token: "good" } } };
+    middleware(socket, next);
+    await vi.waitFor(() => expect(next).toHaveBeenCalled());
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
+    expect(socket).not.toHaveProperty("workspaceId");
+  });
+
+  it("accepts a valid token with a workspace and stamps workspaceId onto the socket", async () => {
+    verifyAccessTokenMock.mockResolvedValue({ userId: "u1", email: "a@b.com", workspaceId: "ws-1" });
+    const middleware = getHandshakeMiddleware();
+    const next = vi.fn();
+    const socket: { handshake: { auth: unknown }; workspaceId?: string } = { handshake: { auth: { token: "good" } } };
+    middleware(socket, next);
+    await vi.waitFor(() => expect(next).toHaveBeenCalled());
+    expect(next).toHaveBeenCalledWith();
+    expect(socket.workspaceId).toBe("ws-1");
   });
 });
