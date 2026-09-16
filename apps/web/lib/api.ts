@@ -34,7 +34,13 @@ export class ApiError extends Error {
   }
 }
 
-async function authHeader(): Promise<Record<string, string>> {
+// Server Components have no window/localStorage, so the browser client always sees a
+// null session there. They must pass their own server-derived `token` (via
+// supabase-server.ts's getServerAccessToken — imported directly by the page, never
+// through this module, since next/headers can't reach client bundles that also import
+// this file, e.g. settings/page.tsx).
+async function authHeader(token?: string): Promise<Record<string, string>> {
+  if (token) return { Authorization: `Bearer ${token}` };
   const supabase = getSupabaseBrowserClient();
   const {
     data: { session },
@@ -42,10 +48,14 @@ async function authHeader(): Promise<Record<string, string>> {
   return session ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(await authHeader()), ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeader(token)),
+      ...init?.headers,
+    },
   });
   if (!res.ok) {
     const body = await res.json().catch(() => undefined);
@@ -72,12 +82,12 @@ export interface Competitor {
   updated_at: string;
 }
 
-export function listCompetitors(): Promise<Competitor[]> {
-  return request<Competitor[]>("/api/competitors");
+export function listCompetitors(token?: string): Promise<Competitor[]> {
+  return request<Competitor[]>("/api/competitors", undefined, token);
 }
 
-export function getCompetitor(id: string): Promise<Competitor> {
-  return request<Competitor>(`/api/competitors/${id}`);
+export function getCompetitor(id: string, token?: string): Promise<Competitor> {
+  return request<Competitor>(`/api/competitors/${id}`, undefined, token);
 }
 
 export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
@@ -97,13 +107,23 @@ const CompetitorScoreSchema = z.object({
 });
 export type CompetitorScore = z.infer<typeof CompetitorScoreSchema>;
 
-export async function getCompetitorScore(id: string): Promise<CompetitorScore> {
-  return CompetitorScoreSchema.parse(await request(`/api/competitors/${id}/score`));
+export async function getCompetitorScore(id: string, token?: string): Promise<CompetitorScore> {
+  return CompetitorScoreSchema.parse(
+    await request(`/api/competitors/${id}/score`, undefined, token)
+  );
 }
 
 // Oldest-first, for SignalScoreCard's sparkline / TrendChart's Signal Score panel.
-export async function getCompetitorScoreHistory(id: string, limit = 30): Promise<SignalScore[]> {
-  const raw = await request<{ data: unknown[] }>(`/api/competitors/${id}/scores?limit=${limit}`);
+export async function getCompetitorScoreHistory(
+  id: string,
+  limit = 30,
+  token?: string
+): Promise<SignalScore[]> {
+  const raw = await request<{ data: unknown[] }>(
+    `/api/competitors/${id}/scores?limit=${limit}`,
+    undefined,
+    token
+  );
   return raw.data.map((row) => SignalScoreSchema.parse(row));
 }
 
@@ -116,8 +136,16 @@ const TrendChartDataPointSchema = z.object({
 });
 export type CompetitorTrendPoint = z.infer<typeof TrendChartDataPointSchema>;
 
-export async function getCompetitorTrend(id: string, days = 30): Promise<CompetitorTrendPoint[]> {
-  const raw = await request<{ data: unknown[] }>(`/api/competitors/${id}/trend?days=${days}`);
+export async function getCompetitorTrend(
+  id: string,
+  days = 30,
+  token?: string
+): Promise<CompetitorTrendPoint[]> {
+  const raw = await request<{ data: unknown[] }>(
+    `/api/competitors/${id}/trend?days=${days}`,
+    undefined,
+    token
+  );
   return raw.data.map((row) => TrendChartDataPointSchema.parse(row));
 }
 
@@ -130,9 +158,14 @@ export type CompetitorHiringDelta = z.infer<typeof HiringChartDataPointSchema>;
 
 export async function getCompetitorHiring(
   id: string,
-  days = 30
+  days = 30,
+  token?: string
 ): Promise<CompetitorHiringDelta[]> {
-  const raw = await request<{ data: unknown[] }>(`/api/competitors/${id}/hiring?days=${days}`);
+  const raw = await request<{ data: unknown[] }>(
+    `/api/competitors/${id}/hiring?days=${days}`,
+    undefined,
+    token
+  );
   return raw.data.map((row) => HiringChartDataPointSchema.parse(row));
 }
 
@@ -175,7 +208,10 @@ function buildQuery(params: Record<string, string | undefined>): string {
   return q.toString();
 }
 
-export async function listSignals(params: ListSignalsParams): Promise<Paginated<Signal>> {
+export async function listSignals(
+  params: ListSignalsParams,
+  token?: string
+): Promise<Paginated<Signal>> {
   const query = buildQuery({
     competitor_ids: params.competitor_ids.join(","),
     sources: params.sources?.join(","),
@@ -186,7 +222,9 @@ export async function listSignals(params: ListSignalsParams): Promise<Paginated<
     limit: params.limit?.toString(),
   });
   const raw = await request<{ data: unknown[]; next_cursor: string | null }>(
-    `/api/signals?${query}`
+    `/api/signals?${query}`,
+    undefined,
+    token
   );
   return { data: raw.data.map((row) => SignalSchema.parse(row)), next_cursor: raw.next_cursor };
 }
@@ -214,13 +252,16 @@ export interface ListAlertsParams {
   limit?: number;
 }
 
-export function listAlerts(params: ListAlertsParams): Promise<Paginated<Alert>> {
+export function listAlerts(
+  params: ListAlertsParams,
+  token?: string
+): Promise<Paginated<Alert>> {
   const query = buildQuery({
     competitor_ids: params.competitor_ids.join(","),
     cursor: params.cursor,
     limit: params.limit?.toString(),
   });
-  return request(`/api/alerts?${query}`);
+  return request(`/api/alerts?${query}`, undefined, token);
 }
 
 // --- Company profile ---

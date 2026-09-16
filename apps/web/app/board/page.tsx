@@ -2,6 +2,7 @@
 // Freeform board — exploratory first pass (see this plan's Architecture note). Only shows
 // competitors with a computed score; arranges them in an initial grid.
 import { ApiError, getCompetitorScore, listCompetitors } from "../../lib/api";
+import { getServerAccessToken } from "../../lib/supabase-server";
 import { Board, type BoardCardState } from "../board-client";
 
 const COLUMNS = 3;
@@ -10,10 +11,11 @@ const CARD_HEIGHT = 160;
 const PADDING = 16;
 
 export default async function Page() {
-  const competitors = await listCompetitors();
+  const token = await getServerAccessToken();
+  const competitors = await listCompetitors(token);
   const scored = await Promise.all(
     competitors.map(async (competitor) => {
-      const score = await getCompetitorScore(competitor.id).catch((error) => {
+      const score = await getCompetitorScore(competitor.id, token).catch((error) => {
         if (error instanceof ApiError && error.status === 404) return null;
         console.error("Failed to fetch competitor score", { competitorId: competitor.id, error });
         return null;
