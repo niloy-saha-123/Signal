@@ -10,6 +10,24 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      # Backs apps/api/test/agents/discovery-search/memory-store.test.ts, which
+      # hardcodes this connection string to match docker-compose.yml's local
+      # dev Postgres exactly (same port/credentials) rather than the Supabase
+      # DATABASE_URL used elsewhere in the app.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: signal
+          POSTGRES_PASSWORD: signal
+          POSTGRES_DB: signal
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
