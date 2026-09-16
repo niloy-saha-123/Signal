@@ -32,6 +32,13 @@ const QuerySchema = z
 
 export function createAlertRouter(deps: AlertRouterDeps = defaultAlertRouterDeps): Router {
   const router = express.Router();
+  router.use((req, res, next) => {
+    if (!req.workspaceId) {
+      res.status(403).json({ error: "no_workspace" });
+      return;
+    }
+    next();
+  });
 
   router.get(
     "/",
@@ -53,7 +60,12 @@ export function createAlertRouter(deps: AlertRouterDeps = defaultAlertRouterDeps
         }
       }
 
-      const rows = await deps.listAlertFeed({ limit, competitor_ids, cursor });
+      const rows = await deps.listAlertFeed({
+        workspace_id: req.workspaceId!,
+        limit,
+        competitor_ids,
+        cursor,
+      });
 
       const hasMore = rows.length > limit;
       const data = hasMore ? rows.slice(0, limit) : rows;
