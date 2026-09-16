@@ -302,6 +302,13 @@ describe("queues/registry", () => {
     });
   });
 
+  it("configures discovery-search per the stub: concurrency 1, no retry", () => {
+    expect(QUEUE_CONFIG["discovery-search"]).toEqual({
+      concurrency: 1,
+      attempts: 1,
+    });
+  });
+
   it("defaults every other queue to concurrency 2, 3 attempts, exponential backoff from 5s", () => {
     for (const name of OTHER_QUEUES) {
       expect(QUEUE_CONFIG[name]).toEqual({
@@ -316,7 +323,12 @@ describe("queues/registry", () => {
   });
 
   it("creates a Queue instance for every configured queue name, on the shared connection", () => {
-    const allNames: QueueName[] = ["competitor-discovery", "company-profile-update", ...OTHER_QUEUES];
+    const allNames: QueueName[] = [
+    "competitor-discovery",
+    "company-profile-update",
+    "discovery-search",
+    ...OTHER_QUEUES,
+  ];
     expect(Object.keys(queues).sort()).toEqual(allNames.sort());
     for (const name of allNames) {
       expect(queues[name]).toBeDefined();

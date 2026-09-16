@@ -66,7 +66,8 @@ export type QueueName =
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
   | "pipeline-recovery"
-  | "analysis";
+  | "analysis"
+  | "discovery-search";
 
 export interface QueueConfig {
   concurrency: number;
@@ -178,6 +179,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "pipeline-deduplication": DEFAULT_CONFIG,
   "pipeline-recovery": { ...DEFAULT_CONFIG, concurrency: 1 },
   analysis: DEFAULT_CONFIG,
+  // One discovery sweep at a time is enough — this is not latency-sensitive,
+  // and each sweep holds the workspace's thread_id checkpoint while it runs.
+  "discovery-search": { concurrency: 1, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
@@ -466,4 +470,12 @@ export function initWorkers(): {
   );
 
   return { competitorDiscoveryWorker, companyProfileUpdateWorker };
+}
+
+// Inline payload shape (not imported from discovery-worker.ts) so the registry
+// never depends on the worker module — that would close a registry↔worker
+// circular-import loop. Express enqueues the immutable workspace_id; the worker
+// is the only side that runs the graph.
+export function addDiscoveryJob(input: { workspace_id: string }): Promise<unknown> {
+  return queues["discovery-search"].add("discovery-search", input);
 }
