@@ -62,7 +62,8 @@ export async function runChatAgent(
         summary: "",
       },
       {
-        configurable: { thread_id: parsed.run_id, signal },
+        configurable: { thread_id: parsed.run_id },
+        signal,
         recursionLimit: CHAT_RECURSION_LIMIT,
       }
     );

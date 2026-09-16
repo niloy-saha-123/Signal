@@ -95,12 +95,16 @@ describe("agents/chat/chat-agent — single-turn adapter", () => {
       { signal: controller.signal }
     );
 
-    const config = invokeMock.mock.calls[0][1] as { configurable: Record<string, unknown> };
-    const signal = config.configurable.signal as AbortSignal;
+    const config = invokeMock.mock.calls[0][1] as {
+      configurable: Record<string, unknown>;
+      signal: AbortSignal;
+    };
+    const signal = config.signal;
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal.aborted).toBe(false);
     controller.abort();
     expect(signal.aborted).toBe(true);
+    expect(config.configurable.signal).toBeUndefined();
   });
 
   it.each([

@@ -112,7 +112,9 @@ const ChatGraphState = Annotation.Root({
 type ChatGraphStateType = typeof ChatGraphState.State;
 
 const RETRY_POLICY = {
-  maxAttempts: 3,
+  // One initial attempt + LLM_MAX_RETRIES retries, matching the prior SDK
+  // maxRetries semantics now that retryPolicy is the single retry layer.
+  maxAttempts: LLM_MAX_RETRIES + 1,
   retryOn: (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     return /429|5\d\d|timeout/i.test(message);
@@ -216,10 +218,6 @@ function formatHistory(messages: BaseMessage[]): string {
     .join("\n");
 }
 
-function signalFromConfig(config: LangGraphRunnableConfig): AbortSignal | undefined {
-  return config.configurable?.signal as AbortSignal | undefined;
-}
-
 function assistantMessage(result: ChatAgentResult): AIMessage {
   return new AIMessage(result.refused ? result.reason : result.answer);
 }
@@ -229,7 +227,7 @@ async function retrieveNode(
   config: LangGraphRunnableConfig
 ): Promise<Partial<ChatGraphStateType>> {
   const query = lastHumanText(state.messages);
-  const signal = signalFromConfig(config);
+  const signal = config.signal;
   signal?.throwIfAborted();
 
   const candidates = await hybridRetrieve(query, state.competitor_ids);
@@ -258,7 +256,7 @@ async function generateNode(
   const query = lastHumanText(state.messages);
   const primaryCompetitorId = state.competitor_ids[0];
   const runId = state.run_id;
-  const signal = signalFromConfig(config);
+  const signal = config.signal;
 
   const [activePrompt, companyContext] = await Promise.all([
     getActivePrompt("chat_agent"),
@@ -284,7 +282,6 @@ async function generateNode(
       const model = new ChatAnthropic({
         model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
         clientOptions: { timeout: LLM_TIMEOUT_MS },
-        maxRetries: LLM_MAX_RETRIES,
         maxTokens: maxOutputTokens(),
       });
 

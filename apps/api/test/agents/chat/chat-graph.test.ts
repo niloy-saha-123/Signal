@@ -6,7 +6,7 @@
 // mocked, so the immediate turn is hermetic; only the checkpoint write/read is real.
 process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HumanMessage } from "@langchain/core/messages";
 import type { RerankedChunk } from "@/retrieval";
 
@@ -128,6 +128,10 @@ describe("agents/chat/chat-graph", () => {
     await setupChatCheckpointer();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     getCompanyContextMock.mockResolvedValue("");
@@ -179,6 +183,76 @@ describe("agents/chat/chat-graph", () => {
       5,
       { competitorId: COMPETITOR_1, identity: { kind: "run", runId: RUN_ID } }
     );
+  });
+
+  dbIt("constructs the model with alias translation and bounded config (no stray timeout/retries)", async () => {
+    selectModelMock.mockResolvedValueOnce("claude-haiku");
+    vi.stubEnv("MAX_TOKENS_PER_CALL", "999999");
+
+    await invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), "88888888-9999-aaaa-bbbb-cccccccccccc");
+
+    expect(selectModelMock).toHaveBeenCalledWith("claude-sonnet", true);
+    expect(chatAnthropicMock).toHaveBeenCalledWith({
+      model: "claude-haiku-4-5-20251001",
+      clientOptions: { timeout: 30_000 },
+      maxTokens: 4_096,
+    });
+  });
+
+  dbIt("propagates the active prompt and company context into the system prompt", async () => {
+    getActivePromptMock.mockResolvedValueOnce("CUSTOM CHAT PROMPT");
+    getCompanyContextMock.mockResolvedValueOnce("ABOUT THE USER'S COMPANY: Widgets Inc.");
+
+    await invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), "99999999-aaaa-bbbb-cccc-dddddddddddd");
+
+    const messages = anthropicStreamMock.mock.calls[0][0] as Array<[string, string]>;
+    expect(messages[0][1]).toContain("CUSTOM CHAT PROMPT");
+    expect(messages[0][1]).toContain("ABOUT THE USER'S COMPANY: Widgets Inc.");
+  });
+
+  dbIt("bounds each evidence chunk to MAX_CHUNK_LENGTH", async () => {
+    rerankChunksMock.mockResolvedValueOnce([reranked({ text: "x".repeat(5000) })]);
+
+    await invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), "10101010-1010-4010-8010-101010101010");
+
+    const human = (anthropicStreamMock.mock.calls[0][0] as Array<[string, string]>)[1][1];
+    expect(human).toContain("x".repeat(4000));
+    expect(human).not.toContain("x".repeat(4001));
+  });
+
+  dbIt("caps the number of evidence chunks to MAX_EVIDENCE_CHUNKS", async () => {
+    rerankChunksMock.mockResolvedValueOnce(
+      Array.from({ length: 12 }, (_, i) => reranked({ id: `signal-${i}` }))
+    );
+
+    await invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), "20202020-2020-4020-8020-202020202020");
+
+    const human = (anthropicStreamMock.mock.calls[0][0] as Array<[string, string]>)[1][1];
+    expect(human.match(/\[signal:/g)).toHaveLength(10);
+  });
+
+  dbIt("throws when Claude returns no text content", async () => {
+    anthropicStreamMock.mockImplementationOnce(async function* () {
+      yield { content: "", usage_metadata: { input_tokens: 10, output_tokens: 1 } };
+    });
+
+    await expect(
+      invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), "30303030-3030-4030-8030-303030303030")
+    ).rejects.toThrow("no text content");
+
+    expect(enforceCitationsMock).not.toHaveBeenCalled();
+  });
+
+  dbIt("rejects a malformed citation-enforcement result through ChatAgentResultSchema", async () => {
+    enforceCitationsMock.mockResolvedValueOnce({
+      refused: false,
+      answer: 42,
+      citations: [],
+    });
+
+    await expect(
+      invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), "40404040-4040-4040-8040-404040404040")
+    ).rejects.toThrow();
   });
 
   dbIt("assembles a draft from multiple streamed chunks", async () => {
@@ -294,7 +368,8 @@ describe("agents/chat/chat-graph", () => {
   dbIt("passes the request signal into the model stream", async () => {
     const controller = new AbortController();
     await chatGraph.invoke(turn([new HumanMessage("What changed?")], RUN_ID), {
-      configurable: { thread_id: "77777777-8888-9999-aaaa-bbbbbbbbbbbb", signal: controller.signal },
+      configurable: { thread_id: "77777777-8888-9999-aaaa-bbbbbbbbbbbb" },
+      signal: controller.signal,
       recursionLimit: CHAT_RECURSION_LIMIT,
     });
 
