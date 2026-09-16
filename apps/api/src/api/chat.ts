@@ -3,8 +3,9 @@
 // POST /api/chat
 //   1. Strictly validate { query, competitor_ids } and 4xx with clean JSON
 //      *before* any SSE header is sent (plan ruling 6).
-//   2. Batch-verify every competitor id exists — 404 unknown_competitor listing
-//      the ids that don't.
+//   2. Batch-verify every competitor id exists in the caller's workspace — 404
+//      unknown_competitor listing the ids that don't (an id from another
+//      workspace is indistinguishable from a nonexistent one, by design).
 //   3. Create one agent_runs row (trigger 'manual', primary = first id) so the
 //      latency rows ChatAgent writes have a run to foreign-key to (ruling 5).
 //   4. Open text/event-stream, send `: open`, heartbeat every 15s, and abort the
@@ -24,7 +25,7 @@ import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler } from "./http";
 
 export interface ChatRouterDeps {
-  getCompetitorsByIds: typeof queries.getCompetitorsByIds;
+  getCompetitorsByIdsForWorkspace: typeof queries.getCompetitorsByIdsForWorkspace;
   createAgentRun: typeof queries.createAgentRun;
   completeAgentRun: typeof queries.completeAgentRun;
   runChatAgent: typeof runChatAgentImpl;
@@ -32,7 +33,7 @@ export interface ChatRouterDeps {
 }
 
 export const defaultChatRouterDeps: ChatRouterDeps = {
-  getCompetitorsByIds: queries.getCompetitorsByIds,
+  getCompetitorsByIdsForWorkspace: queries.getCompetitorsByIdsForWorkspace,
   createAgentRun: queries.createAgentRun,
   completeAgentRun: queries.completeAgentRun,
   runChatAgent: runChatAgentImpl,
@@ -55,6 +56,13 @@ const uniq = (ids: string[]): string[] => [...new Set(ids)];
 export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): Router {
   const router = express.Router();
   router.use(express.json());
+  router.use((req, res, next) => {
+    if (!req.workspaceId) {
+      res.status(403).json({ error: "no_workspace" });
+      return;
+    }
+    next();
+  });
 
   router.post(
     "/",
@@ -68,7 +76,7 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
       const { query } = parsed.data;
       const competitorIds = uniq(parsed.data.competitor_ids);
 
-      const found = await deps.getCompetitorsByIds(competitorIds);
+      const found = await deps.getCompetitorsByIdsForWorkspace(competitorIds, req.workspaceId!);
       if (found.length !== competitorIds.length) {
         const foundIds = new Set(found.map((c) => c.id));
         res.status(404).json({
