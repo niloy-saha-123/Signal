@@ -45,6 +45,7 @@ vi.mock("@/api/signals", () => ({ createSignalRouter: () => express.Router() }))
 vi.mock("@/api/alerts", () => ({ createAlertRouter: () => express.Router() }));
 vi.mock("@/api/chat", () => ({ createChatRouter: () => express.Router() }));
 vi.mock("@/api/company-profile", () => ({ createCompanyProfileRouter: () => express.Router() }));
+vi.mock("@/api/company-documents", () => ({ createCompanyDocumentsRouter: () => express.Router() }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

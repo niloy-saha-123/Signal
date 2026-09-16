@@ -27,6 +27,7 @@ import {
   agentLatenciesTable,
   agentRunsTable,
   companyProfileTable,
+  companyDocumentsTable,
   pricingBaselinesTable,
   pricingDiffsTable,
   alertsTable,
@@ -61,6 +62,7 @@ export type SignalScore = typeof competitorSignalScoresTable.$inferSelect;
 export type PricingBaseline = typeof pricingBaselinesTable.$inferSelect;
 export type PricingDiff = typeof pricingDiffsTable.$inferSelect;
 export type CompanyProfile = typeof companyProfileTable.$inferSelect;
+export type CompanyDocument = typeof companyDocumentsTable.$inferSelect;
 export type AgentRun = typeof agentRunsTable.$inferSelect;
 export type AgentLatency = typeof agentLatenciesTable.$inferSelect;
 export type LlmCost = typeof llmCostsTable.$inferSelect;
@@ -1525,6 +1527,32 @@ export async function upsertCompanyProfileForWorkspace(
     .onConflictDoUpdate({
       target: companyProfileTable.workspace_id,
       set: { ...input, updated_at: new Date() },
+    })
+    .returning();
+  return row;
+}
+
+export interface CompanyDocumentCreateInput {
+  workspace_id: string;
+  filename: string;
+  mime_type: string;
+  doc_type: string;
+  extraction_status: string;
+  pinecone_namespace?: string | null;
+}
+
+export async function createCompanyDocument(
+  input: CompanyDocumentCreateInput
+): Promise<CompanyDocument> {
+  const [row] = await db
+    .insert(companyDocumentsTable)
+    .values({
+      workspace_id: input.workspace_id,
+      filename: input.filename,
+      mime_type: input.mime_type,
+      doc_type: input.doc_type,
+      extraction_status: input.extraction_status,
+      ...(input.pinecone_namespace === undefined ? {} : { pinecone_namespace: input.pinecone_namespace }),
     })
     .returning();
   return row;
