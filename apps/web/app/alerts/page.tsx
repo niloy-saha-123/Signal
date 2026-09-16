@@ -2,15 +2,17 @@
 // Full alert history — single fetch, no pagination UI (simplification: add real pagination
 // if usage ever needs more than 100).
 import { listAlerts, listCompetitors } from "../../lib/api";
+import { getServerAccessToken } from "../../lib/supabase-server";
 
 export default async function Page() {
-  const competitors = await listCompetitors();
+  const token = await getServerAccessToken();
+  const competitors = await listCompetitors(token);
   const competitorIds = competitors.map((c) => c.id);
   const names = new Map(competitors.map((c) => [c.id, c.name]));
 
   const { data: alerts } =
     competitorIds.length > 0
-      ? await listAlerts({ competitor_ids: competitorIds, limit: 100 })
+      ? await listAlerts({ competitor_ids: competitorIds, limit: 100 }, token)
       : { data: [] };
 
   return (

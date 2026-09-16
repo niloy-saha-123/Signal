@@ -1,9 +1,10 @@
 // Persistent chat panel — scoped across every active competitor by default.
 import { listCompetitors } from "../../lib/api";
+import { getServerAccessToken } from "../../lib/supabase-server";
 import { ChatInterface } from "../../components/ChatInterface";
 
 export default async function Page() {
-  const competitors = await listCompetitors();
+  const competitors = await listCompetitors(await getServerAccessToken());
   const competitorIds = competitors.filter((c) => c.is_active).map((c) => c.id);
 
   return (

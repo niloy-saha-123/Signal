@@ -11,6 +11,8 @@ import { createAlertRouter, type AlertRouterDeps } from "@/api/alerts";
 import { decodeCursor } from "@/api/cursor";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+const USER_UUID = "33333333-3333-4333-8333-333333333333";
+const WS_UUID = "22222222-2222-4222-8222-222222222222";
 
 async function call(app: express.Express, path: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -33,9 +35,37 @@ function rows(n: number) {
   }));
 }
 
-const app = (deps: AlertRouterDeps) => express().use("/api/alerts", createAlertRouter(deps));
+// Stands in for requireAuth — real middleware verifies a JWT, this just sets
+// req.user/req.workspaceId directly, matching what requireAuth would have set.
+function appWithUser(user: { id: string; workspaceId: string | null }, router: express.Router) {
+  const app = express();
+  app.use((req, _res, next) => {
+    req.user = { id: user.id, email: "test@example.com" };
+    req.workspaceId = user.workspaceId;
+    next();
+  });
+  app.use("/api/alerts", router);
+  return app;
+}
+
+const app = (deps: AlertRouterDeps) =>
+  appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createAlertRouter(deps));
 
 beforeEach(() => vi.clearAllMocks());
+
+describe("workspace guard", () => {
+  it("403s with no_workspace when req.workspaceId is null", async () => {
+    const deps: AlertRouterDeps = { listAlertFeed: vi.fn(async () => []) as any };
+    const noWorkspaceApp = appWithUser(
+      { id: USER_UUID, workspaceId: null },
+      createAlertRouter(deps)
+    );
+    const res = await call(noWorkspaceApp, `/api/alerts?competitor_ids=${UUID}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "no_workspace" });
+    expect(deps.listAlertFeed).not.toHaveBeenCalled();
+  });
+});
 
 describe("GET /api/alerts", () => {
   it("short page → null next_cursor", async () => {
@@ -70,6 +100,7 @@ describe("GET /api/alerts", () => {
     const deps: AlertRouterDeps = { listAlertFeed: vi.fn(async () => []) as any };
     await call(app(deps), `/api/alerts?competitor_ids=${UUID}`);
     expect((deps.listAlertFeed as any).mock.calls[0][0]).toMatchObject({
+      workspace_id: WS_UUID,
       competitor_ids: [UUID],
       limit: 50,
     });

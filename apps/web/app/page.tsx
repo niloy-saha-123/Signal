@@ -11,12 +11,16 @@ import {
   type Alert,
   type Competitor,
 } from "../lib/api";
+import { getServerAccessToken } from "../lib/supabase-server";
 import { SignalScoreCard } from "../components/SignalScoreCard";
 import { HomeClient } from "./home-client";
 
-async function latestAlertByCompetitor(competitorIds: string[]): Promise<Map<string, Alert>> {
+async function latestAlertByCompetitor(
+  competitorIds: string[],
+  token?: string
+): Promise<Map<string, Alert>> {
   if (competitorIds.length === 0) return new Map();
-  const { data } = await listAlerts({ competitor_ids: competitorIds, limit: 100 });
+  const { data } = await listAlerts({ competitor_ids: competitorIds, limit: 100 }, token);
   const latest = new Map<string, Alert>();
   for (const alert of data) {
     if (!latest.has(alert.competitor_id)) latest.set(alert.competitor_id, alert);
@@ -25,11 +29,12 @@ async function latestAlertByCompetitor(competitorIds: string[]): Promise<Map<str
 }
 
 export default async function Page() {
-  const competitors = await listCompetitors();
+  const token = await getServerAccessToken();
+  const competitors = await listCompetitors(token);
   const [scores, histories, latestAlerts] = await Promise.all([
     Promise.all(
       competitors.map((competitor) =>
-        getCompetitorScore(competitor.id).catch((error) => {
+        getCompetitorScore(competitor.id, token).catch((error) => {
           if (error instanceof ApiError && error.status === 404) return null;
           console.error("Failed to fetch competitor score", { competitorId: competitor.id, error });
           return null;
@@ -38,7 +43,7 @@ export default async function Page() {
     ),
     Promise.all(
       competitors.map((competitor) =>
-        getCompetitorScoreHistory(competitor.id).catch((error) => {
+        getCompetitorScoreHistory(competitor.id, 30, token).catch((error) => {
           console.error("Failed to fetch competitor score history", {
             competitorId: competitor.id,
             error,
@@ -47,7 +52,10 @@ export default async function Page() {
         })
       )
     ),
-    latestAlertByCompetitor(competitors.map((competitor) => competitor.id)),
+    latestAlertByCompetitor(
+      competitors.map((competitor) => competitor.id),
+      token
+    ),
   ]);
 
   return (

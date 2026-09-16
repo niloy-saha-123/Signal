@@ -132,7 +132,7 @@ Stated plainly so this document does not overclaim what exists:
 |---|---|
 | Collection, pipeline, analysis graph, ChatAgent, API routes | Built and tested (backend intelligence loop is complete). |
 | Frontend (`apps/web`) | Route scaffolding only — every page under `app/` is a placeholder a few lines long. No real UI, charts, or Socket.io client wiring exist yet. |
-| Authentication | None. Phase 0 is a single-tenant, unauthenticated, trusted-network deployment by design — no JWT, session, or API-key middleware exists anywhere in `apps/api`. Production startup requires explicit acknowledgement of this. Public multi-user auth is a later backend decision. |
+| Authentication | Built. Supabase Auth (email+password, Google OAuth) with workspace-scoped multi-tenancy — every competitor/signal/alert/company-profile row carries a `workspace_id`, enforced in `apps/api`'s query layer and route guards, not DB-level RLS policies. `requireAuth` middleware verifies JWTs on all `/api` routes; Socket.io handshake requires the same token and joins rooms by workspace. One user per workspace for now — onboarding (create workspace) is wired end-to-end; multi-user/invite-teammate support is not built. |
 | Real-time delivery | The Socket.io server is instantiated (`api/index.ts`), but no code path anywhere in the backend currently emits an event through it — alert delivery is not wired end-to-end yet. ChatAgent's SSE streaming (`api/chat.ts`) is real and does work. |
 | Deployment automation | None configured. Railway and Vercel below are the intended target platforms, not active infrastructure — there is no Railway/Vercel project file, and `.github/workflows/ci.yml` only runs typecheck/test/build plus the RAG evaluation gate; it does not deploy anywhere. |
 | Automatic daily analysis fan-out | Not built. Analysis runs from manual/API-triggered requests and company-profile updates; no scheduler sweeps every competitor daily. |
@@ -146,7 +146,7 @@ Stated plainly so this document does not overclaim what exists:
 | | |
 |---|---|
 | **Node.js 20 / TypeScript 5** | Strict mode throughout. Discriminated unions for circuit states, generics for retry utilities, `satisfies` for config. |
-| **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation. No auth middleware — see [Implementation Status](#implementation-status). |
+| **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation, `requireAuth` middleware verifying Supabase JWTs and stamping `req.workspaceId` — see [Implementation Status](#implementation-status). |
 | **LangGraph.js** | Stateful directed graph with parallel nodes, conditional edges, and immutable state transitions. |
 | **BullMQ** | Twelve named queues — two lifecycle (discovery, company-profile update), five collection, three processing pipeline, one recovery, one analysis. Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
 | **Socket.io** | Server present; no alert emission wired yet — see [Implementation Status](#implementation-status). |

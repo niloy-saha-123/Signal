@@ -87,9 +87,10 @@ import {
   agentTestCasesTable,
   ragEvalDatasetTable,
   ragEvalRunsTable,
+  workspacesTable,
+  workspaceMembersTable,
 } from "@/db/schema";
 import {
-  createCompetitor,
   getCompetitorsByIds,
   getCompetitorById,
   listCompetitors,
@@ -104,8 +105,6 @@ import {
   getLatencyPercentiles,
   getAgentLatencyReport,
   getCostByCompetitorDay,
-  getCompanyProfile,
-  upsertCompanyProfile,
   getLatestSignalCollectedAt,
   getFirstSignalCollectedAt,
   signalExistsBySourceUrl,
@@ -141,6 +140,14 @@ import {
   getRagEvalCitationSignals,
   persistRagEvaluation,
   RagEvalDatasetIntegrityError,
+  createWorkspace,
+  getWorkspaceIdForUser,
+  getCompetitorByIdForWorkspace,
+  listCompetitorsForWorkspace,
+  getCompetitorsByIdsForWorkspace,
+  createCompetitorForWorkspace,
+  getCompanyProfileForWorkspace,
+  upsertCompanyProfileForWorkspace,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -159,48 +166,6 @@ describe("db/queries — competitors", () => {
     insertValuesMock.mockReturnValue({ returning: insertReturningMock });
     updateMock.mockReturnValue({ set: updateSetMock });
     updateSetMock.mockReturnValue({ where: updateWhereMock });
-  });
-
-  describe("createCompetitor", () => {
-    it("inserts with discovery_status defaulted to pending and returns the created row", async () => {
-      const row = { id: "c1", name: "Acme", domain: "acme.com", discovery_status: "pending" };
-      insertReturningMock.mockResolvedValue([row]);
-
-      const result = await createCompetitor({ name: "Acme", domain: "acme.com" });
-
-      expect(insertMock).toHaveBeenCalledWith(competitorsTable);
-      expect(insertValuesMock).toHaveBeenCalledWith({
-        name: "Acme",
-        domain: "acme.com",
-        discovery_status: "pending",
-      });
-      expect(result).toEqual(row);
-    });
-
-    it("persists caller-supplied discovery overrides using schema column names", async () => {
-      insertReturningMock.mockResolvedValue([{ id: "c1" }]);
-
-      await createCompetitor({
-        name: "Acme",
-        domain: "acme.com",
-        subreddits: ["acme"],
-        greenhouse_token: "acmehq",
-        lever_token: "acme",
-        pricing_url: "https://acme.com/pricing",
-        rss_url: "https://acme.com/changelog.xml",
-      });
-
-      expect(insertValuesMock).toHaveBeenCalledWith({
-        name: "Acme",
-        domain: "acme.com",
-        subreddits: ["acme"],
-        greenhouse_token: "acmehq",
-        lever_token: "acme",
-        pricing_url: "https://acme.com/pricing",
-        changelog_rss: "https://acme.com/changelog.xml",
-        discovery_status: "pending",
-      });
-    });
   });
 
   describe("getCompetitorsByIds", () => {
@@ -1554,101 +1519,6 @@ describe("db/queries — operational reporting", () => {
   });
 });
 
-describe("db/queries — company profile", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    selectMock.mockReturnValue({ from: fromMock });
-    // getCompanyProfile chains .orderBy().limit(1); upsertCompanyProfile's
-    // tx.select() chains .limit(1) directly (unchanged, out of scope for
-    // this fix) — expose both off the same fromMock return so each test's
-    // limitMock.mockResolvedValue(...) reaches whichever chain it uses.
-    fromMock.mockReturnValue({ orderBy: orderByMock, limit: limitMock });
-    orderByMock.mockReturnValue({ limit: limitMock });
-    insertMock.mockReturnValue({ values: insertValuesMock });
-    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
-    updateMock.mockReturnValue({ set: updateSetMock });
-    updateSetMock.mockReturnValue({ where: updateWhereMock });
-    updateWhereMock.mockReturnValue({ returning: updateReturningMock });
-    // db.transaction runs the callback against a tx that exposes the same
-    // select/insert/update surface as `db` — matches registry.ts's pattern.
-    transactionMock.mockImplementation(async (cb: (tx: unknown) => unknown) =>
-      cb({ select: selectMock, insert: insertMock, update: updateMock })
-    );
-  });
-
-  const profileInput = {
-    product_description: "A widget factory",
-    icp_company_size: "50-200",
-    icp_industries: ["saas"],
-    icp_buyer_role: "VP Eng",
-    pricing_tiers: [{ name: "Pro", price: 99, billing: "monthly" }],
-    key_differentiators: ["fast", "cheap"],
-    primary_competitor_ids: ["c1"],
-  };
-
-  describe("getCompanyProfile", () => {
-    it("returns the single row when the table has one", async () => {
-      const row = { id: "p1", product_description: "A widget factory" };
-      limitMock.mockResolvedValue([row]);
-
-      const result = await getCompanyProfile();
-
-      expect(fromMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(orderByMock).toHaveBeenCalledWith(asc(companyProfileTable.created_at));
-      expect(limitMock).toHaveBeenCalledWith(1);
-      expect(result).toEqual(row);
-    });
-
-    it("returns null on an empty table, not throw", async () => {
-      limitMock.mockResolvedValue([]);
-
-      const result = await getCompanyProfile();
-
-      expect(result).toBeNull();
-    });
-
-    it("orders by created_at asc, so a stray duplicate row deterministically resolves to the oldest one", async () => {
-      const older = {
-        id: "p1",
-        product_description: "Older row",
-        created_at: new Date("2026-01-01T00:00:00.000Z"),
-      };
-      const newer = {
-        id: "p2",
-        product_description: "Newer row (duplicate from a race)",
-        created_at: new Date("2026-02-01T00:00:00.000Z"),
-      };
-      // orderBy(asc(created_at)) + limit(1) means Postgres itself would only
-      // ever return the oldest row here; seeding both simulates that.
-      limitMock.mockResolvedValue([older, newer]);
-
-      const result = await getCompanyProfile();
-
-      expect(orderByMock).toHaveBeenCalledWith(asc(companyProfileTable.created_at));
-      expect(result).toEqual(older);
-    });
-  });
-
-  describe("upsertCompanyProfile", () => {
-    it("atomically upserts the singleton row", async () => {
-      const inserted = { id: "p2", ...profileInput };
-      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
-      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
-      onConflictReturningMock.mockResolvedValueOnce([inserted]);
-
-      const result = await upsertCompanyProfile(profileInput);
-
-      expect(insertMock).toHaveBeenCalledWith(companyProfileTable);
-      expect(insertValuesMock).toHaveBeenCalledWith({ ...profileInput, singleton: true });
-      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
-        target: companyProfileTable.singleton,
-        set: { ...profileInput, singleton: true, updated_at: expect.any(Date) },
-      });
-      expect(result).toEqual(inserted);
-    });
-  });
-});
-
 describe("db/queries — signal pipeline", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2054,6 +1924,8 @@ describe("db/queries — agent runs", () => {
 });
 
 describe("db/queries — route feeds", () => {
+  const WORKSPACE_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
   beforeEach(() => {
     vi.clearAllMocks();
     selectMock.mockReturnValue({ from: fromMock });
@@ -2068,6 +1940,7 @@ describe("db/queries — route feeds", () => {
   it("reads one extra signal with deterministic descending keyset pagination", async () => {
     await listSignalFeed({
       limit: 20,
+      workspace_id: WORKSPACE_ID,
       competitor_ids: ["c1", "c2"],
       sources: ["reddit", "jobs"],
       min_quality: 0.6,
@@ -2077,6 +1950,10 @@ describe("db/queries — route feeds", () => {
     });
 
     expect(fromMock).toHaveBeenCalledWith(signalsTable);
+    // Workspace-scoping subquery predicate — always applied, ANDed with the
+    // client-supplied competitor_ids filter (the actual vulnerability fix).
+    expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WORKSPACE_ID);
+    expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, expect.anything());
     expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, ["c1", "c2"]);
     expect(inArray).toHaveBeenCalledWith(signalsTable.source, ["reddit", "jobs"]);
     expect(orderByMock).toHaveBeenCalledWith(desc(signalsTable.created_at), desc(signalsTable.id));
@@ -2091,18 +1968,23 @@ describe("db/queries — route feeds", () => {
   });
 
   it("short-circuits empty signal filter arrays instead of calling inArray([])", async () => {
-    await expect(listSignalFeed({ limit: 20, competitor_ids: [] })).resolves.toEqual([]);
+    await expect(
+      listSignalFeed({ limit: 20, workspace_id: WORKSPACE_ID, competitor_ids: [] })
+    ).resolves.toEqual([]);
     expect(selectMock).not.toHaveBeenCalled();
   });
 
   it("reads alerts with the same stable cursor ordering and a bounded lookahead", async () => {
     await listAlertFeed({
       limit: 10,
+      workspace_id: WORKSPACE_ID,
       competitor_ids: ["c1"],
       cursor: { created_at: new Date("2026-09-09T12:00:00.000Z"), id: "a1" },
     });
 
     expect(fromMock).toHaveBeenCalledWith(alertsTable);
+    expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WORKSPACE_ID);
+    expect(inArray).toHaveBeenCalledWith(alertsTable.competitor_id, expect.anything());
     expect(inArray).toHaveBeenCalledWith(alertsTable.competitor_id, ["c1"]);
     expect(orderByMock).toHaveBeenCalledWith(desc(alertsTable.created_at), desc(alertsTable.id));
     expect(limitMock).toHaveBeenCalledWith(11);
@@ -2117,13 +1999,13 @@ describe("db/queries — route feeds", () => {
     _label,
     listFeed
   ) => {
-    await listFeed({ limit: Number.NaN });
+    await listFeed({ limit: Number.NaN, workspace_id: WORKSPACE_ID });
     expect(limitMock).toHaveBeenCalledWith(26);
 
-    await listFeed({ limit: 5_000 });
+    await listFeed({ limit: 5_000, workspace_id: WORKSPACE_ID });
     expect(limitMock).toHaveBeenCalledWith(101);
 
-    await listFeed({ limit: 0 });
+    await listFeed({ limit: 0, workspace_id: WORKSPACE_ID });
     expect(limitMock).toHaveBeenCalledWith(2);
   });
 
@@ -2687,6 +2569,293 @@ describe("db/queries — prompt evaluation and promotion", () => {
       { version: 1, is_active: false },
       { version: 2, is_active: true },
       { version: 3, is_active: false },
+    ]);
+  });
+});
+
+describe("db/queries — workspaces", () => {
+  const OWNER_UUID = "11111111-1111-4111-8111-111111111111";
+  const UNKNOWN_UUID = "22222222-2222-4222-8222-222222222222";
+  const WS_UUID = "33333333-3333-4333-8333-333333333333";
+
+  describe("createWorkspace", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it("inserts a workspace and its owner membership row in one transaction", async () => {
+      const workspaceRow = { id: WS_UUID, name: "Acme Inc", owner_id: OWNER_UUID, created_at: new Date() };
+      const workspaceValues = vi.fn(() => ({ returning: vi.fn(async () => [workspaceRow]) }));
+      const memberValues = vi.fn(async () => undefined);
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) => {
+        if (table === workspacesTable) {
+          return { values: workspaceValues };
+        }
+        return { values: memberValues };
+      });
+
+      const result = await createWorkspace({ name: "Acme Inc", ownerId: OWNER_UUID });
+
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(insertMock).toHaveBeenNthCalledWith(1, workspacesTable);
+      expect(insertMock).toHaveBeenNthCalledWith(2, workspaceMembersTable);
+      expect(workspaceValues).toHaveBeenCalledWith({ name: "Acme Inc", owner_id: OWNER_UUID });
+      expect(memberValues).toHaveBeenCalledWith({
+        workspace_id: WS_UUID,
+        user_id: OWNER_UUID,
+        role: "owner",
+      });
+      expect(result.name).toBe("Acme Inc");
+      expect(result.owner_id).toBe(OWNER_UUID);
+    });
+
+    it("rejects the transaction when the owner membership insert fails", async () => {
+      const workspaceRow = { id: WS_UUID, name: "Acme Inc", owner_id: OWNER_UUID };
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) => {
+        if (table === workspacesTable) {
+          return { values: vi.fn(() => ({ returning: vi.fn(async () => [workspaceRow]) })) };
+        }
+        return {
+          values: vi.fn(async () => {
+            throw new Error("member insert failed");
+          }),
+        };
+      });
+
+      await expect(createWorkspace({ name: "Acme Inc", ownerId: OWNER_UUID })).rejects.toThrow(
+        "member insert failed"
+      );
+    });
+  });
+
+  describe("getWorkspaceIdForUser", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      selectMock.mockReturnValue({ from: fromMock });
+      fromMock.mockReturnValue({ where: whereMock });
+    });
+
+    it("returns the user's workspace id when a membership row exists", async () => {
+      whereMock.mockResolvedValue([{ workspace_id: WS_UUID }]);
+
+      const result = await getWorkspaceIdForUser(OWNER_UUID);
+
+      expect(fromMock).toHaveBeenCalledWith(workspaceMembersTable);
+      expect(eq).toHaveBeenCalledWith(workspaceMembersTable.user_id, OWNER_UUID);
+      expect(result).toBe(WS_UUID);
+    });
+
+    it("returns null when the user has no membership", async () => {
+      whereMock.mockResolvedValue([]);
+
+      const result = await getWorkspaceIdForUser(UNKNOWN_UUID);
+
+      expect(result).toBeNull();
+    });
+  });
+
+});
+
+describe("workspace-scoped competitor/profile queries", () => {
+  const WS_A_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const WS_B_UUID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const WS_WITHOUT_PROFILE_UUID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const COMPETITOR_UUID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+  });
+
+  describe("getCompetitorByIdForWorkspace", () => {
+    it("returns undefined for a competitor in a different workspace", async () => {
+      // competitor row actually belongs to WS_A; and(id, workspace_id=WS_B) matches nothing
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      const result = await getCompetitorByIdForWorkspace(COMPETITOR_UUID, WS_B_UUID);
+
+      expect(and).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(competitorsTable.id, COMPETITOR_UUID);
+      expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WS_B_UUID);
+      expect(result).toBeUndefined();
+    });
+
+    it("returns the row when id and workspace both match", async () => {
+      const row = { id: COMPETITOR_UUID, workspace_id: WS_A_UUID, name: "Acme" };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([row]);
+
+      const result = await getCompetitorByIdForWorkspace(COMPETITOR_UUID, WS_A_UUID);
+
+      expect(result).toEqual(row);
+    });
+  });
+
+  describe("listCompetitorsForWorkspace", () => {
+    it("only returns rows for that workspace", async () => {
+      const rows = [
+        { id: "c1", workspace_id: WS_A_UUID },
+        { id: "c2", workspace_id: WS_A_UUID },
+      ];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue(rows);
+
+      const results = await listCompetitorsForWorkspace(WS_A_UUID);
+
+      expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WS_A_UUID);
+      expect(orderByMock).toHaveBeenCalledWith(desc(competitorsTable.created_at));
+      expect(results.every((c) => c.workspace_id === WS_A_UUID)).toBe(true);
+    });
+  });
+
+  describe("getCompetitorsByIdsForWorkspace", () => {
+    it("scopes the id lookup to the given workspace", async () => {
+      const rows = [{ id: "c1", workspace_id: WS_A_UUID }];
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue(rows);
+
+      const result = await getCompetitorsByIdsForWorkspace(["c1", "c2"], WS_A_UUID);
+
+      expect(inArray).toHaveBeenCalledWith(competitorsTable.id, ["c1", "c2"]);
+      expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WS_A_UUID);
+      expect(and).toHaveBeenCalled();
+      expect(result).toEqual(rows);
+    });
+
+    it("short-circuits an empty id array without querying", async () => {
+      await expect(getCompetitorsByIdsForWorkspace([], WS_A_UUID)).resolves.toEqual([]);
+      expect(selectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("createCompetitorForWorkspace", () => {
+    it("inserts with the caller's workspace_id and discovery_status defaulted to pending", async () => {
+      const row = { id: "c1", workspace_id: WS_A_UUID, name: "Acme", domain: "acme.com" };
+      insertReturningMock.mockResolvedValue([row]);
+
+      const result = await createCompetitorForWorkspace(
+        { name: "Acme", domain: "acme.com" },
+        WS_A_UUID
+      );
+
+      expect(insertMock).toHaveBeenCalledWith(competitorsTable);
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        workspace_id: WS_A_UUID,
+        name: "Acme",
+        domain: "acme.com",
+        discovery_status: "pending",
+      });
+      expect(result).toEqual(row);
+    });
+  });
+
+  describe("getCompanyProfileForWorkspace", () => {
+    it("returns null when the workspace has no profile", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      expect(await getCompanyProfileForWorkspace(WS_WITHOUT_PROFILE_UUID)).toBeNull();
+      expect(eq).toHaveBeenCalledWith(companyProfileTable.workspace_id, WS_WITHOUT_PROFILE_UUID);
+    });
+
+    it("returns the workspace's profile row when one exists", async () => {
+      const row = { id: "p1", workspace_id: WS_A_UUID, product_description: "A widget factory" };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([row]);
+
+      expect(await getCompanyProfileForWorkspace(WS_A_UUID)).toEqual(row);
+    });
+  });
+
+  describe("upsertCompanyProfileForWorkspace", () => {
+    // workspace_id here is deliberately the caller's own WS_A_UUID — the
+    // function's second argument is the source of truth and always wins
+    // (see the `set`/`values` assertions below), matching the brief's spread
+    // order. Passing it inside profileInput just satisfies the (correctly)
+    // required CompanyProfileInput type.
+    const profileInput = {
+      workspace_id: WS_A_UUID,
+      product_description: "A widget factory",
+      icp_company_size: "50-200",
+      icp_industries: ["saas"],
+      icp_buyer_role: "VP Eng",
+      pricing_tiers: [{ name: "Pro", price: 99, billing: "monthly" }],
+      key_differentiators: ["fast", "cheap"],
+      primary_competitor_ids: ["c1"],
+    };
+
+    it("upserts keyed on the workspace_id unique index", async () => {
+      const inserted = { id: "p1", ...profileInput };
+      insertValuesMock.mockReturnValueOnce({ onConflictDoUpdate: onConflictDoUpdateMock });
+      onConflictDoUpdateMock.mockReturnValueOnce({ returning: onConflictReturningMock });
+      onConflictReturningMock.mockResolvedValueOnce([inserted]);
+
+      const result = await upsertCompanyProfileForWorkspace(profileInput, WS_A_UUID);
+
+      expect(insertMock).toHaveBeenCalledWith(companyProfileTable);
+      expect(insertValuesMock).toHaveBeenCalledWith({ ...profileInput, workspace_id: WS_A_UUID });
+      expect(onConflictDoUpdateMock).toHaveBeenCalledWith({
+        target: companyProfileTable.workspace_id,
+        set: { ...profileInput, updated_at: expect.any(Date) },
+      });
+      expect(result).toEqual(inserted);
+    });
+  });
+});
+
+describe("listSignalFeed / listAlertFeed workspace scoping", () => {
+  const WS_A_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const OTHER_WORKSPACE_COMPETITOR_UUID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockReturnValue({ orderBy: orderByMock });
+    orderByMock.mockReturnValue({ limit: limitMock });
+    // The workspace-scoping subquery filters the (mocked) other-workspace id
+    // out entirely — the real DB would return zero rows for this predicate
+    // intersection, which this mock simulates directly.
+    limitMock.mockResolvedValue([]);
+  });
+
+  it("excludes signals for a competitor_id outside the caller's workspace even when explicitly requested", async () => {
+    const rows = await listSignalFeed({
+      limit: 50,
+      competitor_ids: [OTHER_WORKSPACE_COMPETITOR_UUID],
+      workspace_id: WS_A_UUID,
+    });
+
+    expect(rows).toHaveLength(0);
+    expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WS_A_UUID);
+    expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, expect.anything());
+    expect(inArray).toHaveBeenCalledWith(signalsTable.competitor_id, [
+      OTHER_WORKSPACE_COMPETITOR_UUID,
+    ]);
+    expect(and).toHaveBeenCalled();
+  });
+
+  it("excludes alerts for a competitor_id outside the caller's workspace even when explicitly requested", async () => {
+    const rows = await listAlertFeed({
+      limit: 50,
+      competitor_ids: [OTHER_WORKSPACE_COMPETITOR_UUID],
+      workspace_id: WS_A_UUID,
+    });
+
+    expect(rows).toHaveLength(0);
+    expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WS_A_UUID);
+    expect(inArray).toHaveBeenCalledWith(alertsTable.competitor_id, [
+      OTHER_WORKSPACE_COMPETITOR_UUID,
     ]);
   });
 });

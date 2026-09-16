@@ -24,17 +24,17 @@ import { wrap, fallbackErrorHandler } from "./http";
 const PROFILE_CACHE_KEY = "company:profile";
 
 export interface CompanyProfileRouterDeps {
-  getCompanyProfile: typeof queries.getCompanyProfile;
-  getCompetitorsByIds: typeof queries.getCompetitorsByIds;
-  upsertCompanyProfile: typeof queries.upsertCompanyProfile;
+  getCompanyProfileForWorkspace: typeof queries.getCompanyProfileForWorkspace;
+  getCompetitorsByIdsForWorkspace: typeof queries.getCompetitorsByIdsForWorkspace;
+  upsertCompanyProfileForWorkspace: typeof queries.upsertCompanyProfileForWorkspace;
   invalidateProfileCache: () => Promise<unknown>;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
 }
 
 export const defaultCompanyProfileRouterDeps: CompanyProfileRouterDeps = {
-  getCompanyProfile: queries.getCompanyProfile,
-  getCompetitorsByIds: queries.getCompetitorsByIds,
-  upsertCompanyProfile: queries.upsertCompanyProfile,
+  getCompanyProfileForWorkspace: queries.getCompanyProfileForWorkspace,
+  getCompetitorsByIdsForWorkspace: queries.getCompetitorsByIdsForWorkspace,
+  upsertCompanyProfileForWorkspace: queries.upsertCompanyProfileForWorkspace,
   invalidateProfileCache: () => cacheRedis.del(PROFILE_CACHE_KEY),
   enqueue: (queue, data) => queues[queue].add(queue, data),
 };
@@ -46,11 +46,18 @@ export function createCompanyProfileRouter(
 ): Router {
   const router = express.Router();
   router.use(express.json());
+  router.use((req, res, next) => {
+    if (!req.workspaceId) {
+      res.status(403).json({ error: "no_workspace" });
+      return;
+    }
+    next();
+  });
 
   router.get(
     "/",
-    wrap(async (_req, res) => {
-      const row = await deps.getCompanyProfile();
+    wrap(async (req, res) => {
+      const row = await deps.getCompanyProfileForWorkspace(req.workspaceId!);
       if (!row) {
         res
           .status(404)
@@ -72,7 +79,7 @@ export function createCompanyProfileRouter(
 
       const primaryIds = [...new Set(parsed.data.primary_competitor_ids)];
       if (primaryIds.length > 0) {
-        const found = await deps.getCompetitorsByIds(primaryIds);
+        const found = await deps.getCompetitorsByIdsForWorkspace(primaryIds, req.workspaceId!);
         const foundIds = new Set(found.map((competitor) => competitor.id));
         const missing = primaryIds.filter((id) => !foundIds.has(id));
         if (missing.length > 0) {
@@ -81,10 +88,17 @@ export function createCompanyProfileRouter(
         }
       }
 
-      const saved = await deps.upsertCompanyProfile({
-        ...parsed.data,
-        primary_competitor_ids: primaryIds,
-      });
+      const saved = await deps.upsertCompanyProfileForWorkspace(
+        {
+          ...parsed.data,
+          // workspace_id here just satisfies CompanyProfileInput's required
+          // field — the second argument is the source of truth the function
+          // itself writes with.
+          workspace_id: req.workspaceId!,
+          primary_competitor_ids: primaryIds,
+        },
+        req.workspaceId!
+      );
 
       // The write succeeded. A stale cache self-heals on TTL and the update
       // queue is documented no-retry, so neither failure fails the request.

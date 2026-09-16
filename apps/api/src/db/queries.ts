@@ -36,6 +36,8 @@ import {
   agentTestCasesTable,
   ragEvalDatasetTable,
   ragEvalRunsTable,
+  workspacesTable,
+  workspaceMembersTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -63,6 +65,8 @@ export type AgentRun = typeof agentRunsTable.$inferSelect;
 export type AgentLatency = typeof agentLatenciesTable.$inferSelect;
 export type LlmCost = typeof llmCostsTable.$inferSelect;
 export type Alert = typeof alertsTable.$inferSelect;
+export type Workspace = typeof workspacesTable.$inferSelect;
+export type WorkspaceMember = typeof workspaceMembersTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
@@ -574,25 +578,6 @@ export async function persistRagEvaluation(
   return { id: runId, summary };
 }
 
-export async function createCompetitor(input: CompetitorCreateInput): Promise<Competitor> {
-  const [row] = await db
-    .insert(competitorsTable)
-    .values({
-      name: input.name,
-      domain: input.domain,
-      ...(input.subreddits === undefined ? {} : { subreddits: input.subreddits }),
-      ...(input.greenhouse_token === undefined
-        ? {}
-        : { greenhouse_token: input.greenhouse_token }),
-      ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
-      ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
-      ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
-      discovery_status: "pending",
-    })
-    .returning();
-  return row;
-}
-
 export async function getCompetitorById(id: string): Promise<Competitor | undefined> {
   const [row] = await db.select().from(competitorsTable).where(eq(competitorsTable.id, id));
   return row;
@@ -824,6 +809,7 @@ export interface FeedCursor {
 
 export interface SignalFeedQuery {
   limit: number;
+  workspace_id: string; // new — always required, always enforced below
   competitor_ids?: string[];
   sources?: SignalSource[];
   min_quality?: number;
@@ -852,6 +838,18 @@ export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> 
   if (input.competitor_ids?.length === 0 || input.sources?.length === 0) return [];
 
   const predicates: SQL[] = [];
+  // Always-AND workspace scope, regardless of client-supplied competitor_ids —
+  // a competitor id from another workspace passed here now matches zero rows
+  // instead of leaking that workspace's signals.
+  predicates.push(
+    inArray(
+      signalsTable.competitor_id,
+      db
+        .select({ id: competitorsTable.id })
+        .from(competitorsTable)
+        .where(eq(competitorsTable.workspace_id, input.workspace_id))
+    )
+  );
   if (input.competitor_ids) {
     predicates.push(inArray(signalsTable.competitor_id, input.competitor_ids));
   }
@@ -884,6 +882,7 @@ export async function listSignalFeed(input: SignalFeedQuery): Promise<Signal[]> 
 
 export interface AlertFeedQuery {
   limit: number;
+  workspace_id: string; // new — always required, always enforced below
   competitor_ids?: string[];
   cursor?: FeedCursor;
 }
@@ -892,6 +891,18 @@ export async function listAlertFeed(input: AlertFeedQuery): Promise<Alert[]> {
   if (input.competitor_ids?.length === 0) return [];
 
   const predicates: SQL[] = [];
+  // Always-AND workspace scope, regardless of client-supplied competitor_ids —
+  // a competitor id from another workspace passed here now matches zero rows
+  // instead of leaking that workspace's alerts.
+  predicates.push(
+    inArray(
+      alertsTable.competitor_id,
+      db
+        .select({ id: competitorsTable.id })
+        .from(competitorsTable)
+        .where(eq(competitorsTable.workspace_id, input.workspace_id))
+    )
+  );
   if (input.competitor_ids) {
     predicates.push(inArray(alertsTable.competitor_id, input.competitor_ids));
   }
@@ -1083,34 +1094,6 @@ export async function getCostByCompetitorDay(days = 7): Promise<CostByCompetitor
     .from(llmCostsTable)
     .where(sql`${llmCostsTable.created_at} >= NOW() - INTERVAL '1 day' * ${days}`)
     .groupBy(llmCostsTable.competitor_id, utcDay);
-}
-
-// company_profile is single-row (no natural unique key beyond its own id —
-// see schema.ts). `.limit(1)` matches lib/company-context.ts's existing
-// direct read of this table. `.orderBy(asc(created_at))` makes a stray
-// duplicate row (race in upsertCompanyProfile's select-then-write) resolve
-// deterministically to the oldest row instead of flip-flopping between calls.
-export async function getCompanyProfile(): Promise<CompanyProfile | null> {
-  const [row] = await db
-    .select()
-    .from(companyProfileTable)
-    .orderBy(asc(companyProfileTable.created_at))
-    .limit(1);
-  return row ?? null;
-}
-
-// One atomic singleton upsert. Two concurrent profile mutations cannot both
-// observe an empty table and make one request fail on the unique constraint.
-export async function upsertCompanyProfile(input: CompanyProfileInput): Promise<CompanyProfile> {
-  const [row] = await db
-    .insert(companyProfileTable)
-    .values({ ...input, singleton: true })
-    .onConflictDoUpdate({
-      target: companyProfileTable.singleton,
-      set: { ...input, singleton: true, updated_at: new Date() },
-    })
-    .returning();
-  return row;
 }
 
 // ── signal pipeline (Part 7: entity-extractor / quality-scorer / deduplicator) ──
@@ -1429,4 +1412,120 @@ export async function finalizeDiscovery(
   });
 
   return discoveryStatus;
+}
+
+// ── workspaces (Task 2: create/invite/redeem) ───────────────────────────
+
+// createWorkspace + its owner membership row commit together — a failure
+// between them would leave a workspace with no owner member, which every
+// other workspace query treats as unreachable.
+export async function createWorkspace(input: { name: string; ownerId: string }): Promise<Workspace> {
+  return db.transaction(async (tx) => {
+    const [workspace] = await tx
+      .insert(workspacesTable)
+      .values({ name: input.name, owner_id: input.ownerId })
+      .returning();
+    await tx.insert(workspaceMembersTable).values({
+      workspace_id: workspace.id,
+      user_id: input.ownerId,
+      role: "owner",
+    });
+    return workspace;
+  });
+}
+
+// workspace_members_user_id_idx enforces one workspace per user, so this is
+// always at most one row.
+export async function getWorkspaceIdForUser(userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ workspace_id: workspaceMembersTable.workspace_id })
+    .from(workspaceMembersTable)
+    .where(eq(workspaceMembersTable.user_id, userId));
+  return row?.workspace_id ?? null;
+}
+
+// ── workspace-scoped tenant-data query variants (Task 3) ────────────────
+// Added alongside the unscoped originals above (getCompetitorById,
+// getCompetitorsByIds, listCompetitors) — those stay untouched for now since
+// background workers still call them. Tasks 6-9 (the routers) call these
+// instead. The unscoped createCompetitor was deleted in Task 7: its only
+// caller was the competitors router, now rewired to createCompetitorForWorkspace,
+// and it would violate competitors.workspace_id's NOT NULL constraint if
+// anything called it. Same reasoning removed the unscoped getCompanyProfile/
+// upsertCompanyProfile in Task 10 — the company-profile router was their only
+// caller, now rewired below, and they'd violate company_profile.workspace_id's
+// NOT NULL constraint if anything called them.
+
+export async function getCompetitorByIdForWorkspace(
+  id: string,
+  workspaceId: string
+): Promise<Competitor | undefined> {
+  const [row] = await db
+    .select()
+    .from(competitorsTable)
+    .where(and(eq(competitorsTable.id, id), eq(competitorsTable.workspace_id, workspaceId)));
+  return row;
+}
+
+export async function listCompetitorsForWorkspace(workspaceId: string): Promise<Competitor[]> {
+  return db
+    .select()
+    .from(competitorsTable)
+    .where(eq(competitorsTable.workspace_id, workspaceId))
+    .orderBy(desc(competitorsTable.created_at));
+}
+
+export async function getCompetitorsByIdsForWorkspace(
+  ids: string[],
+  workspaceId: string
+): Promise<Competitor[]> {
+  if (ids.length === 0) return [];
+  return db
+    .select()
+    .from(competitorsTable)
+    .where(and(inArray(competitorsTable.id, ids), eq(competitorsTable.workspace_id, workspaceId)));
+}
+
+export async function createCompetitorForWorkspace(
+  input: CompetitorCreateInput,
+  workspaceId: string
+): Promise<Competitor> {
+  const [row] = await db
+    .insert(competitorsTable)
+    .values({
+      workspace_id: workspaceId,
+      name: input.name,
+      domain: input.domain,
+      ...(input.subreddits === undefined ? {} : { subreddits: input.subreddits }),
+      ...(input.greenhouse_token === undefined ? {} : { greenhouse_token: input.greenhouse_token }),
+      ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
+      ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
+      ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
+      discovery_status: "pending",
+    })
+    .returning();
+  return row;
+}
+
+export async function getCompanyProfileForWorkspace(workspaceId: string): Promise<CompanyProfile | null> {
+  const [row] = await db
+    .select()
+    .from(companyProfileTable)
+    .where(eq(companyProfileTable.workspace_id, workspaceId));
+  return row ?? null;
+}
+
+export async function upsertCompanyProfileForWorkspace(
+  input: CompanyProfileInput,
+  workspaceId: string
+): Promise<CompanyProfile> {
+  const [row] = await db
+    .insert(companyProfileTable)
+    .values({ ...input, workspace_id: workspaceId })
+    .onConflictDoUpdate({
+      target: companyProfileTable.workspace_id,
+      set: { ...input, updated_at: new Date() },
+    })
+    .returning();
+  return row;
 }

@@ -28,6 +28,10 @@ vi.mock("../../lib/api", async () => {
   };
 });
 
+vi.mock("../../lib/supabase-server", () => ({
+  getServerAccessToken: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../../components/TrendChart", () => ({
   TrendChart: ({ data }: { data: unknown[] }) => (
     <div data-testid="trend-chart">{JSON.stringify(data)}</div>
@@ -85,8 +89,8 @@ describe("Radar page", () => {
     const jsx = await Page({ params: Promise.resolve({ id: "comp-1" }) });
     render(jsx);
 
-    expect(getCompetitorTrendMock).toHaveBeenCalledWith("comp-1");
-    expect(getCompetitorHiringMock).toHaveBeenCalledWith("comp-1");
+    expect(getCompetitorTrendMock).toHaveBeenCalledWith("comp-1", 30, undefined);
+    expect(getCompetitorHiringMock).toHaveBeenCalledWith("comp-1", 30, undefined);
     expect(screen.getByTestId("trend-chart")).toHaveTextContent(JSON.stringify(trend));
     expect(screen.getByTestId("hiring-chart")).toHaveTextContent(JSON.stringify(hiring));
   });

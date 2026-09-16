@@ -11,6 +11,8 @@ import { createSignalRouter, type SignalRouterDeps } from "@/api/signals";
 import { decodeCursor, encodeCursor } from "@/api/cursor";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
+const USER_UUID = "33333333-3333-4333-8333-333333333333";
+const WS_UUID = "22222222-2222-4222-8222-222222222222";
 
 async function call(app: express.Express, path: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -34,10 +36,37 @@ function rows(n: number) {
   }));
 }
 
+// Stands in for requireAuth — real middleware verifies a JWT, this just sets
+// req.user/req.workspaceId directly, matching what requireAuth would have set.
+function appWithUser(user: { id: string; workspaceId: string | null }, router: express.Router) {
+  const app = express();
+  app.use((req, _res, next) => {
+    req.user = { id: user.id, email: "test@example.com" };
+    req.workspaceId = user.workspaceId;
+    next();
+  });
+  app.use("/api/signals", router);
+  return app;
+}
+
 const app = (deps: SignalRouterDeps) =>
-  express().use("/api/signals", createSignalRouter(deps));
+  appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createSignalRouter(deps));
 
 beforeEach(() => vi.clearAllMocks());
+
+describe("workspace guard", () => {
+  it("403s with no_workspace when req.workspaceId is null", async () => {
+    const deps: SignalRouterDeps = { listSignalFeed: vi.fn(async () => []) as any };
+    const noWorkspaceApp = appWithUser(
+      { id: USER_UUID, workspaceId: null },
+      createSignalRouter(deps)
+    );
+    const res = await call(noWorkspaceApp, `/api/signals?competitor_ids=${UUID}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "no_workspace" });
+    expect(deps.listSignalFeed).not.toHaveBeenCalled();
+  });
+});
 
 describe("GET /api/signals", () => {
   it("returns data + null next_cursor on a short page", async () => {
@@ -107,6 +136,7 @@ describe("GET /api/signals", () => {
       `/api/signals?competitor_ids=${UUID}&sources=reddit,hn&min_quality=0.5&limit=7`
     );
     expect((deps.listSignalFeed as any).mock.calls[0][0]).toMatchObject({
+      workspace_id: WS_UUID,
       competitor_ids: [UUID],
       sources: ["reddit", "hn"],
       min_quality: 0.5,

@@ -43,6 +43,13 @@ const QuerySchema = z
 
 export function createSignalRouter(deps: SignalRouterDeps = defaultSignalRouterDeps): Router {
   const router = express.Router();
+  router.use((req, res, next) => {
+    if (!req.workspaceId) {
+      res.status(403).json({ error: "no_workspace" });
+      return;
+    }
+    next();
+  });
 
   router.get(
     "/",
@@ -66,6 +73,7 @@ export function createSignalRouter(deps: SignalRouterDeps = defaultSignalRouterD
       }
 
       const rows = await deps.listSignalFeed({
+        workspace_id: req.workspaceId!,
         limit,
         competitor_ids,
         sources,

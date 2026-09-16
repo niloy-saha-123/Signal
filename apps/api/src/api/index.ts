@@ -1,11 +1,14 @@
 import http, { type Server as HttpServer } from "node:http";
 import express, { type ErrorRequestHandler, type Express } from "express";
+import cors from "cors";
 import { Server as SocketIOServer } from "socket.io";
 import { createCompetitorRouter } from "./competitors";
 import { createSignalRouter } from "./signals";
 import { createAlertRouter } from "./alerts";
 import { createChatRouter } from "./chat";
 import { createCompanyProfileRouter } from "./company-profile";
+import { createWorkspaceRouter } from "./workspaces";
+import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
 import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
 import { checkDatabaseReadiness, closeDatabase } from "../db/client";
@@ -21,7 +24,6 @@ export interface ApiEnvironment {
   REDIS_URL?: string;
   PORT?: string;
   NODE_ENV?: string;
-  ALLOW_UNAUTHENTICATED_API?: string;
 }
 
 export function validateApiEnvironment(env: ApiEnvironment = process.env): { port: number } {
@@ -30,11 +32,6 @@ export function validateApiEnvironment(env: ApiEnvironment = process.env): { por
   );
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
-  }
-  if (env.NODE_ENV === "production" && env.ALLOW_UNAUTHENTICATED_API !== "true") {
-    throw new Error(
-      "ALLOW_UNAUTHENTICATED_API must be exactly true when NODE_ENV=production"
-    );
   }
 
   const port = Number(env.PORT ?? 3000);
@@ -100,6 +97,7 @@ async function runReadinessChecks(dependencies: ApiAppDependencies): Promise<voi
 export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   const app = express();
   app.disable("x-powered-by");
+  app.use(cors({ origin: process.env.FRONTEND_URL ?? "http://localhost:3001", credentials: true }));
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   // Compatibility liveness endpoint: process-only by design. Infrastructure
   // health belongs to /ready so an outage does not trigger restart loops.
@@ -113,11 +111,13 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
       res.status(503).json({ status: "unavailable" });
     }
   });
+  app.use("/api", requireAuth);
   app.use("/api/competitors", createCompetitorRouter());
   app.use("/api/signals", createSignalRouter());
   app.use("/api/alerts", createAlertRouter());
   app.use("/api/chat", createChatRouter());
   app.use("/api/company-profile", createCompanyProfileRouter());
+  app.use("/api/workspaces", createWorkspaceRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;
@@ -125,6 +125,17 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
 
 interface ClosableSocketServer {
   close(callback?: () => void): unknown;
+}
+
+interface HandshakeSocket {
+  handshake: { auth: unknown };
+}
+
+// Minimal slice of socket.io's Server.use — matched by duck-typed check below rather than a
+// direct cast, since ApiRuntimeOverrides.io (test doubles) is only typed as ClosableSocketServer
+// and doesn't carry .use.
+interface UsableSocketServer {
+  use(fn: (socket: HandshakeSocket, next: (err?: Error) => void) => void): unknown;
 }
 
 export interface ApiRuntimeOverrides {
@@ -165,7 +176,36 @@ async function closeHttpServer(server: HttpServer): Promise<void> {
 export function createApiRuntime(overrides: ApiRuntimeOverrides = {}) {
   const app = overrides.app ?? createApiApp();
   const server = overrides.server ?? http.createServer(app);
-  const io = overrides.io ?? new SocketIOServer(server, { serveClient: false });
+  const io =
+    overrides.io ??
+    new SocketIOServer(server, {
+      serveClient: false,
+      cors: { origin: process.env.FRONTEND_URL ?? "http://localhost:3001", credentials: true },
+    });
+  // Handshake auth: rejects the connection unless the client supplies a valid access token,
+  // and stamps the verified workspaceId onto the socket for joinOrLeaveCompetitorRoom's
+  // ownership check (socket-relay.ts). Guarded by a duck-type check, not a direct cast — the
+  // ApiRuntimeOverrides.io test double only implements close(), not use().
+  const usableIo = io as unknown as Partial<UsableSocketServer>;
+  if (typeof usableIo.use === "function") {
+    usableIo.use((socket, next) => {
+      const token = (socket.handshake.auth as { token?: unknown } | undefined)?.token;
+      if (typeof token !== "string") {
+        next(new Error("unauthorized"));
+        return;
+      }
+      verifyAccessToken(token)
+        .then(({ workspaceId }) => {
+          if (!workspaceId) {
+            next(new Error("no_workspace"));
+            return;
+          }
+          (socket as unknown as { workspaceId: string }).workspaceId = workspaceId;
+          next();
+        })
+        .catch(() => next(new Error("unauthorized")));
+    });
+  }
   // wireSocketRelay registers the competitor:join/leave connection handlers and routes
   // signal:new/discovery:status_changed to per-competitor rooms — see its own header comment.
   const socketRelay = wireSocketRelay(io as unknown as EmittableSocketServer);

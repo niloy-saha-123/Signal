@@ -12,6 +12,7 @@ import { z } from "zod";
 import type { ClientToServerEvents, ServerToClientEvents } from "@signal/shared";
 import { cacheRedis, redis } from "./redis-client";
 import { logger } from "./logger";
+import { getCompetitorByIdForWorkspace } from "../db/queries";
 
 const SOCKET_EVENTS_CHANNEL = "signal:socket-events";
 
@@ -74,28 +75,68 @@ export interface RelaySocket {
   join(room: string): unknown;
   leave(room: string): unknown;
   on<E extends keyof ClientToServerEvents>(event: E, listener: ClientToServerEvents[E]): unknown;
+  workspaceId: string; // set by the handshake middleware in index.ts before "connection" fires
 }
 
 const competitorIdSchema = z.string().uuid();
 
+interface JoinOrLeaveDeps {
+  getCompetitorByIdForWorkspace: typeof getCompetitorByIdForWorkspace;
+}
+
 // Competitor ids arrive over a public socket from the browser — untrusted input, same trust
 // boundary as any REST body/param. A malformed id is silently ignored (not thrown) so a bad
-// client can't do anything worse than fail to join a room.
-function joinOrLeaveCompetitorRoom(socket: RelaySocket, action: "join" | "leave", id: unknown): void {
+// client can't do anything worse than fail to join a room. A join additionally has to prove
+// the competitor belongs to the caller's own workspace (workspaceId comes from the handshake
+// JWT, not from the client-supplied event) — leave has no such check since leaving a room you
+// were never in is a no-op either way.
+export async function joinOrLeaveCompetitorRoom(
+  socket: RelaySocket,
+  action: "join" | "leave",
+  id: unknown,
+  deps: JoinOrLeaveDeps = { getCompetitorByIdForWorkspace }
+): Promise<void> {
   const parsed = competitorIdSchema.safeParse(id);
   if (!parsed.success) {
     logger.warn("Ignored malformed competitor room request", { action, id });
     return;
   }
-  socket[action](competitorRoom(parsed.data));
+  if (action === "leave") {
+    socket.leave(competitorRoom(parsed.data));
+    return;
+  }
+  let competitor;
+  try {
+    competitor = await deps.getCompetitorByIdForWorkspace(parsed.data, socket.workspaceId);
+  } catch (error) {
+    // A DB blip here must not become an unhandled rejection — this call is invoked
+    // fire-and-forget (`void joinOrLeaveCompetitorRoom(...)`) from wireSocketRelay's
+    // socket.on listener, so an uncaught throw would have nothing downstream to catch it.
+    logger.error("Failed to check competitor workspace ownership for competitor:join", {
+      competitorId: parsed.data,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  if (!competitor) {
+    logger.warn("Rejected competitor:join outside caller's workspace", { competitorId: parsed.data });
+    return;
+  }
+  socket.join(competitorRoom(parsed.data));
 }
 
 // Called once from the Express process (createApiRuntime). Returns a close() so shutdown can
 // tear the dedicated subscriber connection down alongside the rest of Redis.
 export function wireSocketRelay(io: EmittableSocketServer): { close: () => Promise<void> } {
   io.on("connection", (socket) => {
-    socket.on("competitor:join", (id) => joinOrLeaveCompetitorRoom(socket, "join", id));
-    socket.on("competitor:leave", (id) => joinOrLeaveCompetitorRoom(socket, "leave", id));
+    // ClientToServerEvents' listener signatures return void — joinOrLeaveCompetitorRoom is now
+    // async (it awaits a workspace-ownership DB check on join), so the promise it returns is
+    // intentionally not awaited here. Safe to fire-and-forget: every path inside (malformed id,
+    // rejected workspace, a thrown DB error) is caught and logged internally, so the returned
+    // promise never rejects — a `void`-fired but *rejecting* promise would otherwise be an
+    // unhandled rejection and, on Node's default config, crash the process.
+    socket.on("competitor:join", (id) => void joinOrLeaveCompetitorRoom(socket, "join", id));
+    socket.on("competitor:leave", (id) => void joinOrLeaveCompetitorRoom(socket, "leave", id));
   });
   // ioredis: a connection in subscribe mode can't run other commands, so this needs its own
   // connection rather than reusing an existing client. Duplicates `redis` (BullMQ's

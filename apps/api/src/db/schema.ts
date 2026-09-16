@@ -33,6 +33,9 @@ export const competitorsTable = pgTable(
   "competitors",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     domain: text("domain").notNull(),
     subreddits: text("subreddits").array().notNull().default(sql`'{}'::text[]`),
@@ -53,7 +56,7 @@ export const competitorsTable = pgTable(
       "competitors_discovery_status_check",
       sql`${table.discovery_status} IN ('pending', 'in_progress', 'complete', 'failed')`
     ),
-    uniqueIndex("competitors_domain_idx").on(table.domain),
+    uniqueIndex("competitors_workspace_domain_idx").on(table.workspace_id, table.domain),
     index("competitors_is_active_idx").on(table.is_active),
   ]
 );
@@ -470,16 +473,17 @@ export const competitorSignalScoresTable = pgTable(
 // getCompanyContext() (lib/company-context.ts) reads this row and formats
 // it into a system-prompt injection every analysis agent includes, so
 // output is specific to the user's product instead of generic commentary.
-// `singleton` + its check/unique index enforce single-row-ness at the DB
-// level (queries.ts's upsert previously relied on a select-then-write race
-// with nothing stopping two concurrent inserts from producing duplicates) —
-// forced to `true`, and unique on that value, so a second concurrent insert
-// fails loudly with a constraint violation instead of silently duplicating.
+// One row per workspace_id, enforced by company_profile_workspace_idx
+// (unique on workspace_id) — a second concurrent insert for the same
+// workspace fails loudly with a constraint violation instead of silently
+// duplicating.
 export const companyProfileTable = pgTable(
   "company_profile",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    singleton: boolean("singleton").notNull().default(true),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
     // What the product does — the first line of every agent's injected context.
     product_description: text("product_description").notNull(),
     // Ideal-customer-profile fields — let agents judge whether a competitor's
@@ -501,10 +505,7 @@ export const companyProfileTable = pgTable(
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [
-    check("company_profile_singleton_check", sql`${table.singleton} = true`),
-    uniqueIndex("company_profile_singleton_idx").on(table.singleton),
-  ]
+  (table) => [uniqueIndex("company_profile_workspace_idx").on(table.workspace_id)]
 );
 
 // ── competitor_discovery_log ─────────────────────────────────────────────
@@ -586,3 +587,52 @@ export const ragEvalRunsTable = pgTable("rag_eval_runs", {
   git_commit: text("git_commit"),
   results: jsonb("results").$type<Record<string, unknown>[]>().notNull(),
 });
+
+// ── workspaces (Notion-group model: one workspace per user, invite teammates in) ──
+export const workspacesTable = pgTable("workspaces", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  // References auth.users.id (Supabase-managed) — no FK constraint across schemas
+  // from Drizzle; enforced at the app layer (owner_id always comes from a verified JWT).
+  owner_id: uuid("owner_id").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const workspaceMembersTable = pgTable(
+  "workspace_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    user_id: uuid("user_id").notNull(),
+    role: text("role").notNull().default("member"),
+    joined_at: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("workspace_members_role_check", sql`${table.role} IN ('owner', 'member')`),
+    // One workspace per user — the constraint that makes this the Notion-"group"
+    // model instead of full multi-workspace-per-user.
+    uniqueIndex("workspace_members_user_id_idx").on(table.user_id),
+    index("workspace_members_workspace_id_idx").on(table.workspace_id),
+  ]
+);
+
+export const workspaceInvitesTable = pgTable(
+  "workspace_invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    created_by: uuid("created_by").notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    used_at: timestamp("used_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("workspace_invites_token_idx").on(table.token),
+    index("workspace_invites_workspace_id_idx").on(table.workspace_id),
+  ]
+);

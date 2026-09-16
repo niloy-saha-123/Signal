@@ -11,36 +11,38 @@ import {
   getCompetitorScoreHistory,
   getCompetitorTrend,
 } from "../../../lib/api";
+import { getServerAccessToken } from "../../../lib/supabase-server";
 import { SignalScoreCard } from "../../../components/SignalScoreCard";
 import { TrendChart } from "../../../components/TrendChart";
 import { HiringChart } from "../../../components/HiringChart";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const token = await getServerAccessToken();
 
   let competitor;
   try {
-    competitor = await getCompetitor(id);
+    competitor = await getCompetitor(id, token);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) notFound();
     throw error;
   }
 
   const [score, history, trend, hiring] = await Promise.all([
-    getCompetitorScore(id).catch((error) => {
+    getCompetitorScore(id, token).catch((error) => {
       if (error instanceof ApiError && error.status === 404) return null;
       console.error("Failed to fetch competitor score", { competitorId: id, error });
       return null;
     }),
-    getCompetitorScoreHistory(id).catch((error) => {
+    getCompetitorScoreHistory(id, 30, token).catch((error) => {
       console.error("Failed to fetch competitor score history", { competitorId: id, error });
       return [];
     }),
-    getCompetitorTrend(id).catch((error) => {
+    getCompetitorTrend(id, 30, token).catch((error) => {
       console.error("Failed to fetch competitor trend", { competitorId: id, error });
       return [];
     }),
-    getCompetitorHiring(id).catch((error) => {
+    getCompetitorHiring(id, 30, token).catch((error) => {
       console.error("Failed to fetch competitor hiring", { competitorId: id, error });
       return [];
     }),

@@ -116,9 +116,9 @@ function computeHiringDeltas(
 }
 
 export interface CompetitorRouterDeps {
-  createCompetitor: typeof queries.createCompetitor;
-  getCompetitorById: typeof queries.getCompetitorById;
-  listCompetitors: typeof queries.listCompetitors;
+  createCompetitorForWorkspace: typeof queries.createCompetitorForWorkspace;
+  getCompetitorByIdForWorkspace: typeof queries.getCompetitorByIdForWorkspace;
+  listCompetitorsForWorkspace: typeof queries.listCompetitorsForWorkspace;
   getCompetitorDiscoveryLog: typeof queries.getCompetitorDiscoveryLog;
   getLatestSignalScores: typeof queries.getLatestSignalScores;
   getSignalVolumeByDay: typeof queries.getSignalVolumeByDay;
@@ -131,9 +131,9 @@ export interface CompetitorRouterDeps {
 }
 
 export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
-  createCompetitor: queries.createCompetitor,
-  getCompetitorById: queries.getCompetitorById,
-  listCompetitors: queries.listCompetitors,
+  createCompetitorForWorkspace: queries.createCompetitorForWorkspace,
+  getCompetitorByIdForWorkspace: queries.getCompetitorByIdForWorkspace,
+  listCompetitorsForWorkspace: queries.listCompetitorsForWorkspace,
   getCompetitorDiscoveryLog: queries.getCompetitorDiscoveryLog,
   getLatestSignalScores: queries.getLatestSignalScores,
   getSignalVolumeByDay: queries.getSignalVolumeByDay,
@@ -176,6 +176,13 @@ export function createCompetitorRouter(
   deps: CompetitorRouterDeps = defaultCompetitorRouterDeps
 ): Router {
   const router = express.Router();
+  router.use((req, res, next) => {
+    if (!req.workspaceId) {
+      res.status(403).json({ error: "no_workspace" });
+      return;
+    }
+    next();
+  });
   router.use(express.json());
 
   router.post(
@@ -199,7 +206,7 @@ export function createCompetitorRouter(
         return;
       }
 
-      const row = await deps.createCompetitor(parsed.data);
+      const row = await deps.createCompetitorForWorkspace(parsed.data, req.workspaceId!);
 
       // Enqueue only after the insert has committed (plan ruling 4). The row
       // exists regardless of what the queue does — a failure here is surfaced
@@ -225,8 +232,8 @@ export function createCompetitorRouter(
 
   router.get(
     "/",
-    wrap(async (_req, res) => {
-      res.status(200).json(await deps.listCompetitors());
+    wrap(async (req, res) => {
+      res.status(200).json(await deps.listCompetitorsForWorkspace(req.workspaceId!));
     })
   );
 
@@ -235,7 +242,7 @@ export function createCompetitorRouter(
     wrap(async (req, res) => {
       const id = requireUuidParam(req, res);
       if (id === null) return;
-      const row = await deps.getCompetitorById(id);
+      const row = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!row) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -249,7 +256,7 @@ export function createCompetitorRouter(
     wrap(async (req, res) => {
       const id = requireUuidParam(req, res);
       if (id === null) return;
-      const competitor = await deps.getCompetitorById(id);
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!competitor) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -266,7 +273,7 @@ export function createCompetitorRouter(
     wrap(async (req, res) => {
       const id = requireUuidParam(req, res);
       if (id === null) return;
-      const competitor = await deps.getCompetitorById(id);
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!competitor) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -304,7 +311,7 @@ export function createCompetitorRouter(
         res.status(400).json({ error: "validation", issues: parsedLimit.error.issues });
         return;
       }
-      const competitor = await deps.getCompetitorById(id);
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!competitor) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -348,7 +355,7 @@ export function createCompetitorRouter(
         res.status(400).json({ error: "validation", issues: parsedQuery.error.issues });
         return;
       }
-      const competitor = await deps.getCompetitorById(id);
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!competitor) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -396,7 +403,7 @@ export function createCompetitorRouter(
         res.status(400).json({ error: "validation", issues: parsedQuery.error.issues });
         return;
       }
-      const competitor = await deps.getCompetitorById(id);
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!competitor) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -419,7 +426,7 @@ export function createCompetitorRouter(
     wrap(async (req, res) => {
       const id = requireUuidParam(req, res);
       if (id === null) return;
-      const competitor = await deps.getCompetitorById(id);
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
       if (!competitor) {
         res.status(404).json({ error: "not_found" });
         return;

@@ -14,6 +14,7 @@ import { createChatRouter, type ChatRouterDeps } from "@/api/chat";
 const C1 = "11111111-1111-4111-8111-111111111111";
 const C2 = "22222222-2222-4222-8222-222222222222";
 const RUN_ID = "99999999-9999-4999-8999-999999999999";
+const WORKSPACE_ID = "33333333-3333-4333-8333-333333333333";
 
 const ANSWER: ChatAgentResult = {
   refused: false,
@@ -45,7 +46,9 @@ function deferred<T>() {
 
 function makeDeps(over: Partial<ChatRouterDeps> = {}): ChatRouterDeps {
   return {
-    getCompetitorsByIds: vi.fn(async (ids: string[]) => ids.map((id) => ({ id }))) as any,
+    getCompetitorsByIdsForWorkspace: vi.fn(async (ids: string[]) =>
+      ids.map((id) => ({ id }))
+    ) as any,
     createAgentRun: vi.fn(async () => ({ id: RUN_ID })) as any,
     completeAgentRun: vi.fn(async () => undefined) as any,
     runChatAgent: vi.fn(async () => ANSWER) as any,
@@ -55,11 +58,16 @@ function makeDeps(over: Partial<ChatRouterDeps> = {}): ChatRouterDeps {
 }
 
 // Builds a throwaway app and records every chunk written to the SSE response,
-// so assertions don't depend on client-side stream timing.
-function buildApp(deps: ChatRouterDeps): { app: express.Express; writes: string[] } {
+// so assertions don't depend on client-side stream timing. Simulates
+// requireAuth by stamping req.workspaceId unless withWorkspace is false.
+function buildApp(
+  deps: ChatRouterDeps,
+  { withWorkspace = true }: { withWorkspace?: boolean } = {}
+): { app: express.Express; writes: string[] } {
   const writes: string[] = [];
   const app = express();
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
+    if (withWorkspace) (req as any).workspaceId = WORKSPACE_ID;
     const orig = res.write.bind(res);
     (res as any).write = (chunk: any, ...rest: any[]) => {
       writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
@@ -148,7 +156,7 @@ describe("POST /api/chat", () => {
     expect(res.headers["content-type"]).toContain("application/json");
     expect(res.headers["content-type"]).not.toContain("text/event-stream");
     expect(JSON.parse(res.text).error).toBe("validation");
-    expect(deps.getCompetitorsByIds).not.toHaveBeenCalled();
+    expect(deps.getCompetitorsByIdsForWorkspace).not.toHaveBeenCalled();
     expect(deps.createAgentRun).not.toHaveBeenCalled();
   });
 
@@ -165,7 +173,7 @@ describe("POST /api/chat", () => {
 
   it("unknown competitor: 404 unknown_competitor listing the missing id, no run created", async () => {
     const deps = makeDeps({
-      getCompetitorsByIds: vi.fn(async () => [{ id: C1 }]) as any,
+      getCompetitorsByIdsForWorkspace: vi.fn(async () => [{ id: C1 }]) as any,
     });
     const res = await call(buildApp(deps).app, { query: "hi", competitor_ids: [C1, C2] });
 
@@ -173,6 +181,41 @@ describe("POST /api/chat", () => {
     const body = JSON.parse(res.text);
     expect(body.error).toBe("unknown_competitor");
     expect(body.missing).toEqual([C2]);
+    expect(deps.createAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("competitor from another workspace: same unknown_competitor 404 as a nonexistent id", async () => {
+    // C2 exists, but belongs to a different workspace — getCompetitorsByIdsForWorkspace
+    // (scoped by req.workspaceId) simply won't return it, indistinguishable from
+    // C2 not existing at all.
+    const deps = makeDeps({
+      getCompetitorsByIdsForWorkspace: vi.fn(async (ids: string[], workspaceId: string) =>
+        ids.filter((id) => id === C1).map((id) => ({ id }))
+      ) as any,
+    });
+    const res = await call(buildApp(deps).app, { query: "hi", competitor_ids: [C1, C2] });
+
+    expect(res.status).toBe(404);
+    const body = JSON.parse(res.text);
+    expect(body.error).toBe("unknown_competitor");
+    expect(body.missing).toEqual([C2]);
+    expect(deps.getCompetitorsByIdsForWorkspace).toHaveBeenCalledWith(
+      expect.arrayContaining([C1, C2]),
+      WORKSPACE_ID
+    );
+    expect(deps.createAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("no workspace on request: 403 no_workspace, no lookup attempted", async () => {
+    const deps = makeDeps();
+    const res = await call(buildApp(deps, { withWorkspace: false }).app, {
+      query: "hi",
+      competitor_ids: [C1],
+    });
+
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.text).error).toBe("no_workspace");
+    expect(deps.getCompetitorsByIdsForWorkspace).not.toHaveBeenCalled();
     expect(deps.createAgentRun).not.toHaveBeenCalled();
   });
 
