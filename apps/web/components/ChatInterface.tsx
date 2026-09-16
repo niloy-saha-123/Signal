@@ -184,31 +184,34 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
       setThreads((current) => [thread, ...current]);
     }
 
-    await streamChatResult(
-      trimmed,
-      competitorIds,
-      (result) => {
-        setTurns((current) =>
-          current.map((turn) => (turn.id === id ? { ...turn, result } : turn))
-        );
-      },
-      (message) => {
-        setTurns((current) =>
-          current.map((turn) => (turn.id === id ? { ...turn, error: message } : turn))
-        );
-      },
-      {
-        threadId,
-        onToken: (text) => {
+    try {
+      await streamChatResult(
+        trimmed,
+        competitorIds,
+        (result) => {
           setTurns((current) =>
-            current.map((turn) =>
-              turn.id === id ? { ...turn, draft: (turn.draft ?? "") + text } : turn
-            )
+            current.map((turn) => (turn.id === id ? { ...turn, result } : turn))
           );
         },
-      }
-    );
-    setSubmitting(false);
+        (message) => {
+          setTurns((current) =>
+            current.map((turn) => (turn.id === id ? { ...turn, error: message } : turn))
+          );
+        },
+        {
+          threadId,
+          onToken: (text) => {
+            setTurns((current) =>
+              current.map((turn) =>
+                turn.id === id ? { ...turn, draft: (turn.draft ?? "") + text } : turn
+              )
+            );
+          },
+        }
+      );
+    } finally {
+      setSubmitting(false);
+    }
     refreshThreads();
   }
 

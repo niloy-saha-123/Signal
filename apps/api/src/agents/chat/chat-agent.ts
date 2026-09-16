@@ -18,6 +18,7 @@ import {
   ChatAgentInputSchema,
   setupChatCheckpointer,
   CHAT_RECURSION_LIMIT,
+  GENERATE_NODE_NAME,
 } from "./chat-graph";
 import type { ChatAgentInput } from "./chat-graph";
 
@@ -161,7 +162,7 @@ export async function* streamChat(
     const [ns, mode, payload] = chunk as unknown as [string[], string, unknown];
     if (mode === "messages") {
       const [message] = payload as [AIMessageChunk, unknown];
-      if (ns[0]?.split(":")[0] === "generate") {
+      if (ns[0]?.split(":")[0] === GENERATE_NODE_NAME) {
         const text = chunkText(message);
         if (text) yield { kind: "token", text };
       }

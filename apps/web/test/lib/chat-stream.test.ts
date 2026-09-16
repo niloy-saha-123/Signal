@@ -195,4 +195,24 @@ describe("streamChatResult", () => {
     await streamChatResult("q", ["comp-1"], onResult, onError);
     expect(onError).toHaveBeenCalledTimes(1);
   });
+
+  it("routes a mid-stream reader rejection to onError and does not throw", async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: token\ndata: {"text":"partial"}\n\n'));
+        controller.error(new Error("connection reset"));
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const onResult = vi.fn();
+    const onError = vi.fn();
+    await expect(
+      streamChatResult("q", ["comp-1"], onResult, onError)
+    ).resolves.toBeUndefined();
+    expect(onResult).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [message] = onError.mock.calls[0];
+    expect(message).not.toContain("connection reset");
+  });
 });

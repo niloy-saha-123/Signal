@@ -64,6 +64,11 @@ export const MESSAGE_WINDOW_SIZE = 10;
 
 export const CHAT_RECURSION_LIMIT = 10;
 
+// Checkpoint-namespace prefix for the streamed answer node; chat-agent.ts's
+// message callback filters on it. Exported so the name and its only consumer
+// can't drift silently (a rename without updating the filter yields zero tokens).
+export const GENERATE_NODE_NAME = "generate";
+
 const DEFAULT_SYSTEM_PROMPT =
   "You are Signal's competitive-intelligence analyst. Answer only from the supplied evidence. " +
   "Be concise, distinguish direct observations from inference, and do not use outside knowledge.";
@@ -430,7 +435,7 @@ function afterRetrieve(state: ChatGraphStateType): "compact" | "end" {
 const builder = new StateGraph(ChatGraphState)
   .addNode("retrieve", retrieveNode)
   .addNode("compact", compactNode, { retryPolicy: RETRY_POLICY })
-  .addNode("generate", generateNode, { retryPolicy: RETRY_POLICY })
+  .addNode(GENERATE_NODE_NAME, generateNode, { retryPolicy: RETRY_POLICY })
   .addNode("citationCheck", citationCheckNode)
   .addEdge(START, "retrieve")
   .addConditionalEdges("retrieve", afterRetrieve, { compact: "compact", end: END })

@@ -70,29 +70,35 @@ export async function streamChatResult(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const rawEvent = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const parsed = parseSseEvent(rawEvent);
-      if (parsed) {
-        if (parsed.event === "token") {
-          const { text } = JSON.parse(parsed.data) as { text: string };
-          options.onToken?.(text);
-        } else if (parsed.event === "result") {
-          onResult(JSON.parse(parsed.data) as ChatAgentResult);
-        } else if (parsed.event === "error") {
-          onError(GENERIC_ERROR_MESSAGE);
-        } else if (parsed.event === "done") {
-          return;
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const parsed = parseSseEvent(rawEvent);
+        if (parsed) {
+          if (parsed.event === "token") {
+            const { text } = JSON.parse(parsed.data) as { text: string };
+            options.onToken?.(text);
+          } else if (parsed.event === "result") {
+            onResult(JSON.parse(parsed.data) as ChatAgentResult);
+          } else if (parsed.event === "error") {
+            onError(GENERIC_ERROR_MESSAGE);
+          } else if (parsed.event === "done") {
+            return;
+          }
         }
+        boundary = buffer.indexOf("\n\n");
       }
-      boundary = buffer.indexOf("\n\n");
     }
+  } catch {
+    onError(GENERIC_ERROR_MESSAGE);
+  } finally {
+    reader.releaseLock();
   }
 }
