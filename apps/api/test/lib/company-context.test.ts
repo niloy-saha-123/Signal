@@ -6,10 +6,18 @@ vi.mock("@/db/queries", () => ({
 vi.mock("@/lib/redis-client", () => ({
   cacheRedis: { get: vi.fn(), setex: vi.fn() },
 }));
+vi.mock("@/agents/discovery-search/memory-store", () => ({
+  getSignalGoalMemory: vi.fn(),
+}));
+vi.mock("@/retrieval/hybrid-retrieval", () => ({
+  hybridRetrieveProfile: vi.fn(),
+}));
 
 import { getCompanyProfileForWorkspace } from "@/db/queries";
 import { cacheRedis } from "@/lib/redis-client";
 import { getCompanyContext } from "@/lib/company-context";
+import { getSignalGoalMemory } from "@/agents/discovery-search/memory-store";
+import { hybridRetrieveProfile } from "@/retrieval/hybrid-retrieval";
 
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
 
@@ -26,6 +34,8 @@ const baseProfile = {
 describe("getCompanyContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getSignalGoalMemory).mockResolvedValue(null);
+    vi.mocked(hybridRetrieveProfile).mockResolvedValue([]);
   });
 
   it("returns the cached string from Redis without querying Postgres", async () => {
@@ -73,5 +83,15 @@ describe("getCompanyContext", () => {
     expect(contextA).toContain("Product A");
     expect(contextB).toContain("Product B");
     expect(contextA).not.toContain("Product B");
+  });
+
+  it("includes the signal goal and a doc-derived summary when both exist", async () => {
+    vi.mocked(getSignalGoalMemory).mockResolvedValue({ goal: "catching up to Competitor X", confidence: 0.8 });
+    vi.mocked(hybridRetrieveProfile).mockResolvedValue([{ id: "1", text: "We are bootstrapped." }] as never);
+
+    const context = await getCompanyContext(WORKSPACE_ID);
+
+    expect(context).toContain("Why this company uses Signal: catching up to Competitor X");
+    expect(context).toContain("We are bootstrapped.");
   });
 });

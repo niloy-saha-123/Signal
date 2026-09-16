@@ -31,7 +31,9 @@
 //   Deletes that workspace's cache entry — called by POST /api/company-profile
 //   and the company-profile-update worker after a profile write.
 
+import { getSignalGoalMemory } from "../agents/discovery-search/memory-store";
 import { getCompanyProfileForWorkspace } from "../db/queries";
+import { hybridRetrieveProfile } from "../retrieval/hybrid-retrieval";
 import { cacheRedis } from "./redis-client";
 
 const CACHE_TTL_SECONDS = 3600;
@@ -70,8 +72,22 @@ export async function getCompanyContext(workspaceId: string): Promise<string> {
     "to this company, not generic advice.",
   ].join("\n");
 
-  await cacheRedis.setex(key, CACHE_TTL_SECONDS, context);
-  return context;
+  const [goalMemory, docChunks] = await Promise.all([
+    getSignalGoalMemory(workspaceId),
+    hybridRetrieveProfile("company background and goals", workspaceId, 3),
+  ]);
+
+  const extraLines = [
+    goalMemory ? `Why this company uses Signal: ${goalMemory.goal}` : null,
+    docChunks.length > 0
+      ? `Additional context from uploaded company material:\n${docChunks.map((c) => c.text).join("\n")}`
+      : null,
+  ].filter((line): line is string => line !== null);
+
+  const fullContext = extraLines.length > 0 ? `${context}\n\n${extraLines.join("\n\n")}` : context;
+
+  await cacheRedis.setex(key, CACHE_TTL_SECONDS, fullContext);
+  return fullContext;
 }
 
 export async function invalidateCompanyContextCache(workspaceId: string): Promise<unknown> {
