@@ -26,14 +26,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={manrope.variable}>
       <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
-        {/* Three-column layout: nav (256px) | content (flex) | chat (384px) */}
+        {/* Three-column layout: nav | content | chat (responsive with collapse) */}
         <LeftSidebar />
         <TopBar />
         <ChatSidebar />
         <AppCommandBar />
         
-        {/* Main content area - offset by left sidebar and right chat */}
-        <main className="ml-64 mr-96 mt-16 min-h-screen px-8 py-10">
+        {/* Main content area - dynamic margins based on sidebar state */}
+        <main className="ml-64 mr-96 mt-16 min-h-screen px-8 py-10 transition-all duration-300">
           {children}
         </main>
       </body>
