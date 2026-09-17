@@ -1,16 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getCompetitorByIdMock, failRunIfRunningMock, invokeMock, registerWorkerMock, loggerMock } =
-  vi.hoisted(() => ({
-    getCompetitorByIdMock: vi.fn(),
-    failRunIfRunningMock: vi.fn(),
-    invokeMock: vi.fn(),
-    registerWorkerMock: vi.fn(),
-    loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  }));
+const {
+  getCompetitorByIdMock,
+  getOwnCompanyCompetitorForWorkspaceMock,
+  failRunIfRunningMock,
+  invokeMock,
+  registerWorkerMock,
+  loggerMock,
+} = vi.hoisted(() => ({
+  getCompetitorByIdMock: vi.fn(),
+  getOwnCompanyCompetitorForWorkspaceMock: vi.fn(),
+  failRunIfRunningMock: vi.fn(),
+  invokeMock: vi.fn(),
+  registerWorkerMock: vi.fn(),
+  loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 
 vi.mock("@/db/queries", () => ({
   getCompetitorById: getCompetitorByIdMock,
+  getOwnCompanyCompetitorForWorkspace: getOwnCompanyCompetitorForWorkspaceMock,
   failRunIfRunning: failRunIfRunningMock,
 }));
 
@@ -47,6 +55,7 @@ function job(data: unknown = {
 beforeEach(() => {
   vi.clearAllMocks();
   getCompetitorByIdMock.mockResolvedValue({ id: COMPETITOR_ID });
+  getOwnCompanyCompetitorForWorkspaceMock.mockResolvedValue(null);
   failRunIfRunningMock.mockResolvedValue(undefined);
   invokeMock.mockResolvedValue({ decision: { action: "digest", reason: "normal" } });
   registerWorkerMock.mockReturnValue({ name: "analysis" });
@@ -78,8 +87,30 @@ describe("analysis job processor", () => {
       workspace_id: WORKSPACE_ID,
       run_id: RUN_ID,
       has_pricing_diff: true,
+      is_own_company_run: false,
     });
     expect(failRunIfRunningMock).not.toHaveBeenCalled();
+  });
+
+  it("computes is_own_company_run from the workspace's own-company row and passes it through", async () => {
+    getOwnCompanyCompetitorForWorkspaceMock.mockResolvedValue({ id: COMPETITOR_ID });
+
+    await expect(analysisJobProcessor(job())).resolves.toBeUndefined();
+
+    expect(getOwnCompanyCompetitorForWorkspaceMock).toHaveBeenCalledWith(WORKSPACE_ID);
+    expect(invokeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ is_own_company_run: true })
+    );
+  });
+
+  it("computes is_own_company_run=false when the own-company row id differs from the job's competitor", async () => {
+    getOwnCompanyCompetitorForWorkspaceMock.mockResolvedValue({ id: "44444444-4444-4444-8444-444444444444" });
+
+    await expect(analysisJobProcessor(job())).resolves.toBeUndefined();
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ is_own_company_run: false })
+    );
   });
 
   it("best-effort fails the run and preserves the graph error for BullMQ retry", async () => {

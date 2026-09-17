@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { AlertDetailSchema, AnalysisDecisionSchema } from "@/agents/analysis/contracts";
+import {
+  AlertDetailSchema,
+  AnalysisDecisionSchema,
+  ComparativeSynthesisSchema,
+} from "@/agents/analysis/contracts";
 
 function validDetail(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -127,5 +131,64 @@ describe("agents/analysis/contracts AnalysisDecisionSchema backward compatibilit
     });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.detail).toBeUndefined();
+  });
+});
+
+describe("agents/analysis/contracts ComparativeSynthesisSchema", () => {
+  function valid(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      headline: "Competitors shipped SSO; we have not.",
+      summary: "Both tracked competitors shipped features we lack.",
+      observations: [{ competitor_name: "Alpha", what_they_did: "Shipped SSO." }],
+      gaps: [
+        {
+          gap: "No SSO",
+          possible_reasons: ["Focused on SMB"],
+          possible_responses: ["Prioritize SSO"],
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("parses a well-formed comparative output", () => {
+    expect(() => ComparativeSynthesisSchema.parse(valid())).not.toThrow();
+  });
+
+  it("requires headline, summary, observations, and gaps", () => {
+    for (const key of ["headline", "summary", "observations", "gaps"]) {
+      const value = valid() as Record<string, unknown>;
+      delete value[key];
+      expect(ComparativeSynthesisSchema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("rejects a headline longer than 200 characters", () => {
+    expect(
+      ComparativeSynthesisSchema.safeParse(valid({ headline: "a".repeat(201) })).success
+    ).toBe(false);
+  });
+
+  it("rejects more than 10 observations or gaps", () => {
+    const observations = Array.from({ length: 11 }, (_, i) => ({
+      competitor_name: `C${i}`,
+      what_they_did: "x",
+    }));
+    expect(ComparativeSynthesisSchema.safeParse(valid({ observations })).success).toBe(false);
+
+    const gaps = Array.from({ length: 11 }, (_, i) => ({
+      gap: `g${i}`,
+      possible_reasons: [],
+      possible_responses: [],
+    }));
+    expect(ComparativeSynthesisSchema.safeParse(valid({ gaps })).success).toBe(false);
+  });
+
+  it("allows empty possible_reasons and possible_responses lists", () => {
+    expect(
+      ComparativeSynthesisSchema.safeParse(
+        valid({ gaps: [{ gap: "g", possible_reasons: [], possible_responses: [] }] })
+      ).success
+    ).toBe(true);
   });
 });

@@ -26,6 +26,8 @@ describe("AnalysisGraphState", () => {
     expect(result.vulnerability).toBeNull();
     expect(result.signal_score).toBeNull();
     expect(result.decision).toBeNull();
+    expect(result.comparative_synthesis).toBeNull();
+    expect(result.is_own_company_run).toBe(false);
     expect(result.competitor_id).toBe("competitor-1");
     expect(result.run_id).toBe("run-1");
   });

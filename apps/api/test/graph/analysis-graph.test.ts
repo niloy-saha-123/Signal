@@ -35,6 +35,9 @@ const {
   getLatestSignalScoresMock,
   createSignalScoreMock,
   completeAgentRunMock,
+  listCompetitorsForWorkspaceMock,
+  getRecentSignalsByCompetitorIdsMock,
+  createAlertMock,
 } = vi.hoisted(() => ({
   getRecentSignalsByCompetitorAndSourceMock: vi.fn().mockResolvedValue([]),
   getRecentPricingDiffsMock: vi.fn().mockResolvedValue([]),
@@ -54,6 +57,14 @@ const {
     })
   ),
   completeAgentRunMock: vi.fn().mockResolvedValue(undefined),
+  listCompetitorsForWorkspaceMock: vi.fn().mockResolvedValue([]),
+  getRecentSignalsByCompetitorIdsMock: vi.fn().mockResolvedValue([]),
+  createAlertMock: vi.fn().mockResolvedValue({
+    id: "alert-1",
+    competitor_id: "competitor-1",
+    pattern: "headline",
+    confidence: 0.5,
+  }),
 }));
 
 vi.mock("@/db/queries", () => ({
@@ -65,6 +76,9 @@ vi.mock("@/db/queries", () => ({
   getLatestSignalScores: getLatestSignalScoresMock,
   createSignalScore: createSignalScoreMock,
   completeAgentRun: completeAgentRunMock,
+  listCompetitorsForWorkspace: listCompetitorsForWorkspaceMock,
+  getRecentSignalsByCompetitorIds: getRecentSignalsByCompetitorIdsMock,
+  createAlert: createAlertMock,
 }));
 
 vi.mock("@/lib/company-context", () => ({
@@ -143,16 +157,33 @@ vi.mock("@langchain/openai", () => {
   return { ChatOpenAI: vi.fn(ChatOpenAIMockClass) };
 });
 
-// synthesisNode (Task 7) is the only node whose ChatAnthropic call actually fires in this
-// DAG test — vulnerabilityDetectorNode short-circuits on window_open: false above. It always
-// resolves to a "digest" decision so the fan-in node has a valid AnalysisDecision to return.
-const { synthesisDecisionParsed } = vi.hoisted(() => ({
+const { synthesisDecisionParsed, comparativeParsed } = vi.hoisted(() => ({
   synthesisDecisionParsed: { action: "digest" as const, reason: "Routine movement." },
+  comparativeParsed: {
+    headline: "Competitors shipped SSO; we have not.",
+    summary: "Both tracked competitors shipped features we lack.",
+    observations: [{ competitor_name: "Alpha", what_they_did: "Shipped SSO." }],
+    gaps: [
+      {
+        gap: "No SSO",
+        possible_reasons: ["Focused on SMB"],
+        possible_responses: ["Prioritize SSO"],
+      },
+    ],
+  },
 }));
+
+// comparativeSynthesisNode (Task 2) uses ChatAnthropic too, with a different schema. The mock
+// can't see the schema, so it branches on the system-prompt text: the comparative prompt says
+// "compare", synthesis's says "decide".
 vi.mock("@langchain/anthropic", () => {
-  const invoke = vi.fn().mockResolvedValue({
-    raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } },
-    parsed: synthesisDecisionParsed,
+  const invoke = vi.fn().mockImplementation((messages: [string, string][]) => {
+    const promptText = messages[0][1];
+    const parsed = promptText.includes("compare") ? comparativeParsed : synthesisDecisionParsed;
+    return Promise.resolve({
+      raw: { usage_metadata: { input_tokens: 0, output_tokens: 0 } },
+      parsed,
+    });
   });
   class ChatAnthropicMockClass {
     withStructuredOutput() {
@@ -177,6 +208,8 @@ describe("analysisGraph — compiled DAG", () => {
     loggerWarnMock.mockClear();
     createSignalScoreMock.mockClear();
     completeAgentRunMock.mockClear();
+    createAlertMock.mockClear();
+    listCompetitorsForWorkspaceMock.mockReset().mockResolvedValue([]);
     // Reset the two query mocks that individual tests override with non-empty data.
     getRecentSignalsByCompetitorAndSourceMock.mockReset().mockResolvedValue([]);
     getSignalVolumeByDayMock.mockReset().mockResolvedValue([]);
@@ -307,5 +340,38 @@ describe("analysisGraph — compiled DAG", () => {
     // 1, so the composite score clears the empty-data 50 baseline.
     expect(result.signal_score!.score).toBeGreaterThan(50);
     expect(completeAgentRunMock).toHaveBeenCalledWith("run-3", "completed", "digest");
+  });
+
+  it("routes a normal (non-own-company) run straight to END — comparativeSynthesis never runs", async () => {
+    const result = await analysisGraph.invoke({
+      competitor_id: "competitor-1",
+      run_id: "run-1",
+      has_pricing_diff: true,
+      // is_own_company_run omitted -> defaults to false
+    });
+
+    expect(result.comparative_synthesis).toBeNull();
+    expect(listCompetitorsForWorkspaceMock).not.toHaveBeenCalled();
+    expect(createAlertMock).not.toHaveBeenCalled();
+  });
+
+  it("routes an own-company run through comparativeSynthesis, persisting a comparison alert", async () => {
+    listCompetitorsForWorkspaceMock.mockResolvedValue([
+      { id: "competitor-a", name: "Alpha", domain: "alpha.com", is_own_company: false, is_active: true },
+    ] as never[]);
+
+    const result = await analysisGraph.invoke({
+      competitor_id: "competitor-own",
+      run_id: "run-own",
+      has_pricing_diff: true,
+      is_own_company_run: true,
+    });
+
+    expect(result.comparative_synthesis).toEqual(comparativeParsed);
+    expect(listCompetitorsForWorkspaceMock).toHaveBeenCalled();
+    expect(createAlertMock).toHaveBeenCalledTimes(1);
+    expect(createAlertMock).toHaveBeenCalledWith(
+      expect.objectContaining({ competitor_id: "competitor-own", run_id: "run-own" })
+    );
   });
 });

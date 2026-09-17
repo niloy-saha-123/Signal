@@ -93,6 +93,44 @@ export const AlertDetailSchema = z.object({
     .max(ALERT_RECOMMENDED_ACTIONS_MAX_ITEMS),
 });
 
+// ── Comparative synthesis output ─────────────────────────────────────────
+// Own-company monitoring: the 7th analysis node compares "us" against the workspace's real
+// competitors and produces advisory "competitor did X, we haven't — possible reasons, possible
+// responses" output. Fresh schema by design — the existing AnalysisDecisionSchema above
+// describes single-competitor findings, not head-to-head comparisons. Field bounds mirror the
+// alert-detail reasoning: this lands in a Postgres jsonb column AND is surfaced for a human to
+// read, so lists are bounded and prose is length-capped.
+const COMPARATIVE_HEADLINE_MAX_LENGTH = 200;
+const COMPARATIVE_OBSERVATIONS_MAX_ITEMS = 10;
+const COMPARATIVE_OBSERVATION_TEXT_MAX_LENGTH = 1_000;
+const COMPARATIVE_GAPS_MAX_ITEMS = 10;
+const COMPARATIVE_GAP_TEXT_MAX_LENGTH = 1_000;
+const COMPARATIVE_REASON_RESPONSE_MAX_ITEMS = 5;
+const COMPARATIVE_REASON_RESPONSE_MAX_LENGTH = 500;
+const COMPARATIVE_SUMMARY_MAX_LENGTH = 2_000;
+
+export const ComparativeObservationSchema = z.object({
+  competitor_name: z.string().trim().min(1).max(200),
+  what_they_did: z.string().trim().min(1).max(COMPARATIVE_OBSERVATION_TEXT_MAX_LENGTH),
+});
+
+export const ComparativeGapSchema = z.object({
+  gap: z.string().trim().min(1).max(COMPARATIVE_GAP_TEXT_MAX_LENGTH),
+  possible_reasons: z
+    .array(z.string().trim().min(1).max(COMPARATIVE_REASON_RESPONSE_MAX_LENGTH))
+    .max(COMPARATIVE_REASON_RESPONSE_MAX_ITEMS),
+  possible_responses: z
+    .array(z.string().trim().min(1).max(COMPARATIVE_REASON_RESPONSE_MAX_LENGTH))
+    .max(COMPARATIVE_REASON_RESPONSE_MAX_ITEMS),
+});
+
+export const ComparativeSynthesisSchema = z.object({
+  headline: z.string().trim().min(1).max(COMPARATIVE_HEADLINE_MAX_LENGTH),
+  summary: z.string().trim().min(1).max(COMPARATIVE_SUMMARY_MAX_LENGTH),
+  observations: z.array(ComparativeObservationSchema).max(COMPARATIVE_OBSERVATIONS_MAX_ITEMS),
+  gaps: z.array(ComparativeGapSchema).max(COMPARATIVE_GAPS_MAX_ITEMS),
+});
+
 export const AnalysisDecisionSchema = z.object({
   action: z.enum(["alert", "digest", "suppress"]),
   reason: z.string(),
