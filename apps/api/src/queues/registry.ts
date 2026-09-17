@@ -37,6 +37,7 @@ import { logger } from "../lib/logger";
 import { withRetry } from "../lib/retry";
 import {
   createAgentRun,
+  createOwnCompanyCompetitorRow,
   failRunIfRunning,
   finalizeDiscovery,
   getCompetitorById,
@@ -188,6 +189,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // Weekly scheduler-driven fan-out: lists every workspace and enqueues one
   // analysis job per own-company row. One sweep at a time; no retry (a missed
   // sweep is corrected by next week's tick, not a correctness bug).
+  // ponytail: attempts:1 is the idempotency ceiling — a future attempts > 1 (or
+  // a manual re-trigger) would re-enqueue already-succeeded workspaces and
+  // double-bill their LLM runs; a per-week dedup key is the upgrade path.
   "own-company-analysis-sweep": { concurrency: 1, attempts: 1 },
 };
 
@@ -437,14 +441,17 @@ async function ownCompanyAnalysisSweepProcessor(_job: Job): Promise<void> {
   let failed = 0;
 
   for (const workspace of workspaces) {
-    const own = await getOwnCompanyCompetitorForWorkspace(workspace.id);
-    if (!own) continue;
+    const own =
+      (await getOwnCompanyCompetitorForWorkspace(workspace.id)) ??
+      (await createOwnCompanyCompetitorRow(workspace.id));
 
-    const run = await createAgentRun({
-      competitor_id: own.id,
-      trigger: "scheduled",
-    });
+    let runId: string | undefined;
     try {
+      const run = await createAgentRun({
+        competitor_id: own.id,
+        trigger: "scheduled",
+      });
+      runId = run.id;
       const hasPricingDiff = (await getRecentPricingDiffs(own.id, 7)).length > 0;
       await queues.analysis.add("analysis", {
         competitor_id: own.id,
@@ -454,10 +461,10 @@ async function ownCompanyAnalysisSweepProcessor(_job: Job): Promise<void> {
       });
     } catch (error) {
       failed += 1;
-      await failRunIfRunning(run.id).catch(() => undefined);
+      if (runId) await failRunIfRunning(runId).catch(() => undefined);
       logger.error("Failed to enqueue own-company analysis", {
         competitor_id: own.id,
-        run_id: run.id,
+        run_id: runId,
         error: error instanceof Error ? error.message : String(error),
       });
     }

@@ -11,7 +11,7 @@
 // wrapped so any error (DB, LLM, parse, createAlert) is logged and degrades to `{}`.
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { AIMessage } from "@langchain/core/messages";
-import type { AnalysisGraphStateType } from "../../graph/state";
+import type { AnalysisGraphStateType, ComparativeSynthesis } from "../../graph/state";
 import { logger } from "../../lib/logger";
 import { getCompanyContext } from "../../lib/company-context";
 import {
@@ -162,7 +162,7 @@ export async function comparativeSynthesisNode(
       latestScores,
     });
 
-    let parsed: typeof ComparativeSynthesisSchema._type;
+    let parsed: ComparativeSynthesis;
 
     // Budget gate: skip the ChatAnthropic call on budget exhaustion (the node is advisory, so
     // a skip degrades to `{}` cleanly rather than a synthesized alert).

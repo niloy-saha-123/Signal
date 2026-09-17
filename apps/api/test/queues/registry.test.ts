@@ -23,6 +23,7 @@ const {
   failRunIfRunningMock,
   listWorkspacesMock,
   getOwnCompanyCompetitorForWorkspaceMock,
+  createOwnCompanyCompetitorRowMock,
 } = vi.hoisted(() => ({
   getCompetitorByIdMock: vi.fn(),
   updateDiscoveryStatusMock: vi.fn(),
@@ -34,6 +35,7 @@ const {
   failRunIfRunningMock: vi.fn(),
   listWorkspacesMock: vi.fn(),
   getOwnCompanyCompetitorForWorkspaceMock: vi.fn(),
+  createOwnCompanyCompetitorRowMock: vi.fn(),
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
@@ -54,6 +56,7 @@ vi.mock("@/db/queries", () => ({
   failRunIfRunning: failRunIfRunningMock,
   listWorkspaces: listWorkspacesMock,
   getOwnCompanyCompetitorForWorkspace: getOwnCompanyCompetitorForWorkspaceMock,
+  createOwnCompanyCompetitorRow: createOwnCompanyCompetitorRowMock,
 }));
 
 vi.mock("@/agents/discovery/competitor-discovery", () => ({
@@ -775,6 +778,7 @@ describe("own-company-analysis-sweep worker", () => {
   const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   const WS_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
   const OWN_A = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const OWN_B = "ffffffff-ffff-4fff-8fff-ffffffffffff";
   const OWN_C = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
   function getRegisteredWorker() {
@@ -800,12 +804,11 @@ describe("own-company-analysis-sweep worker", () => {
     expect((call.opts as { concurrency: number }).concurrency).toBe(1);
   });
 
-  it("enqueues one analysis job per workspace that has an own-company row, skipping the rest", async () => {
-    listWorkspacesMock.mockResolvedValue([{ id: WS_A }, { id: WS_B }, { id: WS_C }]);
+  it("enqueues one analysis job per workspace using its existing own-company row", async () => {
+    listWorkspacesMock.mockResolvedValue([{ id: WS_A }, { id: WS_C }]);
     getOwnCompanyCompetitorForWorkspaceMock.mockImplementation(async (workspaceId: string) => {
       if (workspaceId === WS_A) return { id: OWN_A, workspace_id: WS_A, is_own_company: true };
-      if (workspaceId === WS_C) return { id: OWN_C, workspace_id: WS_C, is_own_company: true };
-      return null;
+      return { id: OWN_C, workspace_id: WS_C, is_own_company: true };
     });
     createAgentRunMock
       .mockResolvedValueOnce({ id: "run-a" })
@@ -814,9 +817,7 @@ describe("own-company-analysis-sweep worker", () => {
 
     await expect(processor({ data: {} })).resolves.toBeUndefined();
 
-    expect(getOwnCompanyCompetitorForWorkspaceMock).toHaveBeenCalledWith(WS_A);
-    expect(getOwnCompanyCompetitorForWorkspaceMock).toHaveBeenCalledWith(WS_B);
-    expect(getOwnCompanyCompetitorForWorkspaceMock).toHaveBeenCalledWith(WS_C);
+    expect(createOwnCompanyCompetitorRowMock).not.toHaveBeenCalled();
 
     expect(createAgentRunMock).toHaveBeenCalledTimes(2);
     expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
@@ -843,16 +844,83 @@ describe("own-company-analysis-sweep worker", () => {
     });
   });
 
-  it("does not create a run or enqueue anything for workspaces with no own-company row", async () => {
-    listWorkspacesMock.mockResolvedValue([{ id: WS_B }]);
+  it("creates the own-company row then enqueues when a workspace has none", async () => {
+    listWorkspacesMock.mockResolvedValue([{ id: WS_A }, { id: WS_B }]);
     getOwnCompanyCompetitorForWorkspaceMock.mockResolvedValue(null);
+    createOwnCompanyCompetitorRowMock.mockImplementation(async (workspaceId: string) =>
+      workspaceId === WS_A
+        ? { id: OWN_A, workspace_id: WS_A, is_own_company: true }
+        : { id: OWN_B, workspace_id: WS_B, is_own_company: true }
+    );
+    createAgentRunMock
+      .mockResolvedValueOnce({ id: "run-a" })
+      .mockResolvedValueOnce({ id: "run-b" });
     const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
 
     await expect(processor({ data: {} })).resolves.toBeUndefined();
 
-    expect(createAgentRunMock).not.toHaveBeenCalled();
-    expect(queueAddMock).not.toHaveBeenCalled();
-    expect(getRecentPricingDiffsMock).not.toHaveBeenCalled();
+    expect(createOwnCompanyCompetitorRowMock).toHaveBeenCalledTimes(2);
+    expect(createOwnCompanyCompetitorRowMock).toHaveBeenCalledWith(WS_A);
+    expect(createOwnCompanyCompetitorRowMock).toHaveBeenCalledWith(WS_B);
+
+    expect(queueAddMock).toHaveBeenCalledTimes(2);
+    expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
+      competitor_id: OWN_A,
+      workspace_id: WS_A,
+      run_id: "run-a",
+      has_pricing_diff: true,
+    });
+    expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
+      competitor_id: OWN_B,
+      workspace_id: WS_B,
+      run_id: "run-b",
+      has_pricing_diff: true,
+    });
+  });
+
+  it("gets-or-creates a row for every workspace, never skipping one", async () => {
+    listWorkspacesMock.mockResolvedValue([{ id: WS_A }, { id: WS_B }, { id: WS_C }]);
+    // WS_A already has a row (get path); WS_B and WS_C do not (create path).
+    getOwnCompanyCompetitorForWorkspaceMock.mockImplementation(async (workspaceId: string) => {
+      if (workspaceId === WS_A) return { id: OWN_A, workspace_id: WS_A, is_own_company: true };
+      return null;
+    });
+    createOwnCompanyCompetitorRowMock.mockImplementation(async (workspaceId: string) =>
+      workspaceId === WS_B
+        ? { id: OWN_B, workspace_id: WS_B, is_own_company: true }
+        : { id: OWN_C, workspace_id: WS_C, is_own_company: true }
+    );
+    createAgentRunMock
+      .mockResolvedValueOnce({ id: "run-a" })
+      .mockResolvedValueOnce({ id: "run-b" })
+      .mockResolvedValueOnce({ id: "run-c" });
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await expect(processor({ data: {} })).resolves.toBeUndefined();
+
+    expect(createOwnCompanyCompetitorRowMock).toHaveBeenCalledTimes(2);
+    expect(createOwnCompanyCompetitorRowMock).toHaveBeenCalledWith(WS_B);
+    expect(createOwnCompanyCompetitorRowMock).toHaveBeenCalledWith(WS_C);
+
+    expect(queueAddMock).toHaveBeenCalledTimes(3);
+    expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
+      competitor_id: OWN_A,
+      workspace_id: WS_A,
+      run_id: "run-a",
+      has_pricing_diff: true,
+    });
+    expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
+      competitor_id: OWN_B,
+      workspace_id: WS_B,
+      run_id: "run-b",
+      has_pricing_diff: true,
+    });
+    expect(queueAddMock).toHaveBeenNthCalledWith(3, "analysis", {
+      competitor_id: OWN_C,
+      workspace_id: WS_C,
+      run_id: "run-c",
+      has_pricing_diff: true,
+    });
   });
 
   it("fails the run, keeps sweeping remaining workspaces, then throws after an enqueue failure", async () => {
@@ -881,5 +949,33 @@ describe("own-company-analysis-sweep worker", () => {
       expect.stringContaining("own-company"),
       expect.objectContaining({ competitor_id: OWN_A, run_id: "run-a" })
     );
+  });
+
+  it("isolates a createAgentRun failure and keeps sweeping the remaining workspaces", async () => {
+    listWorkspacesMock.mockResolvedValue([{ id: WS_A }, { id: WS_C }]);
+    getOwnCompanyCompetitorForWorkspaceMock.mockImplementation(async (workspaceId: string) =>
+      workspaceId === WS_A
+        ? { id: OWN_A, workspace_id: WS_A, is_own_company: true }
+        : { id: OWN_C, workspace_id: WS_C, is_own_company: true }
+    );
+    createAgentRunMock
+      .mockRejectedValueOnce(new Error("db blip"))
+      .mockResolvedValueOnce({ id: "run-c" });
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await expect(processor({ data: {} })).rejects.toThrow(
+      "own-company-analysis-sweep: failed to enqueue 1 analyses"
+    );
+
+    // No run was created for the failed workspace, so there is nothing to fail.
+    expect(failRunIfRunningMock).not.toHaveBeenCalled();
+    // The second workspace still enqueued despite the first workspace's failure.
+    expect(queueAddMock).toHaveBeenCalledTimes(1);
+    expect(queueAddMock).toHaveBeenCalledWith("analysis", {
+      competitor_id: OWN_C,
+      workspace_id: WS_C,
+      run_id: "run-c",
+      has_pricing_diff: true,
+    });
   });
 });
