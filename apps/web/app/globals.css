@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
 @theme {
+  /* Typography — Manrope for both sans and serif (Signal design system) */
+  --font-sans: var(--font-manrope);
+  --font-serif: var(--font-manrope);
+  
   /* Categorical — signal sources (packages/shared SignalSourceSchema), fixed slot order
      from the dataviz skill's validated reference palette. Never reassign per filter state. */
   --color-source-reddit: #2a78d6;
