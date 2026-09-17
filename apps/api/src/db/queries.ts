@@ -1,5 +1,5 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, gte, count, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type {
   AgentName,
@@ -1587,6 +1587,16 @@ export async function createTrackedEntityCandidate(
   return row;
 }
 
+export async function listTrackedEntitiesForWorkspace(
+  workspaceId: string
+): Promise<(typeof trackedEntitiesTable.$inferSelect)[]> {
+  return db
+    .select()
+    .from(trackedEntitiesTable)
+    .where(eq(trackedEntitiesTable.workspace_id, workspaceId))
+    .orderBy(desc(trackedEntitiesTable.created_at));
+}
+
 export async function getCompanyProfileForWorkspace(workspaceId: string): Promise<CompanyProfile | null> {
   const [row] = await db
     .select()
@@ -1634,6 +1644,74 @@ export async function createCompanyDocument(
     })
     .returning();
   return row;
+}
+
+export async function listCompanyDocumentsForWorkspace(
+  workspaceId: string
+): Promise<CompanyDocument[]> {
+  return db
+    .select()
+    .from(companyDocumentsTable)
+    .where(eq(companyDocumentsTable.workspace_id, workspaceId))
+    .orderBy(desc(companyDocumentsTable.created_at));
+}
+
+export interface DashboardSummary {
+  competitors_tracked: number;
+  signals_this_week: number;
+  open_alerts: number;
+  pending_candidates: number;
+}
+
+export async function getDashboardSummaryForWorkspace(
+  workspaceId: string
+): Promise<DashboardSummary> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [competitorsResult] = await db
+    .select({ count: count() })
+    .from(competitorsTable)
+    .where(
+      and(
+        eq(competitorsTable.workspace_id, workspaceId),
+        eq(competitorsTable.is_active, true),
+        eq(competitorsTable.is_own_company, false)
+      )
+    );
+
+  const [signalsResult] = await db
+    .select({ count: count() })
+    .from(signalsTable)
+    .innerJoin(competitorsTable, eq(signalsTable.competitor_id, competitorsTable.id))
+    .where(
+      and(
+        eq(competitorsTable.workspace_id, workspaceId),
+        gte(signalsTable.created_at, sevenDaysAgo)
+      )
+    );
+
+  const [alertsResult] = await db
+    .select({ count: count() })
+    .from(alertsTable)
+    .innerJoin(competitorsTable, eq(alertsTable.competitor_id, competitorsTable.id))
+    .where(eq(competitorsTable.workspace_id, workspaceId));
+
+  const [candidatesResult] = await db
+    .select({ count: count() })
+    .from(trackedEntitiesTable)
+    .where(
+      and(
+        eq(trackedEntitiesTable.workspace_id, workspaceId),
+        eq(trackedEntitiesTable.status, "candidate")
+      )
+    );
+
+  return {
+    competitors_tracked: Number(competitorsResult?.count ?? 0),
+    signals_this_week: Number(signalsResult?.count ?? 0),
+    open_alerts: Number(alertsResult?.count ?? 0),
+    pending_candidates: Number(candidatesResult?.count ?? 0),
+  };
 }
 
 export async function createChatThread(
