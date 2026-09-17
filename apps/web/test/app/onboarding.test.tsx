@@ -51,7 +51,7 @@ describe("OnboardingForm", () => {
     render(<OnboardingForm />);
     fireEvent.change(screen.getByLabelText("Workspace name"), { target: { value: "Acme Inc" } });
     fireEvent.click(screen.getByRole("button", { name: "Create workspace" }));
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/briefing"));
     expect(fetch).toHaveBeenCalledWith(`${BASE}/api/workspaces`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer token-123" },

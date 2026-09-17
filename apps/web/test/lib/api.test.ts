@@ -232,6 +232,33 @@ describe("lib/api competitor endpoints", () => {
       expect.objectContaining({ method: "POST" })
     );
   });
+
+  it("aborts a shared API request after eight seconds", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+      }),
+    );
+
+    try {
+      const pendingRequest = listCompetitors();
+      const expectation = expect(pendingRequest).rejects.toThrow(
+        "Signal API request timed out after 8 seconds",
+      );
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("lib/api signals + alerts endpoints", () => {

@@ -12,7 +12,7 @@ const NAV_LINKS = [
 export function SiteNav() {
   return (
     <nav className="flex items-center gap-6 border-b border-slate-200 bg-white px-8 py-4">
-      <Link href="/" className="flex items-center gap-2">
+      <Link href="/briefing" className="flex items-center gap-2">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
           <span className="font-sans text-sm font-extrabold text-white">S</span>
         </div>

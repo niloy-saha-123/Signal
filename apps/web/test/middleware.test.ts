@@ -47,7 +47,7 @@ describe("middleware", () => {
       expect(response.headers.get("location")).toBe(`${BASE}/login`);
     });
 
-    it.each(["/login", "/signup"])("passes %s through without redirecting", async (pathname) => {
+    it.each(["/", "/login", "/signup"])("passes %s through without redirecting", async (pathname) => {
       const response = await middleware(makeRequest(pathname));
       expect(response.headers.get("location")).toBeNull();
     });
@@ -91,6 +91,38 @@ describe("middleware", () => {
     it("passes a protected path through", async () => {
       const response = await middleware(makeRequest("/board"));
       expect(response.headers.get("location")).toBeNull();
+    });
+  });
+
+  describe("Supabase unavailable", () => {
+    it("redirects a protected request when getUser rejects", async () => {
+      getUser.mockRejectedValue(new Error("network unavailable"));
+
+      const response = await middleware(makeRequest("/briefing"));
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toBe(`${BASE}/login`);
+    });
+
+    it("redirects a protected request when getUser returns an error", async () => {
+      getUser.mockResolvedValue({
+        data: { user: null },
+        error: new Error("upstream timeout"),
+      });
+
+      const response = await middleware(makeRequest("/alerts"));
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get("location")).toBe(`${BASE}/login`);
+    });
+
+    it("serves public pages without contacting Supabase", async () => {
+      getUser.mockRejectedValue(new Error("network unavailable"));
+
+      const response = await middleware(makeRequest("/"));
+
+      expect(response.headers.get("location")).toBeNull();
+      expect(getUser).not.toHaveBeenCalled();
     });
   });
 });

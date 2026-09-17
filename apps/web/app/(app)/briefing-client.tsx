@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
 import type { Competitor } from "@/lib/api";
 
 type Movement = {
@@ -25,6 +26,7 @@ export function BriefingClient({
   highestScoreDelta,
   highestScoreCompetitor,
   movements,
+  competitors,
 }: Props) {
   const [timeFilter, setTimeFilter] = useState<"today" | "7days" | "30days">("today");
 
@@ -35,6 +37,35 @@ export function BriefingClient({
     day: "numeric",
     month: "long",
   });
+
+  if (competitors.length === 0) {
+    return (
+      <div className="flex flex-col gap-8">
+        <div className="flex flex-col gap-3">
+          <p className="text-sm font-semibold text-studio-muted">{dateStr}</p>
+          <h1 className="font-display text-4xl font-semibold text-studio-ink">
+            Overnight briefing
+          </h1>
+        </div>
+        <section className="relative overflow-hidden rounded-3xl border border-studio-line bg-studio-paper px-7 py-12 sm:px-12 sm:py-16">
+          <div className="absolute top-0 left-0 h-1 w-full bg-studio-action" />
+          <h2 className="max-w-xl font-display text-3xl font-bold tracking-[-0.035em] text-studio-ink">
+            Your briefing starts with a competitor.
+          </h2>
+          <p className="mt-4 max-w-xl text-base leading-relaxed text-studio-muted">
+            Add the first company you want Signal to monitor. Once evidence arrives, this
+            workspace will organize movements, scores, alerts, and source-backed analysis.
+          </p>
+          <Link
+            href="/discovery"
+            className="mt-7 inline-flex min-h-11 items-center rounded-full bg-studio-action px-5 text-sm font-bold text-white transition-colors hover:bg-studio-action-hover"
+          >
+            Add your first competitor
+          </Link>
+        </section>
+      </div>
+    );
+  }
 
   // Category colors
   const getCategoryColor = (category: string) => {

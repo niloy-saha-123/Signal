@@ -41,7 +41,7 @@ export function OnboardingForm() {
     // Hook stamps it at token *mint* time) — force a refresh so the next request/page load
     // carries the updated claim.
     await supabase.auth.refreshSession();
-    router.push("/");
+    router.push("/briefing");
     router.refresh();
   }
 

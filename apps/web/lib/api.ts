@@ -24,6 +24,7 @@ import { getSupabaseBrowserClient } from "./supabase-browser";
 export type { CompanyProfile, SignalSource } from "@signal/shared";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+const REQUEST_TIMEOUT_MS = 8_000;
 
 export class ApiError extends Error {
   constructor(
@@ -49,8 +50,31 @@ export async function authHeader(token?: string): Promise<Record<string, string>
   return session ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
+  const controller = new AbortController();
+  const externalSignal = init?.signal;
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+
+  if (externalSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  const timeout = setTimeout(() => {
+    controller.abort(new Error("Signal API request timed out after 8 seconds"));
+  }, REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -268,7 +292,9 @@ export function listAlerts(
 // --- Company profile ---
 
 export async function getCompanyProfile(): Promise<CompanyProfile | null> {
-  const res = await fetch(`${API_BASE}/api/company-profile`, { headers: await authHeader() });
+  const res = await fetchWithTimeout(`${API_BASE}/api/company-profile`, {
+    headers: await authHeader(),
+  });
   if (res.status === 404) return null;
   if (!res.ok) {
     const body = await res.json().catch(() => undefined);

@@ -3,6 +3,9 @@ import { TopBar } from "@/components/TopBar";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { AppCommandBar } from "../app-command-bar";
 
+// Authenticated pages depend on per-request session and API data.
+export const dynamic = "force-dynamic";
+
 // Authenticated shell: three-column layout with nav, content, and chat
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (

@@ -9,6 +9,18 @@ export default async function BriefingPage() {
   const competitors = await listCompetitors(token);
   const competitorIds = competitors.map((competitor) => competitor.id);
 
+  if (competitorIds.length === 0) {
+    return (
+      <BriefingClient
+        highestScore={0}
+        highestScoreDelta={0}
+        highestScoreCompetitor=""
+        movements={[]}
+        competitors={[]}
+      />
+    );
+  }
+
   const [scores, alerts] = await Promise.all([
     Promise.all(
       competitorIds.map((id) => getCompetitorScore(id, token).catch(() => null)),
