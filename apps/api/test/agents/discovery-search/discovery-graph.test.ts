@@ -1,11 +1,17 @@
-// Hermetic tests for the discovery graph — no network, no real Postgres.
-// A dummy DATABASE_URL is set before import so discovery-graph's loadRootEnv()
-// (which never overwrites an already-set var) can't inject the real Supabase
-// URL into the checkpointer constructed at module load. The pg.Pool it wraps
-// connects lazily, so nothing here touches a database.
+// Discovery graph tests. The loop round-trip hits the local docker-compose
+// Postgres (localhost:5433) for checkpoints — never the Supabase project. Set
+// before import so loadRootEnv() (which never overwrites an already-set var)
+// can't inject the Supabase URL. The model and both tools are mocked, so the
+// ReAct loop is hermetic; only the checkpoint write/read is real.
 process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { AIMessage } from "@langchain/core/messages";
+
+const DB_TIMEOUT = 20_000;
+const dbIt = (name: string, fn: () => Promise<void>, timeout = DB_TIMEOUT) =>
+  it(name, fn, timeout);
 
 const { interruptMock, createTrackedEntityCandidateMock } = vi.hoisted(() => ({
   interruptMock: vi.fn(),
@@ -27,17 +33,35 @@ const { getCompanyContextMock } = vi.hoisted(() => ({
 
 vi.mock("@/lib/company-context", () => ({ getCompanyContext: getCompanyContextMock }));
 
-const { tavilyInvokeMock } = vi.hoisted(() => ({
-  tavilyInvokeMock: vi.fn().mockResolvedValue("fake search results"),
-}));
-
-const tavilySearchMock = vi.hoisted(() => {
-  return class {
-    invoke = tavilyInvokeMock;
-  };
+const { duckDuckGoInvokeMock, duckDuckGoSearchMock } = vi.hoisted(() => {
+  const duckDuckGoInvokeMock = vi
+    .fn()
+    .mockResolvedValue('[{"title":"Acme","link":"https://acme.com"}]');
+  class DuckDuckGoSearchMockClass {
+    invoke = duckDuckGoInvokeMock;
+  }
+  return { duckDuckGoInvokeMock, duckDuckGoSearchMock: DuckDuckGoSearchMockClass };
 });
 
-vi.mock("@langchain/tavily", () => ({ TavilySearch: tavilySearchMock }));
+vi.mock("@langchain/community/tools/duckduckgo_search", () => ({
+  DuckDuckGoSearch: duckDuckGoSearchMock,
+}));
+
+const { retrieveSignalsInvokeMock } = vi.hoisted(() => ({
+  retrieveSignalsInvokeMock: vi.fn().mockResolvedValue("[]"),
+}));
+
+vi.mock("@/retrieval/hybrid-retrieve-tool", async () => {
+  const { tool } = await import("@langchain/core/tools");
+  const { z } = await import("zod");
+  return {
+    retrievalTool: tool(async () => retrieveSignalsInvokeMock(), {
+      name: "retrieve_signals",
+      description: "Search Signal's stored signals.",
+      schema: z.object({ query: z.string() }),
+    }),
+  };
+});
 
 const { selectModelMock } = vi.hoisted(() => ({
   selectModelMock: vi.fn((preferredModel: string) => Promise.resolve(preferredModel)),
@@ -51,17 +75,6 @@ vi.mock("@/llm/adaptive-router", () => ({
   },
 }));
 
-const { anthropicInvokeMock, chatAnthropicMock } = vi.hoisted(() => {
-  const anthropicInvokeMock = vi.fn();
-  const withStructuredOutputMock = vi.fn(() => ({ invoke: anthropicInvokeMock }));
-  class ChatAnthropicMockClass {
-    withStructuredOutput = withStructuredOutputMock;
-  }
-  return { anthropicInvokeMock, chatAnthropicMock: vi.fn(ChatAnthropicMockClass) };
-});
-
-vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
-
 const { withCircuitBreakerMock } = vi.hoisted(() => ({
   withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
 }));
@@ -70,21 +83,70 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   withCircuitBreaker: withCircuitBreakerMock,
 }));
 
+const { modelInvokeMock, chatAnthropicMock } = vi.hoisted(() => {
+  const modelInvokeMock = vi.fn();
+  class ChatAnthropicMockClass {
+    bindTools() {
+      return { invoke: modelInvokeMock };
+    }
+  }
+  return { modelInvokeMock, chatAnthropicMock: vi.fn(ChatAnthropicMockClass) };
+});
+
+vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
+
 import {
   DISCOVERY_RECURSION_LIMIT,
   confirmNode,
-  searchNode,
+  setupDiscoveryCheckpointer,
+  discoveryGraph,
 } from "@/agents/discovery-search/discovery-graph";
 
 const WORKSPACE_ID = "11111111-1111-1111-1111-111111111111";
 
+function toolCall(name: string, args: Record<string, unknown>, id: string) {
+  return { name, args, id, type: "tool_call" as const };
+}
+
+function aiWithToolCalls(calls: ReturnType<typeof toolCall>[]) {
+  return new AIMessage({ content: "", tool_calls: calls });
+}
+
+function aiFinal(json: string) {
+  return new AIMessage({ content: json, tool_calls: [] });
+}
+
+const CANDIDATES_JSON = JSON.stringify({
+  candidates: [{ name: "Acme", domain: "acme.com", reason: "same ICP" }],
+});
+
+function invokeGraph(threadId: string) {
+  return discoveryGraph.invoke(
+    { workspace_id: WORKSPACE_ID },
+    {
+      configurable: { thread_id: threadId },
+      recursionLimit: DISCOVERY_RECURSION_LIMIT,
+    }
+  );
+}
+
 describe("discovery-graph", () => {
+  beforeAll(async () => {
+    await setupDiscoveryCheckpointer();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     getCompanyContextMock.mockResolvedValue("");
-    tavilyInvokeMock.mockResolvedValue("fake search results");
     selectModelMock.mockImplementation((m: string) => Promise.resolve(m));
+    duckDuckGoInvokeMock.mockResolvedValue('[{"title":"Acme","link":"https://acme.com"}]');
+    retrieveSignalsInvokeMock.mockResolvedValue("[]");
     createTrackedEntityCandidateMock.mockResolvedValue({ id: "te-1" });
+    interruptMock.mockReturnValue("dismiss");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("exports a positive recursion limit", () => {
@@ -129,50 +191,38 @@ describe("discovery-graph", () => {
     expect(createTrackedEntityCandidateMock).not.toHaveBeenCalled();
   });
 
-  it("searchNode returns no candidates when the LLM produces no parsed result", async () => {
-    anthropicInvokeMock.mockResolvedValue({ parsed: null });
+  dbIt("round-trips through the ToolNode twice before reaching confirmNode", async () => {
+    modelInvokeMock
+      .mockResolvedValueOnce(aiWithToolCalls([toolCall("web_search", { query: "competitors" }, "call-1")]))
+      .mockResolvedValueOnce(aiWithToolCalls([toolCall("retrieve_signals", { query: "competitors" }, "call-2")]))
+      .mockResolvedValueOnce(aiFinal(CANDIDATES_JSON));
 
-    const result = await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
+    await invokeGraph(randomUUID());
 
-    expect(result).toEqual({ candidates: [] });
-  });
-
-  it("wraps the Tavily search and the LLM classification call in distinct circuit breakers", async () => {
-    anthropicInvokeMock.mockResolvedValue({ parsed: { candidates: [] } });
-    await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
-
-    expect(withCircuitBreakerMock).toHaveBeenCalledWith("discovery:search", expect.any(Function));
-    expect(withCircuitBreakerMock).toHaveBeenCalledWith("discovery:llm", expect.any(Function));
-  });
-
-  it("serializes Tavily results into readable text instead of [object Object]", async () => {
-    tavilyInvokeMock.mockResolvedValue({
-      query: "companies competing with...",
-      results: [
-        { title: "Acme Inc", content: "Sells competitor tracking", score: 0.9, raw_content: null },
-      ],
-      response_time: 0.1,
+    // Model invoked once per llmCall hop: initial, after search, after retrieve.
+    expect(modelInvokeMock).toHaveBeenCalledTimes(3);
+    // Each tool executed exactly once — proves the loop round-trips through
+    // ToolNode (not just that the graph compiled).
+    expect(duckDuckGoInvokeMock).toHaveBeenCalledTimes(1);
+    expect(retrieveSignalsInvokeMock).toHaveBeenCalledTimes(1);
+    // The final (non-tool-call) answer's candidates reached the confirm gate.
+    expect(interruptMock).toHaveBeenCalledWith({
+      type: "confirm_candidate",
+      candidate: { name: "Acme", domain: "acme.com", reason: "same ICP" },
     });
-    anthropicInvokeMock.mockResolvedValue({ parsed: { candidates: [] } });
-
-    await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
-
-    expect(anthropicInvokeMock).toHaveBeenCalledTimes(1);
-    const messages = anthropicInvokeMock.mock.calls[0][0];
-    const userMessage = messages.find((m: { role: string }) => m.role === "user");
-    expect(userMessage.content).toContain("Acme Inc");
-    expect(userMessage.content).toContain("Sells competitor tracking");
-    expect(userMessage.content).not.toContain("[object Object]");
   });
 
-  it("renders the Tavily error message when the search fails", async () => {
-    tavilyInvokeMock.mockResolvedValue({ error: "Tavily API key not found" });
-    anthropicInvokeMock.mockResolvedValue({ parsed: { candidates: [] } });
+  dbIt("stops at the iteration cap and reaches confirmNode with partial results instead of throwing", async () => {
+    // The model keeps asking for a search every turn — the soft cap must stop
+    // the loop and route to confirm (empty candidates) rather than erroring.
+    modelInvokeMock.mockImplementation(() =>
+      Promise.resolve(aiWithToolCalls([toolCall("web_search", { query: "competitors" }, "call-1")]))
+    );
 
-    await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
+    await invokeGraph(randomUUID());
 
-    const messages = anthropicInvokeMock.mock.calls[0][0];
-    const userMessage = messages.find((m: { role: string }) => m.role === "user");
-    expect(userMessage.content).toContain("Search error: Tavily API key not found");
+    // MAX_ITERATIONS = 5 llmCall invocations, never a GraphRecursionError.
+    expect(modelInvokeMock).toHaveBeenCalledTimes(5);
+    expect(interruptMock).not.toHaveBeenCalled();
   });
 });

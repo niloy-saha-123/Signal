@@ -3,39 +3,59 @@
 // to 'confirmed' happens only through the interrupt() resume path below,
 // triggered by an explicit user action (never by this graph on its own).
 //
-// Fixed 2-node graph (search → confirm), NOT a ReAct tool loop: the search
-// node makes a single Tavily call and asks the model for up to MAX_TOOL_CALLS
-// candidate entities, then the confirm node gates each one behind interrupt().
+// ReAct tool loop (search/retrieve -> reflect -> confirm): the llmCall node
+// drives a tool-calling model (DuckDuckGo web search + Signal's own retrieval),
+// looping through the ToolNode until the model produces a final answer, then the
+// confirm node gates each proposed candidate behind interrupt(). A soft
+// iteration cap (MAX_ITERATIONS) routes to confirm with whatever candidates
+// have been found so far instead of throwing a GraphRecursionError; the graph
+// recursionLimit stays as a hard backstop above that cap.
 import {
   StateGraph,
   Annotation,
   START,
   END,
   interrupt,
+  messagesStateReducer,
   type BaseCheckpointSaver,
+  type LangGraphRunnableConfig,
 } from "@langchain/langgraph";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
-import { TavilySearch } from "@langchain/tavily";
+import { DuckDuckGoSearch } from "@langchain/community/tools/duckduckgo_search";
 import { ChatAnthropic } from "@langchain/anthropic";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
+import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { getCompanyContext } from "../../lib/company-context";
 import { createTrackedEntityCandidate } from "../../db/queries";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
+import { retrievalTool } from "../../retrieval/hybrid-retrieve-tool";
 import { loadRootEnv } from "../../lib/env";
 
 loadRootEnv();
 
 const LLM_TIMEOUT_MS = 30_000;
-const LLM_MAX_RETRIES = 2;
 const MAX_TOOL_CALLS = 5;
+// Soft cap on llmCall<->toolNode round-trips before routing to confirm with
+// whatever candidates exist. recursionLimit (below) is the hard backstop.
+const MAX_ITERATIONS = 5;
 const RECURSION_LIMIT = 15;
 
 const DiscoveryGraphState = Annotation.Root({
   workspace_id: Annotation<string>(),
+  messages: Annotation<BaseMessage[]>({
+    reducer: messagesStateReducer,
+    default: () => [],
+  }),
   candidates: Annotation<{ name: string; domain: string; reason: string }[]>({
     reducer: (_prev, next) => next,
     default: () => [],
+  }),
+  iterationCount: Annotation<number>({
+    reducer: (_prev, next) => next,
+    default: () => 0,
   }),
 });
 
@@ -53,66 +73,82 @@ const RETRY_POLICY = {
   },
 };
 
-// TavilySearch.invoke returns either `{ query, results: [{ title, content, ... }], ... }`
-// or `{ error: string }` on failure. Interpolating that object into a template
-// string yields "[object Object]", so this flattens it into text the LLM can read.
-function formatTavilyResults(searchResults: unknown): string {
-  if (
-    typeof searchResults === "object" &&
-    searchResults !== null &&
-    "error" in searchResults
-  ) {
-    return `Search error: ${(searchResults as { error: string }).error}`;
+// DuckDuckGo (free) replaces Tavily (paid): the spec's own open-risks section
+// flagged Tavily's per-call cost as something to budget-cap, and this swap
+// removes the need for that guard entirely. Wrapped in a structured tool so the
+// search invocation is circuit-breaker-protected like every other LLM call site.
+const duckDuckGoSearch = new DuckDuckGoSearch({ maxResults: MAX_TOOL_CALLS });
+
+const webSearchTool = tool(
+  ({ query }: { query: string }) =>
+    withCircuitBreaker("discovery:search", () => duckDuckGoSearch.invoke(query)),
+  {
+    name: "web_search",
+    description:
+      "Search the open web for companies that compete with the user's company. " +
+      "Use this to find competitor candidates the user may not already track.",
+    schema: z.object({ query: z.string() }),
   }
-  const results = (searchResults as { results?: unknown })?.results;
-  if (!Array.isArray(results) || results.length === 0) {
-    return "(no search results)";
+);
+
+// The model's final (non-tool-call) message carries the candidate proposals as a
+// JSON object. This strips markdown fences and extracts the outermost object so
+// minor prose around the JSON (which the model is explicitly told not to emit)
+// still parses. On any failure it degrades to no candidates — the proposals are
+// advisory (every one still passes the human confirm gate), never fatal.
+// ponytail: naive "first { to last }" extraction; a strict JSON-only output
+// format with withStructuredOutput would be more robust if this ever misfires.
+function extractCandidates(content: unknown): { name: string; domain: string; reason: string }[] {
+  if (typeof content !== "string") return [];
+  const cleaned = content.replace(/```json|```/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end <= start) return [];
+  try {
+    return CandidatesSchema.parse(JSON.parse(cleaned.slice(start, end + 1))).candidates;
+  } catch {
+    return [];
   }
-  return results
-    .map((item, i) => {
-      const { title, content } = (item ?? {}) as { title?: string; content?: string };
-      return `${i + 1}. ${title ?? "Untitled"}\n   ${content ?? ""}`;
-    })
-    .join("\n");
 }
 
-async function searchNode(
-  state: typeof DiscoveryGraphState.State
+const SYSTEM_PROMPT =
+  "You are a competitive-intelligence analyst discovering new competitors for the user's " +
+  "company. Use the web_search tool to find companies that compete for the same customers, " +
+  "and the retrieve_signals tool to check whether Signal already stores signals about a " +
+  "candidate before re-discovering it via web search. You may call tools repeatedly to " +
+  "refine. When you have enough, reply with ONLY a JSON object of this exact shape and no " +
+  "other text: {\"candidates\":[{\"name\":\"...\",\"domain\":\"...\",\"reason\":\"...\"}]}. " +
+  "Propose up to 5 candidates that genuinely compete for the same customers.";
+
+async function llmCallNode(
+  state: typeof DiscoveryGraphState.State,
+  config: LangGraphRunnableConfig
 ): Promise<Partial<typeof DiscoveryGraphState.State>> {
   const companyContext = await getCompanyContext(state.workspace_id);
-  const tavily = new TavilySearch({ maxResults: MAX_TOOL_CALLS });
 
-  // "claude-sonnet"/"claude-haiku" are internal routing aliases, not Anthropic
-  // API model strings — translate the alias selectModel hands back through
-  // ANTHROPIC_MODEL_IDS before handing it to ChatAnthropic.
   const alias = await selectModel("claude-sonnet", true);
   const model = new ChatAnthropic({
     model: ANTHROPIC_MODEL_IDS[alias] ?? alias,
     clientOptions: { timeout: LLM_TIMEOUT_MS },
-    maxRetries: LLM_MAX_RETRIES,
-  }).withStructuredOutput(CandidatesSchema, { includeRaw: true });
+  }).bindTools([webSearchTool, retrievalTool]);
 
-  const searchResults = await withCircuitBreaker("discovery:search", () =>
-    tavily.invoke({
-      query: `companies competing with: ${companyContext.slice(0, 500)}`,
-    })
-  );
+  const system = companyContext ? `${SYSTEM_PROMPT}\n\n${companyContext}` : SYSTEM_PROMPT;
 
-  const result = await withCircuitBreaker("discovery:llm", () =>
-    model.invoke([
-      {
-        role: "system",
-        content:
-          "Given this company's profile and web search results, propose up to 5 real " +
-          "competitor candidates with their domain and a one-sentence reason each. " +
-          "Only propose companies that genuinely compete for the same customers.",
-      },
-      { role: "user", content: `Company:\n${companyContext}\n\nSearch results:\n${formatTavilyResults(searchResults)}` },
-    ])
-  );
+  const response = (await withCircuitBreaker("discovery:llm", () =>
+    model.invoke([["system", system], ...state.messages], { signal: config.signal })
+  )) as AIMessage;
 
-  if (!result.parsed) return { candidates: [] };
-  return { candidates: result.parsed.candidates };
+  const iterationCount = state.iterationCount + 1;
+
+  if (response.tool_calls && response.tool_calls.length > 0) {
+    return { messages: [response], iterationCount };
+  }
+
+  return {
+    messages: [response],
+    candidates: extractCandidates(response.content),
+    iterationCount,
+  };
 }
 
 async function confirmNode(
@@ -137,11 +173,31 @@ async function confirmNode(
   return {};
 }
 
+function afterLlmCall(state: typeof DiscoveryGraphState.State): "tools" | "confirm" {
+  // The soft iteration cap wins over tool-call detection: once hit, route to
+  // confirm with whatever candidates exist rather than looping indefinitely.
+  if (state.iterationCount >= MAX_ITERATIONS) return "confirm";
+  const last = state.messages[state.messages.length - 1];
+  const hasToolCalls = last instanceof AIMessage && (last.tool_calls?.length ?? 0) > 0;
+  return hasToolCalls ? "tools" : "confirm";
+}
+
+// Same dual-copy cast as the checkpointer below: ToolNode (from the hoisted root
+// @langchain/langgraph, which resolves the root @langchain/core@1.2.2) types its
+// tools against that root core, while `tool()` and retrievalTool come from
+// apps/api's own @langchain/core@1.2.11. The two DynamicStructuredTool types are
+// structurally identical at runtime — this cast is safe at this one boundary.
+const discoveryTools = [webSearchTool, retrievalTool] as unknown as ConstructorParameters<
+  typeof ToolNode
+>[0];
+
 const builder = new StateGraph(DiscoveryGraphState)
-  .addNode("search", searchNode, { retryPolicy: RETRY_POLICY })
+  .addNode("llmCall", llmCallNode, { retryPolicy: RETRY_POLICY })
+  .addNode("tools", new ToolNode(discoveryTools), { retryPolicy: RETRY_POLICY })
   .addNode("confirm", confirmNode)
-  .addEdge(START, "search")
-  .addEdge("search", "confirm")
+  .addEdge(START, "llmCall")
+  .addConditionalEdges("llmCall", afterLlmCall, { tools: "tools", confirm: "confirm" })
+  .addEdge("tools", "llmCall")
   .addEdge("confirm", END);
 
 // PostgresSaver does NOT auto-create its tables (unlike PostgresStore), so the
@@ -179,4 +235,4 @@ export const discoveryGraph = builder.compile({
   checkpointer: getDiscoveryCheckpointer() as unknown as BaseCheckpointSaver,
 });
 export const DISCOVERY_RECURSION_LIMIT = RECURSION_LIMIT;
-export { searchNode, confirmNode };
+export { llmCallNode, confirmNode };
