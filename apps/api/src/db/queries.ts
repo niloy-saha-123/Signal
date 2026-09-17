@@ -1453,6 +1453,23 @@ export async function listWorkspaces(): Promise<Workspace[]> {
   return db.select().from(workspacesTable).orderBy(asc(workspacesTable.created_at));
 }
 
+export async function getWorkspaceById(workspaceId: string): Promise<Workspace | null> {
+  const [row] = await db
+    .select()
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId));
+  return row ?? null;
+}
+
+export async function renameWorkspace(workspaceId: string, name: string): Promise<Workspace | null> {
+  const [row] = await db
+    .update(workspacesTable)
+    .set({ name })
+    .where(eq(workspacesTable.id, workspaceId))
+    .returning();
+  return row ?? null;
+}
+
 // ── workspace-scoped tenant-data query variants (Task 3) ────────────────
 // Added alongside the unscoped originals above (getCompetitorById,
 // getCompetitorsByIds, listCompetitors) — those stay untouched for now since
