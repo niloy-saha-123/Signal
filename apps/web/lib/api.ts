@@ -339,3 +339,82 @@ export function regenerateChatThread(
     body: JSON.stringify({ checkpoint_id: checkpointId }),
   });
 }
+
+// ── Discovery Board ──────────────────────────────────────────────────────────
+
+export interface TrackedEntity {
+  id: string;
+  workspace_id: string;
+  source: string;
+  status: string;
+  candidate_name: string;
+  candidate_domain: string;
+  relationship_type: string | null;
+  relationship_confidence: number | null;
+  candidate_reason: string;
+  competitor_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export async function listTrackedEntities(token?: string) {
+  return request<TrackedEntity[]>("/api/tracked-entities", undefined, token);
+}
+
+export async function resumeDiscovery(threadId: string, decision: "confirm" | "dismiss") {
+  return request(`/api/discovery/${threadId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+  });
+}
+
+export async function triggerDiscovery() {
+  return request("/api/discovery/trigger", { method: "POST", body: "{}" });
+}
+
+// ── Company Documents ────────────────────────────────────────────────────────
+
+export interface CompanyDocument {
+  id: string;
+  workspace_id: string;
+  filename: string;
+  mime_type: string;
+  doc_type: string;
+  extraction_status: string;
+  pinecone_namespace: string | null;
+  created_at: Date;
+}
+
+export async function listCompanyDocuments(token?: string) {
+  return request<CompanyDocument[]>("/api/company-documents", undefined, token);
+}
+
+export async function uploadCompanyDocument(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request("/api/company-documents", {
+    method: "POST",
+    body: formData as unknown as BodyInit,
+    headers: {},
+  });
+}
+
+export async function submitCompanyText(text: string) {
+  return request("/api/company-documents/text", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+// ── Dashboard Summary ────────────────────────────────────────────────────────
+
+export interface DashboardSummary {
+  competitors_tracked: number;
+  signals_this_week: number;
+  open_alerts: number;
+  pending_candidates: number;
+}
+
+export async function getDashboardSummary(token?: string) {
+  return request<DashboardSummary>("/api/dashboard/summary", undefined, token);
+}
