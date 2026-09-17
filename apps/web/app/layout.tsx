@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Onest } from "next/font/google";
 import "./globals.css";
 
@@ -13,6 +13,12 @@ const onest = Onest({
 export const metadata: Metadata = {
   title: "Signal — Competitive Intelligence",
   description: "Autonomous competitive strategy intelligence engine",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#f3faff",
 };
 
 // Every page fetches live data from the API at request time; the API isn't reachable
