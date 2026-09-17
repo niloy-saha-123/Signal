@@ -14,7 +14,12 @@
 //   Returns 200 with the saved profile.
 import express, { Router } from "express";
 import { CompanyProfileSchema } from "@signal/shared";
+import { z } from "zod";
 import * as queries from "../db/queries";
+import {
+  getSignalGoalMemory as getSignalGoalMemoryImpl,
+  setSignalGoalMemory as setSignalGoalMemoryImpl,
+} from "../agents/discovery-search/memory-store";
 import { invalidateCompanyContextCache } from "../lib/company-context";
 import { queues, type QueueName } from "../queues/registry";
 import { logger } from "../lib/logger";
@@ -24,6 +29,8 @@ export interface CompanyProfileRouterDeps {
   getCompanyProfileForWorkspace: typeof queries.getCompanyProfileForWorkspace;
   getCompetitorsByIdsForWorkspace: typeof queries.getCompetitorsByIdsForWorkspace;
   upsertCompanyProfileForWorkspace: typeof queries.upsertCompanyProfileForWorkspace;
+  getSignalGoalMemory: (workspaceId: string) => Promise<{ goal: string; confidence: number } | null>;
+  setSignalGoalMemory: (workspaceId: string, value: { goal: string; confidence: number }) => Promise<void>;
   invalidateProfileCache: (workspaceId: string) => Promise<unknown>;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
 }
@@ -32,11 +39,22 @@ export const defaultCompanyProfileRouterDeps: CompanyProfileRouterDeps = {
   getCompanyProfileForWorkspace: queries.getCompanyProfileForWorkspace,
   getCompetitorsByIdsForWorkspace: queries.getCompetitorsByIdsForWorkspace,
   upsertCompanyProfileForWorkspace: queries.upsertCompanyProfileForWorkspace,
+  getSignalGoalMemory: getSignalGoalMemoryImpl,
+  setSignalGoalMemory: setSignalGoalMemoryImpl,
   invalidateProfileCache: invalidateCompanyContextCache,
   enqueue: (queue, data) => queues[queue].add(queue, data),
 };
 
 const BodySchema = CompanyProfileSchema.strict();
+
+// The signal goal is a single inferred-and-correctable string held in the long-term
+// memory store (not the company_profile columns, which are dormant) — read here so the
+// UI can show it and PUT here so a user correction lands where getCompanyContext reads it.
+const SignalGoalBodySchema = z.object({ goal: z.string().trim().min(1).max(2_000) }).strict();
+
+// A human-confirmed goal is not a model guess — fixing confidence to 1 keeps the memory
+// value within its expected shape without pretending to measure anything.
+const USER_CONFIRMED_CONFIDENCE = 1;
 
 export function createCompanyProfileRouter(
   deps: CompanyProfileRouterDeps = defaultCompanyProfileRouterDeps
@@ -115,6 +133,35 @@ export function createCompanyProfileRouter(
       }
 
       res.status(200).json(saved);
+    })
+  );
+
+  router.get(
+    "/signal-goal",
+    wrap(async (req, res) => {
+      const goal = await deps.getSignalGoalMemory(req.workspaceId!);
+      res.status(200).json(goal ?? { goal: null, confidence: null });
+    })
+  );
+
+  router.put(
+    "/signal-goal",
+    wrap(async (req, res) => {
+      const parsed = SignalGoalBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      const value = { goal: parsed.data.goal, confidence: USER_CONFIRMED_CONFIDENCE };
+      await deps.setSignalGoalMemory(req.workspaceId!, value);
+      try {
+        await deps.invalidateProfileCache(req.workspaceId!);
+      } catch (err) {
+        logger.warn("Failed to invalidate company:profile cache after signal-goal write", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      res.status(200).json(value);
     })
   );
 
