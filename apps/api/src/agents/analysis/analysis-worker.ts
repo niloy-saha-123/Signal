@@ -1,6 +1,10 @@
 import type { Job, Worker } from "bullmq";
 import { z } from "zod";
-import { getCompetitorById, failRunIfRunning } from "../../db/queries";
+import {
+  getCompetitorById,
+  getOwnCompanyCompetitorForWorkspace,
+  failRunIfRunning,
+} from "../../db/queries";
 import { analysisGraph } from "../../graph/analysis-graph";
 import { logger } from "../../lib/logger";
 import { registerWorker } from "../../queues/registry";
@@ -25,7 +29,11 @@ export class AnalysisTimeoutError extends Error {
   }
 }
 
-async function invokeWithTimeout(data: AnalysisJobData, timeoutMs: number): Promise<void> {
+async function invokeWithTimeout(
+  data: AnalysisJobData,
+  timeoutMs: number,
+  isOwnCompanyRun: boolean
+): Promise<void> {
   let timeoutHandle: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutHandle = setTimeout(() => reject(new AnalysisTimeoutError(timeoutMs)), timeoutMs);
@@ -43,6 +51,7 @@ async function invokeWithTimeout(data: AnalysisJobData, timeoutMs: number): Prom
         workspace_id: data.workspace_id,
         run_id: data.run_id,
         has_pricing_diff: data.has_pricing_diff,
+        is_own_company_run: isOwnCompanyRun,
       }),
       timeout,
     ]);
@@ -69,7 +78,12 @@ export function createAnalysisJobProcessor(timeoutMs = ANALYSIS_TIMEOUT_MS) {
         throw new Error(`analysis: competitor ${data.competitor_id} not found`);
       }
 
-      await invokeWithTimeout(data, timeoutMs);
+      // R3: single computation point for the own-company flag — derived from the workspace's
+      // synthetic own-company row, never re-queried inside any graph node.
+      const ownCompany = await getOwnCompanyCompetitorForWorkspace(data.workspace_id);
+      const isOwnCompanyRun = ownCompany?.id === data.competitor_id;
+
+      await invokeWithTimeout(data, timeoutMs, isOwnCompanyRun);
       logger.info("Analysis job completed", {
         job_id: job.id,
         run_id: data.run_id,

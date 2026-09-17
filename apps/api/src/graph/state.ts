@@ -18,7 +18,10 @@
 import { Annotation } from "@langchain/langgraph";
 import type { SignalScore } from "@signal/shared";
 import type { z } from "zod";
-import type { AnalysisDecisionSchema } from "../agents/analysis/contracts";
+import type {
+  AnalysisDecisionSchema,
+  ComparativeSynthesisSchema,
+} from "../agents/analysis/contracts";
 
 // intent-analyzer.ts: "infers competitor hiring intent from recent job postings".
 export interface HiringIntentResult {
@@ -61,6 +64,10 @@ export interface VulnerabilityResult {
 // LLM structured-output contract — including the optional `detail` alert-copy fields.
 export type AnalysisDecision = z.infer<typeof AnalysisDecisionSchema>;
 
+// comparative-synthesis.ts: "compares us against the workspace's real competitors".
+// Inferred from ComparativeSynthesisSchema so it can never drift from that LLM contract.
+export type ComparativeSynthesis = z.infer<typeof ComparativeSynthesisSchema>;
+
 // Overwrite-on-write reducer: a node's returned value simply replaces the prior one. Paired
 // with `default` below to give these optional fields a defined initial value at invocation.
 const overwrite = <T>(_left: T, right: T): T => right;
@@ -80,6 +87,17 @@ export const AnalysisGraphState = Annotation.Root({
   vulnerability: Annotation<VulnerabilityResult | null>({ reducer: overwrite, default: () => null }),
   signal_score: Annotation<SignalScore | null>({ reducer: overwrite, default: () => null }),
   decision: Annotation<AnalysisDecision | null>({ reducer: overwrite, default: () => null }),
+  // Comparative synthesis — the 7th node runs only for own-company monitoring and compares
+  // "us" against the workspace's real competitors. Advisory output; null on a normal
+  // competitor run (the node never fires) or when it short-circuits on no competitors.
+  comparative_synthesis: Annotation<ComparativeSynthesis | null>({
+    reducer: overwrite,
+    default: () => null,
+  }),
+  // Caller-seeded (analysis-worker.ts), not computed by any node: whether the invoked
+  // competitor_id is the workspace's own-company row. Drives the synthesis -> conditional
+  // edge. Default false so a normal competitor run never reaches comparativeSynthesis.
+  is_own_company_run: Annotation<boolean>({ reducer: overwrite, default: () => false }),
 });
 
 export type AnalysisGraphStateType = typeof AnalysisGraphState.State;

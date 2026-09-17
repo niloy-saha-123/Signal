@@ -1449,6 +1449,10 @@ export async function getWorkspaceIdForUser(userId: string): Promise<string | nu
   return row?.workspace_id ?? null;
 }
 
+export async function listWorkspaces(): Promise<Workspace[]> {
+  return db.select().from(workspacesTable).orderBy(asc(workspacesTable.created_at));
+}
+
 // ── workspace-scoped tenant-data query variants (Task 3) ────────────────
 // Added alongside the unscoped originals above (getCompetitorById,
 // getCompetitorsByIds, listCompetitors) — those stay untouched for now since
@@ -1507,6 +1511,51 @@ export async function createCompetitorForWorkspace(
       ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
       ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
       discovery_status: "pending",
+    })
+    .returning();
+  return row;
+}
+
+// R1: the synthetic own-company row derives `name` from workspaces.name
+// (falling back to the literal "Own Company" when unavailable) and `domain`
+// from a deterministic per-workspace placeholder `own-company.<workspace_id>.invalid`.
+// company_profile has no name/domain columns, so it can't be the source; the real
+// discriminator is `is_own_company`, name/domain are cosmetic but must be non-empty
+// (competitors.name/domain are NOT NULL) and unique per workspace (unique index on
+// workspace_id+domain) — the deterministic placeholder satisfies both.
+export async function getOwnCompanyCompetitorForWorkspace(
+  workspaceId: string
+): Promise<Competitor | null> {
+  const [row] = await db
+    .select()
+    .from(competitorsTable)
+    .where(
+      and(
+        eq(competitorsTable.workspace_id, workspaceId),
+        eq(competitorsTable.is_own_company, true)
+      )
+    );
+  return row ?? null;
+}
+
+export async function createOwnCompanyCompetitorRow(workspaceId: string): Promise<Competitor> {
+  const existing = await getOwnCompanyCompetitorForWorkspace(workspaceId);
+  if (existing) return existing;
+
+  const [workspace] = await db
+    .select({ name: workspacesTable.name })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId));
+  const name = workspace?.name || "Own Company";
+  const domain = `own-company.${workspaceId}.invalid`;
+
+  const [row] = await db
+    .insert(competitorsTable)
+    .values({
+      workspace_id: workspaceId,
+      name,
+      domain,
+      is_own_company: true,
     })
     .returning();
   return row;

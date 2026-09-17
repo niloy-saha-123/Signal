@@ -1,4 +1,4 @@
-// LangGraph.js DAG wiring the six analysis nodes with parallel/sequential edges.
+// LangGraph.js DAG wiring the seven analysis nodes with parallel/sequential edges.
 //
 // Shape (see .superpowers/sdd/09-graph/task-4-brief.md and task-4-report.md for the empirical
 // verification behind the original wiring, and .superpowers/sdd/10-analysis-agents/progress.md
@@ -11,7 +11,8 @@
 //     --> synthesis
 //            (addEdge(N[], target) fan-in — waits for ALL 5 listed sources, runs synthesis
 //            exactly once)
-//   synthesis --> END
+//   synthesis --> comparativeSynthesis (only when is_own_company_run) --> END
+//   synthesis --> END (normal competitor run)
 //
 // Why changeDetector is unconditional (changed in Part 10): the earlier wiring used
 // `addConditionalEdges(START, has_pricing_diff ? "changeDetector" : "synthesis")`. That routed
@@ -29,6 +30,14 @@ import { changeDetectorNode } from "../agents/analysis/change-detector";
 import { patternDetectorNode } from "../agents/analysis/pattern-detector";
 import { vulnerabilityDetectorNode } from "../agents/analysis/vulnerability-detector";
 import { synthesisNode } from "../agents/analysis/synthesis";
+import { comparativeSynthesisNode } from "../agents/analysis/comparative-synthesis";
+import type { AnalysisGraphStateType } from "./state";
+
+// synthesis → comparativeSynthesis only on an own-company run, else straight to END. The flag
+// is caller-seeded (analysis-worker.ts) and read here, never re-queried inside the graph.
+function afterSynthesis(state: AnalysisGraphStateType): "comparativeSynthesis" | typeof END {
+  return state.is_own_company_run ? "comparativeSynthesis" : END;
+}
 
 const builder = new StateGraph(AnalysisGraphState)
   .addNode("intentAnalyzer", intentAnalyzerNode)
@@ -37,6 +46,7 @@ const builder = new StateGraph(AnalysisGraphState)
   .addNode("vulnerabilityDetector", vulnerabilityDetectorNode)
   .addNode("changeDetector", changeDetectorNode)
   .addNode("synthesis", synthesisNode)
+  .addNode("comparativeSynthesis", comparativeSynthesisNode)
   .addEdge(START, "intentAnalyzer")
   .addEdge(START, "sentimentClusterer")
   .addEdge(START, "patternDetector")
@@ -46,6 +56,10 @@ const builder = new StateGraph(AnalysisGraphState)
     ["intentAnalyzer", "sentimentClusterer", "patternDetector", "vulnerabilityDetector", "changeDetector"],
     "synthesis"
   )
-  .addEdge("synthesis", END);
+  .addConditionalEdges("synthesis", afterSynthesis, {
+    comparativeSynthesis: "comparativeSynthesis",
+    [END]: END,
+  })
+  .addEdge("comparativeSynthesis", END);
 
 export const analysisGraph = builder.compile();

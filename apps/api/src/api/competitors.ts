@@ -37,6 +37,17 @@ const DayRangeQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(30),
 });
 
+// `is_own_company` arrives as a query string ("true"/"false"). `z.coerce.boolean()`
+// would truthy-coerce any non-empty value so a malformed value like "maybe" would
+// silently become true — parse the two literal forms explicitly and 400 otherwise.
+const ListCompetitorsQuerySchema = z.object({
+  is_own_company: z
+    .preprocess(
+      (value) => (value === "true" ? true : value === "false" ? false : value),
+      z.boolean().optional()
+    ),
+});
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // competitor_signal_scores.components is jsonb with no DB-level shape enforcement
@@ -233,7 +244,20 @@ export function createCompetitorRouter(
   router.get(
     "/",
     wrap(async (req, res) => {
-      res.status(200).json(await deps.listCompetitorsForWorkspace(req.workspaceId!));
+      const parsed = ListCompetitorsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      const competitors = await deps.listCompetitorsForWorkspace(req.workspaceId!);
+      const { is_own_company } = parsed.data;
+      res
+        .status(200)
+        .json(
+          is_own_company === undefined
+            ? competitors
+            : competitors.filter((row) => row.is_own_company === is_own_company)
+        );
     })
   );
 

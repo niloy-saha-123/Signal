@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     initRegistry: vi.fn(() => ({
       competitorDiscoveryWorker: { close: workerClose },
       companyProfileUpdateWorker: { close: workerClose },
+      ownCompanyAnalysisSweepWorker: { close: workerClose },
     })),
     initReddit: makeInit(),
     initHn: makeInit(),
@@ -69,7 +70,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 13 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 14 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -89,7 +90,7 @@ describe("standalone worker runtime", () => {
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(13);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(14);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);
@@ -103,7 +104,7 @@ describe("standalone worker runtime", () => {
     const runtime = createWorkerRuntime();
     await expect(runtime.start()).rejects.toThrow("jobs worker misconfigured");
 
-    // Two registry workers plus Reddit and HN were created before Jobs failed.
-    expect(mocks.workerClose).toHaveBeenCalledTimes(4);
+    // Three registry workers plus Reddit and HN were created before Jobs failed.
+    expect(mocks.workerClose).toHaveBeenCalledTimes(5);
   });
 });

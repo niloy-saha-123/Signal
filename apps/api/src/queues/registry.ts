@@ -37,11 +37,14 @@ import { logger } from "../lib/logger";
 import { withRetry } from "../lib/retry";
 import {
   createAgentRun,
+  createOwnCompanyCompetitorRow,
   failRunIfRunning,
   finalizeDiscovery,
   getCompetitorById,
   getRecentPricingDiffs,
   listCompetitorsForWorkspace,
+  listWorkspaces,
+  getOwnCompanyCompetitorForWorkspace,
   updateDiscoveryStatus,
 } from "../db/queries";
 import { discoverCompetitor } from "../agents/discovery/competitor-discovery";
@@ -67,7 +70,8 @@ export type QueueName =
   | "pipeline-deduplication"
   | "pipeline-recovery"
   | "analysis"
-  | "discovery-search";
+  | "discovery-search"
+  | "own-company-analysis-sweep";
 
 export interface QueueConfig {
   concurrency: number;
@@ -182,6 +186,13 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // One discovery sweep at a time is enough — this is not latency-sensitive,
   // and each sweep holds the workspace's thread_id checkpoint while it runs.
   "discovery-search": { concurrency: 1, attempts: 1 },
+  // Weekly scheduler-driven fan-out: lists every workspace and enqueues one
+  // analysis job per own-company row. One sweep at a time; no retry (a missed
+  // sweep is corrected by next week's tick, not a correctness bug).
+  // ponytail: attempts:1 is the idempotency ceiling — a future attempts > 1 (or
+  // a manual re-trigger) would re-enqueue already-succeeded workspaces and
+  // double-bill their LLM runs; a per-week dedup key is the upgrade path.
+  "own-company-analysis-sweep": { concurrency: 1, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
@@ -418,6 +429,52 @@ async function companyProfileUpdateProcessor(
   }
 }
 
+// Weekly coordinator for the own-company analysis sweep. A repeat job on the
+// analysis queue is a poison job (it needs per-competitor competitor_id/
+// workspace_id/run_id data, but a repeat job carries fixed empty data), so this
+// queue fans out over all workspaces and enqueues one normal `analysis` job per
+// workspace's own-company row. The analysis work itself reuses the existing
+// analysis queue/graph — nothing new there.
+async function ownCompanyAnalysisSweepProcessor(_job: Job): Promise<void> {
+  const workspaces = await listWorkspaces();
+
+  let failed = 0;
+
+  for (const workspace of workspaces) {
+    const own =
+      (await getOwnCompanyCompetitorForWorkspace(workspace.id)) ??
+      (await createOwnCompanyCompetitorRow(workspace.id));
+
+    let runId: string | undefined;
+    try {
+      const run = await createAgentRun({
+        competitor_id: own.id,
+        trigger: "scheduled",
+      });
+      runId = run.id;
+      const hasPricingDiff = (await getRecentPricingDiffs(own.id, 7)).length > 0;
+      await queues.analysis.add("analysis", {
+        competitor_id: own.id,
+        workspace_id: workspace.id,
+        run_id: run.id,
+        has_pricing_diff: hasPricingDiff,
+      });
+    } catch (error) {
+      failed += 1;
+      if (runId) await failRunIfRunning(runId).catch(() => undefined);
+      logger.error("Failed to enqueue own-company analysis", {
+        competitor_id: own.id,
+        run_id: runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (failed > 0) {
+    throw new Error(`own-company-analysis-sweep: failed to enqueue ${failed} analyses`);
+  }
+}
+
 // Constructs the live BullMQ Workers for competitor-discovery and
 // company-profile-update. Must only be called from the standalone worker
 // process — never from Express, which imports this module (for `queues`,
@@ -426,6 +483,7 @@ async function companyProfileUpdateProcessor(
 export function initWorkers(): {
   competitorDiscoveryWorker: Worker;
   companyProfileUpdateWorker: Worker;
+  ownCompanyAnalysisSweepWorker: Worker;
 } {
   const competitorDiscoveryWorker = registerWorker(
     "competitor-discovery",
@@ -467,7 +525,12 @@ export function initWorkers(): {
     companyProfileUpdateProcessor
   );
 
-  return { competitorDiscoveryWorker, companyProfileUpdateWorker };
+  const ownCompanyAnalysisSweepWorker = registerWorker(
+    "own-company-analysis-sweep",
+    ownCompanyAnalysisSweepProcessor
+  );
+
+  return { competitorDiscoveryWorker, companyProfileUpdateWorker, ownCompanyAnalysisSweepWorker };
 }
 
 // Inline payload shape (not imported from discovery-worker.ts) so the registry
