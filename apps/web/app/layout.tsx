@@ -3,7 +3,6 @@ import { Manrope } from "next/font/google";
 import { LeftSidebar } from "@/components/LeftSidebar";
 import { TopBar } from "@/components/TopBar";
 import { ChatSidebar } from "@/components/ChatSidebar";
-import { AlertBanner } from "@/components/AlertBanner";
 import { AppCommandBar } from "./app-command-bar";
 import "./globals.css";
 
@@ -32,7 +31,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <TopBar />
         <ChatSidebar />
         <AppCommandBar />
-        <AlertBanner />
         
         {/* Main content area - offset by left sidebar and right chat */}
         <main className="ml-64 mr-96 mt-16 min-h-screen px-8 py-10">
