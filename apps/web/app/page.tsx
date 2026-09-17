@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { MobileSectionNav } from "@/components/landing/MobileSectionNav";
 import { SignalMark } from "@/components/landing/SignalMark";
 import { SignalProductStage } from "@/components/landing/SignalProductStage";
 
@@ -67,39 +68,7 @@ export default function LandingPage() {
               Research chat
             </a>
           </nav>
-          <details className="group relative ml-auto md:hidden">
-            <summary
-              aria-label="Open section navigation"
-              className="grid h-11 w-11 cursor-pointer list-none place-items-center rounded-full border border-studio-line text-studio-ink transition-colors hover:bg-studio-sky-soft [&::-webkit-details-marker]:hidden"
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none">
-                <path
-                  d="M5 7.5h14M5 12h14M5 16.5h14"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </summary>
-            <nav
-              aria-label="Mobile section navigation"
-              className="absolute top-13 right-0 z-50 w-52 overflow-hidden rounded-2xl border border-studio-line bg-studio-paper p-2 shadow-[0_18px_42px_-24px_rgba(10,32,51,0.45)]"
-            >
-              {[
-                ["#workflow", "How it works"],
-                ["#product", "Product"],
-                ["#research", "Research chat"],
-              ].map(([href, label]) => (
-                <a
-                  key={href}
-                  href={href}
-                  className="block rounded-xl px-4 py-3 text-sm font-semibold text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink"
-                >
-                  {label}
-                </a>
-              ))}
-            </nav>
-          </details>
+          <MobileSectionNav />
           <div className="flex items-center gap-1.5 sm:gap-3">
             <Link
               href="/login"

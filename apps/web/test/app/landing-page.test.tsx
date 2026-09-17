@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import LandingPage from "../../app/page";
@@ -11,10 +11,8 @@ describe("LandingPage", () => {
     const mobileNav = screen.getByRole("navigation", {
       name: "Mobile section navigation",
     });
-    expect(within(mobileNav).getByRole("link", { name: "How it works" })).toHaveAttribute(
-      "href",
-      "#workflow",
-    );
+    const workflowLink = within(mobileNav).getByRole("link", { name: "How it works" });
+    expect(workflowLink).toHaveAttribute("href", "#workflow");
     expect(within(mobileNav).getByRole("link", { name: "Product" })).toHaveAttribute(
       "href",
       "#product",
@@ -23,5 +21,12 @@ describe("LandingPage", () => {
       "href",
       "#research",
     );
+
+    const details = mobileNav.closest("details");
+    expect(details).not.toBeNull();
+    if (!details) return;
+    details.open = true;
+    fireEvent.click(workflowLink);
+    expect(details.open).toBe(false);
   });
 });
