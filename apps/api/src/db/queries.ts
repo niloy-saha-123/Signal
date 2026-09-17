@@ -1449,6 +1449,10 @@ export async function getWorkspaceIdForUser(userId: string): Promise<string | nu
   return row?.workspace_id ?? null;
 }
 
+export async function listWorkspaces(): Promise<Workspace[]> {
+  return db.select().from(workspacesTable).orderBy(asc(workspacesTable.created_at));
+}
+
 // ── workspace-scoped tenant-data query variants (Task 3) ────────────────
 // Added alongside the unscoped originals above (getCompetitorById,
 // getCompetitorsByIds, listCompetitors) — those stay untouched for now since

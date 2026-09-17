@@ -92,13 +92,20 @@ export function collectorSchedulerId(queueName: QueueName): string {
 export const PIPELINE_RECOVERY_CRON = "*/2 * * * *";
 export const PIPELINE_RECOVERY_SCHEDULER_ID = "signal-pipeline-recovery-v1";
 
-// Upserts every collector's schedule plus pipeline-recovery's — kept in one
-// function because both are the same "idempotent upsertJobScheduler at
-// worker startup" operation, not two separate concerns.
+// Weekly own-company analysis sweep. Day-of-week cron field (standard cron
+// supports 0-7 there; 1 = Monday), 00:00 UTC. Chose Monday over Sunday to stay
+// clear of weekend deploy/maintenance windows; the exact day is not load-bearing.
+export const OWN_COMPANY_ANALYSIS_SWEEP_CRON = "0 0 * * 1";
+export const OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID = "signal:own-company-analysis-sweep:v1";
+
+// Upserts every collector's schedule plus pipeline-recovery's and the weekly
+// own-company analysis sweep's — kept in one function because all three are the
+// same "idempotent upsertJobScheduler at worker startup" operation, not separate
+// concerns.
 export async function registerQueueSchedules(
   queueMap: Pick<
     typeof queues,
-    (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery"
+    (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery" | "own-company-analysis-sweep"
   > = queues
 ): Promise<void> {
   const config = getCollectorScheduleConfig();
@@ -117,6 +124,15 @@ export async function registerQueueSchedules(
     PIPELINE_RECOVERY_SCHEDULER_ID,
     { pattern: PIPELINE_RECOVERY_CRON },
     { name: "pipeline-recovery", data: {} }
+  );
+  // Weekly own-company analysis sweep — a coordinator queue whose processor
+  // lists workspaces and enqueues one normal `analysis` job per own-company row.
+  // The repeat job carries no data; the coordinator derives per-workspace fan-out
+  // at runtime (see registry.ts's ownCompanyAnalysisSweepProcessor).
+  await queueMap["own-company-analysis-sweep"].upsertJobScheduler(
+    OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
+    { pattern: OWN_COMPANY_ANALYSIS_SWEEP_CRON },
+    { name: "own-company-analysis-sweep", data: {} }
   );
   // No discovery-search schedule here: a weekly sweep would be a poison job as
   // written (DiscoveryJobDataSchema requires a workspace_id, but a repeat job

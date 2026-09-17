@@ -21,6 +21,7 @@ vi.mock("@/queues/registry", () => ({
     "pipeline-entity-extraction": {},
     "pipeline-recovery": {},
     analysis: {},
+    "own-company-analysis-sweep": {},
   },
   queues: {
     "collect-reddit": { upsertJobScheduler: upsertJobSchedulerMock },
@@ -29,6 +30,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-changelog": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
     "pipeline-recovery": { upsertJobScheduler: upsertJobSchedulerMock },
+    "own-company-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -41,6 +43,8 @@ import {
   collectorSchedulerId,
   PIPELINE_RECOVERY_CRON,
   PIPELINE_RECOVERY_SCHEDULER_ID,
+  OWN_COMPANY_ANALYSIS_SWEEP_CRON,
+  OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
 } from "@/queues/scheduler";
 
 describe("queues/scheduler", () => {
@@ -164,7 +168,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(6);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(7);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
@@ -175,6 +179,21 @@ describe("queues/scheduler", () => {
       PIPELINE_RECOVERY_SCHEDULER_ID,
       { pattern: PIPELINE_RECOVERY_CRON },
       { name: "pipeline-recovery", data: {} }
+    );
+  });
+
+  it("registers the weekly own-company sweep under a stable scheduler id with a Monday-midnight cron", async () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
+    upsertJobSchedulerMock.mockClear();
+
+    await registerQueueSchedules();
+
+    expect(OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID).toBe("signal:own-company-analysis-sweep:v1");
+    expect(OWN_COMPANY_ANALYSIS_SWEEP_CRON).toBe("0 0 * * 1");
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
+      { pattern: OWN_COMPANY_ANALYSIS_SWEEP_CRON },
+      { name: "own-company-analysis-sweep", data: {} }
     );
   });
 });

@@ -50,7 +50,8 @@ const defaultDeps: WorkerRuntimeDeps = {
       const registryWorkers = initWorkers();
       initialized.push(
         registryWorkers.competitorDiscoveryWorker,
-        registryWorkers.companyProfileUpdateWorker
+        registryWorkers.companyProfileUpdateWorker,
+        registryWorkers.ownCompanyAnalysisSweepWorker
       );
       for (const initialize of [
         initRedditWorker,

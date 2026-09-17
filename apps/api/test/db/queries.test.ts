@@ -142,6 +142,7 @@ import {
   RagEvalDatasetIntegrityError,
   createWorkspace,
   getWorkspaceIdForUser,
+  listWorkspaces,
   getCompetitorByIdForWorkspace,
   listCompetitorsForWorkspace,
   getCompetitorsByIdsForWorkspace,
@@ -2659,6 +2660,32 @@ describe("db/queries — workspaces", () => {
       const result = await getWorkspaceIdForUser(UNKNOWN_UUID);
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe("listWorkspaces", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      selectMock.mockReturnValue({ from: fromMock });
+    });
+
+    it("selects every workspace ordered by created_at ascending", async () => {
+      const rows = [{ id: WS_UUID }, { id: "44444444-4444-4444-8444-444444444444" }];
+      fromMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue(rows);
+
+      const result = await listWorkspaces();
+
+      expect(fromMock).toHaveBeenCalledWith(workspacesTable);
+      expect(orderByMock).toHaveBeenCalledWith(asc(workspacesTable.created_at));
+      expect(result).toEqual(rows);
+    });
+
+    it("returns an empty array when no workspaces exist", async () => {
+      fromMock.mockReturnValue({ orderBy: orderByMock });
+      orderByMock.mockResolvedValue([]);
+
+      await expect(listWorkspaces()).resolves.toEqual([]);
     });
   });
 
