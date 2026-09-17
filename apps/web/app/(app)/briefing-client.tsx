@@ -82,18 +82,25 @@ export function BriefingClient({
         {/* Signal Score Card */}
         <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm">
           <p className="font-sans text-sm font-bold text-slate-900">Highest-signal movement</p>
-          <p className="font-serif text-5xl font-semibold text-slate-900">{highestScore}</p>
-          <p className="font-sans text-sm font-bold text-red-600">
-            {highestScoreCompetitor} · {highestScoreDelta > 0 ? "+" : ""}
-            {highestScoreDelta} vs last week
-          </p>
-          <p className="font-sans text-sm leading-relaxed text-slate-600">
-            Usage-based pricing went live 3 days ago. That is the first pricing change in their
-            public changelog this year.
-          </p>
+          {highestScore > 0 ? (
+            <>
+              <p className="font-serif text-5xl font-semibold text-slate-900">{highestScore}</p>
+              <p className="font-sans text-sm font-bold text-red-600">
+                {highestScoreCompetitor} · {highestScoreDelta > 0 ? "+" : ""}
+                {highestScoreDelta} vs last week
+              </p>
+              {movements.length > 0 && (
+                <p className="font-sans text-sm leading-relaxed text-slate-600">
+                  {movements[0].detail}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="font-sans text-sm text-slate-400">No signal data yet. Add competitors to start tracking.</p>
+          )}
         </div>
 
-        {/* Volume Chart Card (placeholder) */}
+        {/* Signal volume chart */}
         <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm">
           <p className="font-sans text-sm font-bold text-slate-900">Signal volume</p>
           <div className="flex h-24 items-end justify-between gap-2">

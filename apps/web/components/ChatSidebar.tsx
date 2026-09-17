@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
-import { listCompetitors } from "../lib/api";
+import { listCompetitors, createChatThread } from "../lib/api";
 import { ChatInterface } from "./ChatInterface";
 
 export function ChatSidebar() {
   const [competitorIds, setCompetitorIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [chatKey, setChatKey] = useState(0);
 
   useEffect(() => {
     listCompetitors()
@@ -20,6 +21,16 @@ export function ChatSidebar() {
         setLoading(false);
       });
   }, []);
+
+  const handleNewChat = async () => {
+    try {
+      await createChatThread();
+      // Force ChatInterface to refresh by changing key
+      setChatKey((prev) => prev + 1);
+    } catch (error) {
+      console.error("Failed to create new chat:", error);
+    }
+  };
 
   if (isCollapsed) {
     return (
@@ -43,7 +54,10 @@ export function ChatSidebar() {
       <div className="flex h-14 items-center justify-between border-b border-slate-100 px-4">
         <h2 className="font-sans text-sm font-semibold text-slate-900">Chat</h2>
         <div className="flex items-center gap-1">
-          <button className="rounded-md px-3 py-1.5 font-sans text-xs font-medium text-slate-700 hover:bg-slate-50">
+          <button 
+            onClick={handleNewChat}
+            className="rounded-md px-3 py-1.5 font-sans text-xs font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100"
+          >
             New chat
           </button>
           <button
@@ -75,7 +89,7 @@ export function ChatSidebar() {
             </p>
           </div>
         ) : (
-          <ChatInterface competitorIds={competitorIds} />
+          <ChatInterface key={chatKey} competitorIds={competitorIds} />
         )}
       </div>
     </aside>

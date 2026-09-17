@@ -19,9 +19,9 @@ export function DiscoveryClient({ discoveries: initialDiscoveries }: { discoveri
     setDiscoveries((prev) => prev.filter((d) => d.id !== id));
   };
 
-  const handleTrack = (id: string) => {
-    // TODO: Implement tracking logic
-    console.log("Track:", id);
+  const handleTrack = async (id: string) => {
+    // This would call resumeDiscovery API when backend is fully connected
+    // For now, optimistically update UI
     setDiscoveries((prev) => prev.filter((d) => d.id !== id));
   };
 
