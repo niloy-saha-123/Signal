@@ -148,7 +148,7 @@ Stated plainly so this document does not overclaim what exists:
 | **Node.js 20 / TypeScript 5** | Strict mode throughout. Discriminated unions for circuit states, generics for retry utilities, `satisfies` for config. |
 | **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation, `requireAuth` middleware verifying Supabase JWTs and stamping `req.workspaceId` — see [Implementation Status](#implementation-status). |
 | **LangGraph.js** | Stateful directed graph with parallel nodes, conditional edges, and immutable state transitions. |
-| **BullMQ** | Twelve named queues — two lifecycle (discovery, company-profile update), five collection, three processing pipeline, one recovery, one analysis. Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
+| **BullMQ** | Fourteen named queues — two lifecycle (`competitor-discovery`, `company-profile-update`), five collection, three processing pipeline, one recovery (`pipeline-recovery`), one analysis, one `discovery-search` (Phase 1), one `own-company-analysis-sweep` (Phase 3). Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
 | **Socket.io** | Server present; no alert emission wired yet — see [Implementation Status](#implementation-status). |
 | **Zod** | All LLM outputs validated on receipt. Schema failure message fed back to the model for self-correction. Max three retries before dead-letter. |
 | **Drizzle ORM** | Type-safe schema and queries. Migrations tracked and version-controlled. |
@@ -244,6 +244,9 @@ GPT-4.1 handles strategic analysis: identifies the vulnerable customer segment, 
 
 **SynthesisAgent** `Claude Sonnet`
 Receives all agent outputs from LangGraph graph state. Incorporates `corroboration_count` from the deduplication layer into confidence calculation. Selects the active prompt version from the registry. Decides: real-time alert, weekly digest entry, or suppress. Also recomputes each competitor's Signal Score daily from mention velocity, sentiment trajectory, hiring momentum, pricing change recency, and vulnerability window status.
+
+**ComparativeSynthesisAgent** `Claude Sonnet` (Phase 3 — own-company monitoring)
+A seventh, conditional node that only runs when the analyzed `competitors` row is the workspace's synthetic "us" row (`is_own_company: true`). Pulls the workspace's *real* competitors' most recent signals/synthesis output and produces the head-to-head comparative framing the own-company monitor needs: "competitor did X, we haven't — possible reasons, possible responses." Advisory only — it never triggers any autonomous action, matching discovery's "suggests, never acts" rule. The synthetic row itself is created per-workspace from `company_profile`/`company_documents` rather than through the web-scraping collectors, and the existing 6-node graph runs against it unchanged.
 
 **ChatAgent** `Claude Sonnet`
 Real-time, not background. Three-stage retrieval pipeline:
