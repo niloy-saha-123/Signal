@@ -131,9 +131,9 @@ Stated plainly so this document does not overclaim what exists:
 | Area | Status |
 |---|---|
 | Collection, pipeline, analysis graph, ChatAgent, API routes | Built and tested (backend intelligence loop is complete). |
-| Frontend (`apps/web`) | Route scaffolding only — every page under `app/` is a placeholder a few lines long. No real UI, charts, or Socket.io client wiring exist yet. |
+| Frontend (`apps/web`) | Built. Home/briefing, Intel, Chat (SSE streaming), Alerts, Settings, Board, login/signup/onboarding all exist with components and a full `apps/web/test/` suite. Phase 5's shell redesign (left nav + pinned chat + analytics board) is the planned next step for this surface. |
 | Authentication | Built. Supabase Auth (email+password, Google OAuth) with workspace-scoped multi-tenancy — every competitor/signal/alert/company-profile row carries a `workspace_id`, enforced in `apps/api`'s query layer and route guards, not DB-level RLS policies. `requireAuth` middleware verifies JWTs on all `/api` routes; Socket.io handshake requires the same token and joins rooms by workspace. One user per workspace for now — onboarding (create workspace) is wired end-to-end; multi-user/invite-teammate support is not built. |
-| Real-time delivery | The Socket.io server is instantiated (`api/index.ts`), but no code path anywhere in the backend currently emits an event through it — alert delivery is not wired end-to-end yet. ChatAgent's SSE streaming (`api/chat.ts`) is real and does work. |
+| Real-time delivery | Wired. Socket.io emits `alert:created` through a cross-process Redis relay (`lib/socket-relay.ts`), joined to workspace-scoped rooms. ChatAgent streams answers via SSE (`api/chat.ts`). |
 | Deployment automation | None configured. Railway and Vercel below are the intended target platforms, not active infrastructure — there is no Railway/Vercel project file, and `.github/workflows/ci.yml` only runs typecheck/test/build plus the RAG evaluation gate; it does not deploy anywhere. |
 | Automatic daily analysis fan-out | Not built. Analysis runs from manual/API-triggered requests and company-profile updates; no scheduler sweeps every competitor daily. |
 
@@ -199,6 +199,9 @@ Stated plainly so this document does not overclaim what exists:
 
 **CompetitorDiscoveryAgent** — no LLM
 Triggered once when a competitor is added via `POST /api/competitors`. Discovers subreddits (Reddit search API, ranked by mention frequency, top 5 plus r/SaaS and r/startups as defaults), job board tokens (Greenhouse + Lever pattern matching against domain/name slug variations), pricing URL (common path probing — `/pricing`, `/plans`, `/price`, `/pricing-plans` — with a web-search fallback), and RSS/changelog feed (path probing plus `<link rel="alternate">` HTML parsing). Logs every attempt to `competitor_discovery_log`. Updates the `competitors` row with discovered values and sets `discovery_status` to `complete` or `failed`. Runs on the `competitor-discovery` BullMQ queue — see the Getting Started example below.
+
+**Discovery-search agent** — LLM (Phase 1/v2)
+A separate LangGraph agent (`agents/discovery-search/`) that *proposes brand-new competitors* you haven't added yet. A tool-calling model (bound to DuckDuckGo web search + Signal's own `retrieve_signals`) runs a bounded ReAct loop, then proposes up to 5 candidate companies. Each candidate lands in `tracked_entities` with `status='candidate'` and is gated behind a human-in-the-loop `interrupt()` — promotion to `confirmed` happens only via `POST /api/discovery/:threadId/resume`, never by the agent on its own.
 
 ### Collection — no LLM
 
@@ -718,14 +721,31 @@ explicitly baselined to the migrations already applied.
 
 ## Roadmap
 
-The current build covers the full intelligence loop: collect → process → analyze → alert → command center. Behavioral fingerprinting is core architecture, not a future feature — see [Signal Score compounds over time](#key-architecture-decisions). Planned next:
+The v2 build turns Signal from a collection + alert tool into an autonomous analyst. Phases 1–4
+are shipped (the current `signal-v2-phase4` branch); Phases 5–6 are planned but not executed.
+Each phase has a plan in `docs/superpowers/plans/`.
 
-- G2 and Capterra review ingestion (free public review data, high SMB sentiment signal)
-- Slack and email alert delivery
-- **Phase 3 — MCP Action Layer.** When SynthesisAgent detects a high-significance event, it currently surfaces it as an alert. In Phase 3, it will take actions directly through MCP-defined tools: post a briefing to a Slack channel, create a Notion page with the full intelligence report, draft an email to the sales team with updated battlecard talking points, or tag relevant CRM deals. Users connect their services once; Signal decides when to use them based on event significance and user-configured thresholds. This is the integration layer that moves Signal from intelligence platform to autonomous strategic operator.
-- BuiltWith API integration (tech stack detection) post-validation of unit economics
+| Phase | Scope | Status |
+|---|---|---|
+| workspace-auth | Supabase Auth + workspace-scoped multi-tenancy | ✅ shipped |
+| 1 — Company profile & discovery | profile/doc ingestion, LLM discovery agent, HITL confirm/dismiss | ✅ shipped |
+| 2 — Chat memory | checkpointed multi-turn chat threads, SSE streaming | ✅ shipped |
+| 3 — Own-company monitoring | `is_own_company` flag, comparative-synthesis ("they did X, we haven't") | ✅ shipped |
+| 4 — Agentic infra hardening | circuit breakers on every LLM call site, ReAct tool loops (chat + discovery), DuckDuckGo swap, time travel (checkpoint fork/replay) | ✅ shipped |
+| 5 — UI redesign | left-nav + pinned-chat shell, analytics board, discovery board, doc-ingestion UI, own-company comparative view | ⏳ planned |
+| 6 — Signal Agent control plane | chat as the control plane, `company_goals` table, goals panel on `/board` | ⏳ planned |
+| Landing page | pre-auth marketing page (light-blue/white) — added 2026-09-17 | ⏳ planned |
 
-Paid data source integrations (Semrush, Similarweb, Ahrefs) are deferred until the core loop demonstrates value. The interesting engineering problem is extracting maximum signal from public sources — not paying for a premium API.
+**Agentic capabilities shipped in v2:** ReAct tool loops (the chat agent retrieves its own
+evidence; the discovery agent searches the open web), circuit breakers on every LLM call site,
+checkpointed time travel with fork/replay (`PostgresSaver`), human-in-the-loop
+`interrupt()`/`Command({resume})` for competitor confirmation, and own-company comparative
+monitoring. Phase 6 turns chat into the control plane so the agent can act on the user's goals,
+not just report.
+
+Deferred (unchanged from the original build): G2/Capterra ingestion, Slack/email delivery,
+BuiltWith tech-stack detection, and paid data sources (Semrush/Similarweb/Ahrefs) remain
+post-core-loop.
 
 ---
 
