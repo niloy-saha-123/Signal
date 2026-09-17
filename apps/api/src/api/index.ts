@@ -6,6 +6,7 @@ import { createCompetitorRouter } from "./competitors";
 import { createSignalRouter } from "./signals";
 import { createAlertRouter } from "./alerts";
 import { createChatRouter } from "./chat";
+import { createChatThreadsRouter } from "./chat-threads";
 import { createCompanyProfileRouter } from "./company-profile";
 import { createCompanyDocumentsRouter } from "./company-documents";
 import { createDiscoveryRouter } from "./discovery";
@@ -118,6 +119,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/signals", createSignalRouter());
   app.use("/api/alerts", createAlertRouter());
   app.use("/api/chat", createChatRouter());
+  app.use("/api/chat-threads", createChatThreadsRouter());
   app.use("/api/company-profile", createCompanyProfileRouter());
   app.use("/api/company-documents", createCompanyDocumentsRouter());
   app.use("/api/discovery", createDiscoveryRouter());

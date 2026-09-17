@@ -3,12 +3,20 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitationResult, RefusalResult } from "@signal/shared";
 
-const { streamChatResultMock } = vi.hoisted(() => ({
+const { streamChatResultMock, listChatThreadsMock, createChatThreadMock } = vi.hoisted(() => ({
   streamChatResultMock: vi.fn(),
+  listChatThreadsMock: vi.fn(),
+  createChatThreadMock: vi.fn(),
 }));
 
 vi.mock("../../lib/chat-stream", () => ({
   streamChatResult: streamChatResultMock,
+}));
+
+vi.mock("../../lib/api", () => ({
+  listChatThreads: listChatThreadsMock,
+  createChatThread: createChatThreadMock,
+  getChatThreadMessages: vi.fn(),
 }));
 
 import { ChatInterface } from "../../components/ChatInterface";
@@ -27,12 +35,24 @@ const refusalResult: RefusalResult = {
   suggested_query: "What pricing changes has Acme made this month?",
 };
 
+const threadSummary = {
+  id: "thread-1",
+  title: null,
+  updated_at: "2026-09-16T00:00:00.000Z",
+};
+
 describe("ChatInterface", () => {
   beforeEach(() => {
     streamChatResultMock.mockReset();
+    listChatThreadsMock.mockReset();
+    listChatThreadsMock.mockResolvedValue([]);
+    createChatThreadMock.mockReset();
+    createChatThreadMock.mockResolvedValue(threadSummary);
   });
   afterEach(() => {
     streamChatResultMock.mockReset();
+    listChatThreadsMock.mockReset();
+    createChatThreadMock.mockReset();
   });
 
   function typeAndSubmit(query: string) {
@@ -50,16 +70,48 @@ describe("ChatInterface", () => {
     expect(screen.getByText("Thinking…")).toBeInTheDocument();
   });
 
-  it("calls streamChatResult with the query and competitorIds", () => {
+  it("creates a thread on first submit and passes its id to streamChatResult", async () => {
     streamChatResultMock.mockImplementation(() => new Promise(() => {}));
     render(<ChatInterface competitorIds={["comp-1", "comp-2"]} />);
     typeAndSubmit("What changed?");
+    await waitFor(() => expect(createChatThreadMock).toHaveBeenCalledTimes(1));
     expect(streamChatResultMock).toHaveBeenCalledWith(
       "What changed?",
       ["comp-1", "comp-2"],
       expect.any(Function),
-      expect.any(Function)
+      expect.any(Function),
+      { threadId: "thread-1", onToken: expect.any(Function) }
     );
+  });
+
+  it("reuses the active thread id on a second send without creating another thread", async () => {
+    streamChatResultMock.mockResolvedValue(undefined);
+    render(<ChatInterface competitorIds={["comp-1"]} />);
+    typeAndSubmit("first");
+    await waitFor(() => expect(streamChatResultMock).toHaveBeenCalledTimes(1));
+
+    typeAndSubmit("second");
+    await waitFor(() => expect(streamChatResultMock).toHaveBeenCalledTimes(2));
+
+    expect(createChatThreadMock).toHaveBeenCalledTimes(1);
+    expect(streamChatResultMock).toHaveBeenLastCalledWith(
+      "second",
+      ["comp-1"],
+      expect.any(Function),
+      expect.any(Function),
+      { threadId: "thread-1", onToken: expect.any(Function) }
+    );
+  });
+
+  it("surfaces the generic error and does not send when thread creation fails", async () => {
+    streamChatResultMock.mockResolvedValue(undefined);
+    createChatThreadMock.mockRejectedValue(new Error("boom"));
+    render(<ChatInterface competitorIds={["comp-1"]} />);
+    typeAndSubmit("What changed?");
+    await waitFor(() =>
+      expect(screen.getByText("Signal couldn't answer that. Please try again.")).toBeInTheDocument()
+    );
+    expect(streamChatResultMock).not.toHaveBeenCalled();
   });
 
   it("renders the answer and a citation chip once onResult fires with a CitationResult", async () => {

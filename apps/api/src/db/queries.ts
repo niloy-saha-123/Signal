@@ -40,6 +40,7 @@ import {
   trackedEntitiesTable,
   workspacesTable,
   workspaceMembersTable,
+  chatThreadsTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -70,6 +71,7 @@ export type LlmCost = typeof llmCostsTable.$inferSelect;
 export type Alert = typeof alertsTable.$inferSelect;
 export type Workspace = typeof workspacesTable.$inferSelect;
 export type WorkspaceMember = typeof workspaceMembersTable.$inferSelect;
+export type ChatThread = typeof chatThreadsTable.$inferSelect;
 export type CompanyProfileInput = Omit<
   typeof companyProfileTable.$inferInsert,
   "id" | "created_at" | "updated_at"
@@ -1583,4 +1585,52 @@ export async function createCompanyDocument(
     })
     .returning();
   return row;
+}
+
+export async function createChatThread(
+  workspaceId: string,
+  title?: string
+): Promise<ChatThread> {
+  const [row] = await db
+    .insert(chatThreadsTable)
+    .values({ workspace_id: workspaceId, ...(title === undefined ? {} : { title }) })
+    .returning();
+  return row;
+}
+
+export async function listChatThreadsForWorkspace(
+  workspaceId: string
+): Promise<ChatThread[]> {
+  return db
+    .select()
+    .from(chatThreadsTable)
+    .where(eq(chatThreadsTable.workspace_id, workspaceId))
+    .orderBy(desc(chatThreadsTable.updated_at));
+}
+
+export async function getChatThreadForWorkspace(
+  threadId: string,
+  workspaceId: string
+): Promise<ChatThread | undefined> {
+  const [row] = await db
+    .select()
+    .from(chatThreadsTable)
+    .where(and(eq(chatThreadsTable.id, threadId), eq(chatThreadsTable.workspace_id, workspaceId)));
+  return row;
+}
+
+export async function deleteChatThreadForWorkspace(
+  threadId: string,
+  workspaceId: string
+): Promise<void> {
+  await db
+    .delete(chatThreadsTable)
+    .where(and(eq(chatThreadsTable.id, threadId), eq(chatThreadsTable.workspace_id, workspaceId)));
+}
+
+export async function touchChatThread(threadId: string): Promise<void> {
+  await db
+    .update(chatThreadsTable)
+    .set({ updated_at: new Date() })
+    .where(eq(chatThreadsTable.id, threadId));
 }
