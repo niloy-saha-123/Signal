@@ -1,3 +1,6 @@
+// Freeform board — drag-to-arrange score cards. Preview cards are shown ONLY with
+// no session (dev-only preview); an authenticated fetch failure throws to the error
+// boundary instead of rendering fake cards.
 import { ApiError, getCompetitorScore, listCompetitors } from "@/lib/api";
 import { previewBoardCards } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
@@ -18,30 +21,23 @@ function toBoardCards(cards: { id: string; name: string; score: number }[]): Boa
 
 export default async function Page() {
   const token = await getOptionalAccessToken();
-  let cards = toBoardCards(previewBoardCards());
+
+  let cards: BoardCardState[] = toBoardCards(previewBoardCards());
 
   if (token) {
-    try {
-      const competitors = await listCompetitors(token);
-      const scored = await Promise.all(
-        competitors.map(async (competitor) => {
-          const score = await getCompetitorScore(competitor.id, token).catch((error) => {
-            if (error instanceof ApiError && error.status === 404) return null;
-            console.error("Failed to fetch competitor score", {
-              competitorId: competitor.id,
-              error,
-            });
-            return null;
-          });
-          return score ? { id: competitor.id, name: competitor.name, score: score.score } : null;
-        }),
-      );
-      cards = toBoardCards(
-        scored.filter((card): card is { id: string; name: string; score: number } => card !== null),
-      );
-    } catch {
-      cards = toBoardCards(previewBoardCards());
-    }
+    const competitors = await listCompetitors(token);
+    const scored = await Promise.all(
+      competitors.map(async (competitor) => {
+        const score = await getCompetitorScore(competitor.id, token).catch((error) => {
+          if (error instanceof ApiError && error.status === 404) return null;
+          return null;
+        });
+        return score ? { id: competitor.id, name: competitor.name, score: score.score } : null;
+      })
+    );
+    cards = toBoardCards(
+      scored.filter((card): card is { id: string; name: string; score: number } => card !== null)
+    );
   }
 
   return (

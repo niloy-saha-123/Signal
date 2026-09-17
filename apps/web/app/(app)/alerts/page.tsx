@@ -3,25 +3,7 @@ import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { PREVIEW_ALERTS, PREVIEW_COMPETITORS } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 
-export default async function Page() {
-  const token = await getOptionalAccessToken();
-  let competitors = PREVIEW_COMPETITORS;
-  let alerts = PREVIEW_ALERTS;
-
-  if (token) {
-    try {
-      competitors = await listCompetitors(token);
-      const competitorIds = competitors.map((competitor) => competitor.id);
-      alerts =
-        competitorIds.length > 0
-          ? (await listAlerts({ competitor_ids: competitorIds, limit: 100 }, token)).data
-          : [];
-    } catch {
-      competitors = PREVIEW_COMPETITORS;
-      alerts = PREVIEW_ALERTS;
-    }
-  }
-
+function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PREVIEW_ALERTS) {
   const names = new Map(competitors.map((competitor) => [competitor.id, competitor.name]));
 
   const exportRows = alerts.map((alert) => ({
@@ -94,4 +76,21 @@ export default async function Page() {
       )}
     </div>
   );
+}
+
+export default async function Page() {
+  const token = await getOptionalAccessToken();
+
+  if (!token) {
+    return renderAlerts(PREVIEW_COMPETITORS, PREVIEW_ALERTS);
+  }
+
+  const competitors = await listCompetitors(token);
+  const competitorIds = competitors.map((competitor) => competitor.id);
+  const alerts =
+    competitorIds.length > 0
+      ? (await listAlerts({ competitor_ids: competitorIds, limit: 100 }, token)).data
+      : [];
+
+  return renderAlerts(competitors, alerts);
 }

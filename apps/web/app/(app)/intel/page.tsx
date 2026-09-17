@@ -14,49 +14,8 @@ type IntelSearch = {
   to?: string;
 };
 
-export default async function IntelPage({
-  searchParams,
-}: {
-  searchParams: Promise<IntelSearch>;
-}) {
-  const params = await searchParams;
-  const token = await getOptionalAccessToken();
-
-  let competitors = PREVIEW_COMPETITORS;
-  let signals = PREVIEW_SIGNALS;
-
-  if (token) {
-    try {
-      competitors = await listCompetitors(token);
-      const competitorIds = competitors.map((competitor) => competitor.id);
-      if (competitorIds.length === 0) {
-        signals = [];
-      } else {
-        const result = await listSignals(
-          {
-            competitor_ids: params.competitor_id ? [params.competitor_id] : competitorIds,
-            sources: params.source ? [params.source as SignalSource] : undefined,
-            created_after: params.from || undefined,
-            created_before: params.to || undefined,
-            limit: 100,
-          },
-          token,
-        );
-        signals = result.data;
-      }
-    } catch {
-      competitors = PREVIEW_COMPETITORS;
-      signals = PREVIEW_SIGNALS;
-    }
-  }
-
-  const visibleSignals = signals.filter((signal) => {
-    if (params.competitor_id && signal.competitor_id !== params.competitor_id) return false;
-    if (params.source && signal.source !== params.source) return false;
-    return true;
-  });
-
-  const exportRows = visibleSignals.map((signal) => ({
+function renderIntel(competitors: typeof PREVIEW_COMPETITORS, signals: typeof PREVIEW_SIGNALS) {
+  const exportRows = signals.map((signal) => ({
     source: signal.source,
     title: signal.title ?? "",
     text: signal.raw_text,
@@ -91,13 +50,41 @@ export default async function IntelPage({
         />
       </div>
       <IntelFilters competitors={competitors} />
-      <DataCoverage dates={visibleSignals.map((signal) => signal.collected_at)} />
+      <DataCoverage dates={signals.map((signal) => signal.collected_at)} />
       <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-5 sm:p-6">
-        <SignalFeed
-          signals={visibleSignals}
-          competitorIds={competitors.map((competitor) => competitor.id)}
-        />
+        <SignalFeed signals={signals} competitorIds={competitors.map((competitor) => competitor.id)} />
       </div>
     </div>
   );
+}
+
+export default async function IntelPage({
+  searchParams,
+}: {
+  searchParams: Promise<IntelSearch>;
+}) {
+  const params = await searchParams;
+  const token = await getOptionalAccessToken();
+
+  if (!token) {
+    return renderIntel(PREVIEW_COMPETITORS, PREVIEW_SIGNALS);
+  }
+
+  const competitors = await listCompetitors(token);
+  const competitorIds = competitors.map((competitor) => competitor.id);
+  const result =
+    competitorIds.length === 0
+      ? { data: [] }
+      : await listSignals(
+          {
+            competitor_ids: params.competitor_id ? [params.competitor_id] : competitorIds,
+            sources: params.source ? [params.source as SignalSource] : undefined,
+            created_after: params.from || undefined,
+            created_before: params.to || undefined,
+            limit: 100,
+          },
+          token
+        );
+
+  return renderIntel(competitors, result.data);
 }

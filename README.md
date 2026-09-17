@@ -167,7 +167,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 
 | | |
 |---|---|
-| **Next.js** | Command center — Briefing, Radar, Intel, Chat, Alerts, Board |
+| **Next.js** | Command center — landing, Briefing, Radar, Intel, Discovery, Company, Chat, Alerts, Board, Settings |
 | **Recharts** | Signal Score sparklines, mention volume trends, sentiment over time, department hiring charts |
 | **Socket.io client** | Real-time alert display |
 
@@ -242,10 +242,11 @@ All routes are authenticated with a Supabase JWT (`Authorization: Bearer …`) a
 | Alerts | `GET /api/alerts` |
 | Chat | `POST /api/chat` — SSE: `event: token`* → `event: result` |
 | Chat threads | `POST/GET /api/chat-threads`, `GET /:id/messages`, `GET /:id/checkpoints`, `POST /:id/regenerate`, `DELETE /:id` |
-| Company profile | `GET/POST /api/company-profile` |
-| Company documents | `POST /api/company-documents` (file upload), `POST /api/company-documents/text` (pasted text) |
-| Discovery | `POST /api/discovery/trigger`, `POST /api/discovery/:threadId/resume` (`{decision: "confirm" \| "dismiss"}`) |
-| Workspaces | `/api/workspaces` |
+| Company profile | `GET/POST /api/company-profile`, `GET/PUT /api/company-profile/signal-goal` |
+| Company documents | `GET/POST /api/company-documents` (file upload), `POST /api/company-documents/text` (pasted text) |
+| Discovery | `GET /api/tracked-entities`, `POST /api/discovery/trigger`, `POST /api/discovery/:threadId/resume` (`{decision: "confirm" \| "dismiss"}`) |
+| Dashboard | `GET /api/dashboard/summary` |
+| Workspaces | `GET/POST/PATCH /api/workspaces` |
 
 Chat answers arrive as SSE frames: `token` frames stream the draft live, then a `result` frame carries the citation-checked answer (or a structured refusal). The regenerated answer from `POST /api/chat-threads/:id/regenerate` forks a fresh branch from a checkpoint — the original thread history is untouched.
 
@@ -317,9 +318,9 @@ signal/
     │   └── scripts/                     # backfill, backtest, eval, promote, rag-eval, …
     │
     └── web/                             # Frontend: Next.js command center
-        ├── app/                         # briefing, radar, intel, chat, alerts, settings, board
+        ├── app/                         # landing, briefing, intel, discovery, company, alerts, board, chat, radar, settings
         ├── components/                  # charts, cards, chat, feed, command bar
-        └── lib/                         # api client, chat-stream, socket
+        └── lib/                         # api client, chat-stream, socket, attachments, export
 ```
 
 ---
@@ -387,8 +388,6 @@ CIRCUIT_TIMEOUT_MS=1800000
 
 - **Chat as a control plane.** Tell the chatbot to create a competitor, run an analysis, or update your company goals — it acts, after asking you to confirm any change that touches data.
 - **Long-term memory.** Signal will remember the important facts about your company and your preferences across conversations, not just within a single thread.
-- **A redesigned dashboard.** Left-nav, a pinned chat panel, and an analytics board — charts, KPIs, and a discovery board for triaging suggested competitors.
-- **A public landing page.** The marketing site for new visitors.
 
 ---
 

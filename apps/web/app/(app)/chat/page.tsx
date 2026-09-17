@@ -1,20 +1,9 @@
 import { ChatInterface } from "@/components/ChatInterface";
 import { listCompetitors } from "@/lib/api";
-import { PREVIEW_COMPETITORS } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 
 export default async function Page() {
   const token = await getOptionalAccessToken();
-  let competitorIds = PREVIEW_COMPETITORS.map((competitor) => competitor.id);
-
-  if (token) {
-    try {
-      const competitors = await listCompetitors(token);
-      competitorIds = competitors.filter((competitor) => competitor.is_active).map((c) => c.id);
-    } catch {
-      competitorIds = PREVIEW_COMPETITORS.map((competitor) => competitor.id);
-    }
-  }
 
   if (!token) {
     return (
@@ -26,6 +15,9 @@ export default async function Page() {
       </div>
     );
   }
+
+  const competitors = await listCompetitors(token);
+  const competitorIds = competitors.filter((competitor) => competitor.is_active).map((c) => c.id);
 
   return (
     <div className="h-[calc(100vh-9rem)] overflow-hidden rounded-[1.6rem] border border-studio-line bg-studio-paper">
