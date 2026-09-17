@@ -1,26 +1,28 @@
 // Checkpointed chat graph — the multi-turn successor to the single-turn
-// runChatAgent. The retrieval → rerank → citation-enforcement pipeline is
-// unchanged from chat-agent.ts Phase 1; this file restructures it into four
-// LangGraph nodes and adds a PostgresSaver-checkpointed `messages` channel so
-// a thread carries its conversation across invokes.
+// runChatAgent. Phase 4 replaces the deterministic retrieve node with a
+// tool-calling stage: the generate node's model is bound to retrieve_signals
+// and may call it zero, one, or multiple times (each time re-querying
+// Signal's stored evidence) before producing its final answer. The compaction
+// and citation-enforcement stages are unchanged from Phases 1-2.
 //
 // Nodes:
-//   1. retrieveNode — hybridRetrieve + rerankChunks; short-circuits to a
-//      first-class RefusalResult (never a thrown error, never an LLM call)
-//      when there is no usable evidence.
-//   2. compactNode — once the thread exceeds MESSAGE_WINDOW_SIZE, collapses
+//   1. compactNode — once the thread exceeds MESSAGE_WINDOW_SIZE, collapses
 //      everything older than the last window into a rolling `summary` via one
-//      cheap-model call. No-op when the window holds the whole thread.
-//   3. generateNode — builds the prompt from summary + last-N verbatim
-//      messages + formatted evidence + company context, streams Claude, and
-//      tracks cost/latency. Retried natively on retryable LLM errors.
+//      cheap-model call. Also resets the per-turn loop state (nonce,
+//      iterationCount, loopMessages) for this invoke.
+//   2. generateNode — builds the prompt (system + summary + last-N verbatim),
+//      streams a tool-calling Claude, and either loops back through the
+//      retrieve node (tool calls) or finalizes a draft. Tracks cost/latency.
+//   3. retrieveNode — executes each retrieve_signals call the model made
+//      (hybridRetrieve + rerankChunks), returning evidence text (nonce-wrapped)
+//      to the model and accumulating RerankedChunk[] for citation enforcement.
 //   4. citationCheckNode — enforceCitations on the assembled draft, sets
 //      citation_result to a verified answer or a refusal.
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { ChatAnthropic } from "@langchain/anthropic";
-import type { AIMessageChunk } from "@langchain/core/messages";
-import { AIMessage, BaseMessage } from "@langchain/core/messages";
+import { AIMessage, AIMessageChunk, BaseMessage, ToolMessage } from "@langchain/core/messages";
+import { tool } from "@langchain/core/tools";
 import {
   Annotation,
   END,
@@ -64,7 +66,11 @@ const PREFERRED_MODEL = "claude-sonnet";
 const COMPACT_MODEL = "claude-haiku";
 export const MESSAGE_WINDOW_SIZE = 10;
 
-export const CHAT_RECURSION_LIMIT = 10;
+// Soft cap on retrieve_signals tool calls per turn: an answer needing more than
+// 3 re-queries in one turn is a bad query, not something to keep looping on.
+// CHAT_RECURSION_LIMIT stays as the hard backstop above it.
+export const MAX_RETRIEVAL_ITERATIONS = 3;
+export const CHAT_RECURSION_LIMIT = 15;
 
 // Checkpoint-namespace prefix for the streamed answer node; chat-agent.ts's
 // message callback filters on it. Exported so the name and its only consumer
@@ -72,8 +78,11 @@ export const CHAT_RECURSION_LIMIT = 10;
 export const GENERATE_NODE_NAME = "generate";
 
 const DEFAULT_SYSTEM_PROMPT =
-  "You are Signal's competitive-intelligence analyst. Answer only from the supplied evidence. " +
-  "Be concise, distinguish direct observations from inference, and do not use outside knowledge.";
+  "You are Signal's competitive-intelligence analyst. Use the retrieve_signals tool to " +
+  "gather stored evidence about the competitors in scope before answering, and re-query it " +
+  "with a refined query if the first results are thin. Answer only from that retrieved " +
+  "evidence. Be concise, distinguish direct observations from inference, and do not use " +
+  "outside knowledge.";
 
 const COMPACTION_SYSTEM_PROMPT =
   "Summarize the conversation so far into a concise rolling summary that preserves specific " +
@@ -124,6 +133,15 @@ const ChatGraphState = Annotation.Root({
     default: () => [],
   }),
   draft: Annotation<string>({ reducer: (_prev, next) => next, default: () => "" }),
+  // Per-turn loop state: a fresh nonce (so the security prompt and the
+  // retrieve node's evidence markers agree), the running tool-call iteration
+  // count, and the tool-call/tool-result transcript fed back to the model.
+  nonce: Annotation<string>({ reducer: (_prev, next) => next, default: () => "" }),
+  iterationCount: Annotation<number>({ reducer: (_prev, next) => next, default: () => 0 }),
+  loopMessages: Annotation<BaseMessage[]>({
+    reducer: (_prev, next) => next,
+    default: () => [],
+  }),
 });
 
 type ChatGraphStateType = typeof ChatGraphState.State;
@@ -138,14 +156,6 @@ const RETRY_POLICY = {
   },
 };
 
-function noEvidenceRefusal(reason: string): RefusalResult {
-  return {
-    refused: true,
-    reason,
-    suggested_query: "Try asking about a specific competitor, timeframe, or product feature.",
-  };
-}
-
 function maxOutputTokens(): number {
   const configured = Number(process.env.MAX_TOKENS_PER_CALL ?? DEFAULT_MAX_TOKENS);
   if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_MAX_TOKENS;
@@ -158,8 +168,7 @@ function neutralize(value: string): string {
   return value.replaceAll("EVIDENCE_", "").replaceAll("[signal:", "");
 }
 
-function formatEvidence(chunks: RerankedChunk[], nonce: string): string {
-  const open = `EVIDENCE_${nonce}_START`;
+export function formatEvidence(chunks: RerankedChunk[], nonce: string): string {  const open = `EVIDENCE_${nonce}_START`;
   const close = `EVIDENCE_${nonce}_END`;
   // The budget covers the assembled string, markers and separators included —
   // counting only chunk text overshot MAX_EVIDENCE_LENGTH by ~1KB.
@@ -235,12 +244,6 @@ function formatHistory(messages: BaseMessage[]): string {
     .join("\n");
 }
 
-// The verbatim window (formatHistory) is "the last MESSAGE_WINDOW_SIZE messages
-// before the in-flight question" — the question renders separately as QUESTION:.
-// Collapse is therefore bounded to the messages before that window, not the raw
-// messages.slice(0, messages.length - MESSAGE_WINDOW_SIZE) slice, which would
-// overlap the window by one turn early and put the same message in both summary
-// and verbatim history.
 export function needsCompaction(messages: BaseMessage[]): boolean {
   return messages.slice(0, -1).length > MESSAGE_WINDOW_SIZE;
 }
@@ -268,32 +271,20 @@ function assistantMessage(result: ChatAgentResult): AIMessage {
   return new AIMessage(result.refused ? result.reason : result.answer);
 }
 
-async function retrieveNode(
-  state: ChatGraphStateType,
-  config: LangGraphRunnableConfig
-): Promise<Partial<ChatGraphStateType>> {
-  const query = lastHumanText(state.messages);
-  const signal = config.signal;
-  signal?.throwIfAborted();
-
-  const candidates = await hybridRetrieve(query, state.competitor_ids);
-  if (candidates.length === 0) {
-    const refusal = noEvidenceRefusal("No stored signals matched this question.");
-    return { citation_result: refusal, evidence: [], messages: [assistantMessage(refusal)] };
+// Binding schema only: the model is bound to this tool so it can emit
+// retrieve_signals calls. Execution happens in retrieveNode (below), which needs
+// state.competitor_ids and must capture RerankedChunk[] for citationCheck —
+// neither of which a stateless ToolNode tool can do.
+const retrieveSignalsTool = tool(
+  async () => "retrieval is handled by the retrieveNode",
+  {
+    name: "retrieve_signals",
+    description:
+      "Retrieve stored competitor signals relevant to a query. Use this to gather evidence " +
+      "before answering; you may call it again with a refined query if the first results are thin.",
+    schema: z.object({ query: z.string() }),
   }
-  signal?.throwIfAborted();
-
-  const evidence = await rerankChunks(query, candidates);
-  if (evidence.length === 0) {
-    const refusal = noEvidenceRefusal(
-      "The available signals were not relevant enough to answer reliably."
-    );
-    return { citation_result: refusal, evidence: [], messages: [assistantMessage(refusal)] };
-  }
-  signal?.throwIfAborted();
-
-  return { evidence };
-}
+);
 
 async function summarizeConversation(
   state: ChatGraphStateType,
@@ -338,9 +329,60 @@ async function compactNode(
   state: ChatGraphStateType,
   config: LangGraphRunnableConfig
 ): Promise<Partial<ChatGraphStateType>> {
-  if (!needsCompaction(state.messages)) return {};
+  // Per-turn reset: a fresh nonce for the security prompt/evidence markers and
+  // a clean loop transcript for this invoke's tool-calling stage.
+  const reset = { nonce: randomUUID(), iterationCount: 0, loopMessages: [] };
+  if (!needsCompaction(state.messages)) return reset;
   const summary = await summarizeConversation(state, config);
-  return { summary };
+  return { ...reset, summary };
+}
+
+async function runRetrieval(query: string, competitorIds: string[]): Promise<RerankedChunk[]> {
+  const candidates = await hybridRetrieve(query, competitorIds);
+  if (candidates.length === 0) return [];
+  return rerankChunks(query, candidates);
+}
+
+async function retrieveNode(
+  state: ChatGraphStateType
+): Promise<Partial<ChatGraphStateType>> {
+  const last = state.loopMessages[state.loopMessages.length - 1];
+  if (!(last instanceof AIMessage) || !last.tool_calls?.length) return {};
+
+  const toolMessages: ToolMessage[] = [];
+  let evidence = state.evidence;
+
+  for (const call of last.tool_calls) {
+    if (call.name !== "retrieve_signals") continue;
+    const query = typeof call.args?.query === "string" ? call.args.query : "";
+    try {
+      const chunks = await withCircuitBreaker("chat:retrieve", () =>
+        runRetrieval(query, state.competitor_ids)
+      );
+      evidence = [...evidence, ...chunks];
+      const content =
+        chunks.length === 0
+          ? `EVIDENCE_${state.nonce}_START\n(no stored signals matched this query)\nEVIDENCE_${state.nonce}_END`
+          : formatEvidence(chunks, state.nonce);
+      toolMessages.push(
+        new ToolMessage({ content, tool_call_id: call.id ?? "", name: "retrieve_signals" })
+      );
+    } catch (err) {
+      // Failure semantics: a failed retrieval becomes a legible tool-error
+      // message the model can react to (refine, retry, or stop), never an
+      // exception that kills the turn.
+      toolMessages.push(
+        new ToolMessage({
+          content: `retrieve_signals failed: ${err instanceof Error ? err.message : String(err)}`,
+          tool_call_id: call.id ?? "",
+          name: "retrieve_signals",
+          status: "error",
+        })
+      );
+    }
+  }
+
+  return { messages: toolMessages, loopMessages: [...state.loopMessages, ...toolMessages], evidence };
 }
 
 async function generateNode(
@@ -362,65 +404,61 @@ async function generateNode(
     "chat_agent",
     { competitorId: primaryCompetitorId, identity: { kind: "run", runId } },
     async () => {
-      const nonce = randomUUID();
       const systemPrompt = [
         activePrompt ?? DEFAULT_SYSTEM_PROMPT,
-        evidenceSecurityPrompt(nonce),
+        evidenceSecurityPrompt(state.nonce),
         companyContext,
       ]
         .filter(Boolean)
         .join("\n\n");
-      const boundedEvidence = state.evidence.slice(0, MAX_EVIDENCE_CHUNKS);
 
       const modelAlias = await selectModel(PREFERRED_MODEL, true);
       const model = new ChatAnthropic({
         model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
         clientOptions: { timeout: LLM_TIMEOUT_MS },
         maxTokens: maxOutputTokens(),
-      });
+      }).bindTools([retrieveSignalsTool]);
 
       const human = [
         buildConversationBlock(state.messages, state.summary),
         `QUESTION:\n${query}`,
-        formatEvidence(boundedEvidence, nonce),
       ]
         .filter(Boolean)
         .join("\n\n");
 
-      const stream = await model.stream(
-        [
-          ["system", systemPrompt],
-          ["human", human],
-        ],
-        { signal }
+      // Native tool-loop transcript after the human block — the model sees its
+      // prior retrieve_signals calls and their results as proper messages.
+      const stream = await withCircuitBreaker("chat:generate", () =>
+        model.stream([["system", systemPrompt], ["human", human], ...state.loopMessages], {
+          signal,
+        })
       );
 
       let draft = "";
-      let usage: { input_tokens?: number; output_tokens?: number } | undefined;
-      const streamed = await withCircuitBreaker("chat:generate", async () => {
-        let text = "";
-        let used: { input_tokens?: number; output_tokens?: number } | undefined;
-        for await (const chunk of stream) {
-          text += streamText(chunk);
-          if (chunk.usage_metadata) used = chunk.usage_metadata;
-        }
-        return { text: text.trim(), used };
-      });
-      draft = streamed.text;
-      usage = streamed.used;
+      let response = new AIMessageChunk({ content: "" });
+      for await (const chunk of stream) {
+        response = response.concat(chunk);
+        draft += streamText(chunk);
+      }
+      draft = draft.trim();
 
       await trackCost(
         "chat_agent",
         modelAlias,
-        usage?.input_tokens ?? 0,
-        usage?.output_tokens ?? 0,
+        response.usage_metadata?.input_tokens ?? 0,
+        response.usage_metadata?.output_tokens ?? 0,
         { competitorId: primaryCompetitorId, identity: { kind: "run", runId } }
       );
 
+      const iterationCount = state.iterationCount + 1;
+
+      if (response.tool_calls?.length) {
+        return { loopMessages: [...state.loopMessages, response], iterationCount };
+      }
       if (!draft) {
         throw new Error("chat-agent: Claude returned no text content");
       }
-      return { draft };
+      return { draft, iterationCount };
     }
   );
 }
@@ -434,23 +472,27 @@ async function citationCheckNode(
   return { citation_result: result, messages: [assistantMessage(result)] };
 }
 
-// Both refusal short-circuits leave `evidence` empty; a non-empty channel is the
-// one condition for proceeding past retrieval. Evidence is last-value, so
-// conditional-on-evidence (rather than on citation_result) avoids a stale
-// turn-N-1 citation_result from the checkpoint short-circuiting turn N.
-function afterRetrieve(state: ChatGraphStateType): "compact" | "end" {
-  return state.evidence.length > 0 ? "compact" : "end";
+function afterGenerate(state: ChatGraphStateType): "retrieve" | "citationCheck" {
+  // The soft cap wins over tool-call detection: once hit, stop retrieving and
+  // go verify whatever draft (possibly empty -> refusal) exists.
+  if (state.iterationCount >= MAX_RETRIEVAL_ITERATIONS) return "citationCheck";
+  const last = state.loopMessages[state.loopMessages.length - 1];
+  const hasToolCalls = last instanceof AIMessage && (last.tool_calls?.length ?? 0) > 0;
+  return hasToolCalls ? "retrieve" : "citationCheck";
 }
 
 const builder = new StateGraph(ChatGraphState)
-  .addNode("retrieve", retrieveNode)
   .addNode("compact", compactNode, { retryPolicy: RETRY_POLICY })
   .addNode(GENERATE_NODE_NAME, generateNode, { retryPolicy: RETRY_POLICY })
+  .addNode("retrieve", retrieveNode, { retryPolicy: RETRY_POLICY })
   .addNode("citationCheck", citationCheckNode)
-  .addEdge(START, "retrieve")
-  .addConditionalEdges("retrieve", afterRetrieve, { compact: "compact", end: END })
+  .addEdge(START, "compact")
   .addEdge("compact", "generate")
-  .addEdge("generate", "citationCheck")
+  .addConditionalEdges("generate", afterGenerate, {
+    retrieve: "retrieve",
+    citationCheck: "citationCheck",
+  })
+  .addEdge("retrieve", "generate")
   .addEdge("citationCheck", END);
 
 // PostgresSaver does NOT auto-create its tables (unlike PostgresStore), so the
