@@ -6,7 +6,7 @@ export function TopBar() {
   
   // Get page title based on current route
   const getPageTitle = () => {
-    if (pathname === "/") return "Briefing";
+    if (pathname === "/briefing") return "Briefing";
     if (pathname === "/intel") return "Intel";
     if (pathname === "/discovery") return "Discovery";
     if (pathname === "/alerts") return "Alerts";

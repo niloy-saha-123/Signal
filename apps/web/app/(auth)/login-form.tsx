@@ -43,24 +43,24 @@ export function LoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1 text-sm text-slate-700">
+      <label className="flex flex-col gap-1 text-sm text-studio-muted">
         Email
         <input
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           required
-          className="rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+          className="rounded-md border border-studio-line px-3 py-2 text-sm text-studio-ink outline-none focus:border-studio-action"
         />
       </label>
-      <label className="flex flex-col gap-1 text-sm text-slate-700">
+      <label className="flex flex-col gap-1 text-sm text-studio-muted">
         Password
         <input
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           required
-          className="rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+          className="rounded-md border border-studio-line px-3 py-2 text-sm text-studio-ink outline-none focus:border-studio-action"
         />
       </label>
       {error ? (
@@ -71,25 +71,25 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+        className="rounded-md bg-studio-action px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-studio-action-hover disabled:opacity-50"
       >
         Log in
       </button>
-      <div className="flex items-center gap-3 text-xs text-slate-400">
-        <div className="h-px flex-1 bg-slate-200" />
+      <div className="flex items-center gap-3 text-xs text-studio-muted">
+        <div className="h-px flex-1 bg-studio-line" />
         or
-        <div className="h-px flex-1 bg-slate-200" />
+        <div className="h-px flex-1 bg-studio-line" />
       </div>
       <button
         type="button"
         onClick={handleGoogle}
-        className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+        className="rounded-md border border-studio-line px-4 py-2 text-sm font-medium text-studio-ink transition-colors hover:bg-studio-sky-soft"
       >
         Continue with Google
       </button>
-      <p className="text-center text-sm text-slate-500">
+      <p className="text-center text-sm text-studio-muted">
         No account yet?{" "}
-        <Link href="/signup" className="font-medium text-indigo-600">
+        <Link href="/signup" className="font-medium text-studio-action">
           Sign up
         </Link>
       </p>
