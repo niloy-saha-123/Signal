@@ -322,6 +322,17 @@ export function listChatThreads(token?: string): Promise<ChatThreadSummary[]> {
   return request<ChatThreadSummary[]>("/api/chat-threads", undefined, token);
 }
 
+export async function deleteChatThread(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/chat-threads/${id}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
+}
+
 export function createChatThread(): Promise<ChatThreadSummary> {
   return request<ChatThreadSummary>("/api/chat-threads", { method: "POST", body: "{}" });
 }
@@ -418,11 +429,16 @@ export async function listCompanyDocuments(token?: string) {
 export async function uploadCompanyDocument(file: File) {
   const formData = new FormData();
   formData.append("file", file);
-  return request("/api/company-documents", {
+  const res = await fetch(`${API_BASE}/api/company-documents`, {
     method: "POST",
-    body: formData as unknown as BodyInit,
-    headers: {},
+    headers: await authHeader(),
+    body: formData,
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
+  return res.json();
 }
 
 export async function submitCompanyText(text: string) {
@@ -443,4 +459,24 @@ export interface DashboardSummary {
 
 export async function getDashboardSummary(token?: string) {
   return request<DashboardSummary>("/api/dashboard/summary", undefined, token);
+}
+
+// ── Workspace (account / profile) ────────────────────────────────────────────
+
+export interface Workspace {
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: string;
+}
+
+export function getWorkspace(token?: string): Promise<Workspace> {
+  return request<Workspace>("/api/workspaces", undefined, token);
+}
+
+export function renameWorkspace(name: string): Promise<Workspace> {
+  return request<Workspace>("/api/workspaces", {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
 }

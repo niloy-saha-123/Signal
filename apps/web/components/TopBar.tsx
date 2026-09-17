@@ -1,5 +1,6 @@
 "use client";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 
 export function TopBar() {
   const pathname = usePathname();
@@ -10,6 +11,7 @@ export function TopBar() {
     if (pathname === "/discovery") return "Discovery";
     if (pathname === "/alerts") return "Alerts";
     if (pathname === "/board") return "Board";
+    if (pathname === "/chat") return "Chat";
     if (pathname === "/settings") return "Settings";
     if (pathname.startsWith("/radar")) return "Radar";
     if (pathname.startsWith("/company")) return "Company";
@@ -26,11 +28,11 @@ export function TopBar() {
         <kbd className="hidden rounded-full border border-studio-line bg-studio-sky-soft px-2 py-1 text-xs text-studio-muted lg:block">
           ⌘K
         </kbd>
-        <button
+        <Link
+          href="/settings"
           className="flex h-10 w-10 items-center justify-center rounded-full bg-studio-ink text-sm font-extrabold text-white transition-all hover:bg-[#071625] active:scale-95"
-          aria-label="User profile"
+          aria-label="Account settings"
         >
-          <span className="sr-only">Profile</span>
           <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
             <path
               fillRule="evenodd"
@@ -38,7 +40,7 @@ export function TopBar() {
               clipRule="evenodd"
             />
           </svg>
-        </button>
+        </Link>
       </div>
     </header>
   );

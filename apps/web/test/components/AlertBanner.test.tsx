@@ -45,7 +45,7 @@ describe("AlertBanner", () => {
     act(() => {
       capturedHandler(payload);
     });
-    expect(screen.getByText("pricing_cut")).toBeInTheDocument();
+    expect(screen.getByText("pricing cut")).toBeInTheDocument();
   });
 
   it("removes a banner when its dismiss button is clicked", () => {
@@ -54,7 +54,7 @@ describe("AlertBanner", () => {
       capturedHandler(payload);
     });
     fireEvent.click(screen.getByRole("button", { name: "Dismiss alert" }));
-    expect(screen.queryByText("pricing_cut")).not.toBeInTheDocument();
+    expect(screen.queryByText("pricing cut")).not.toBeInTheDocument();
   });
 
   it("unsubscribes on unmount", () => {
@@ -70,9 +70,9 @@ describe("AlertBanner", () => {
         capturedHandler({ ...payload, id: `alert-${i}`, pattern: `pattern-${i}` });
       }
     });
-    expect(screen.getAllByRole("button", { name: "Dismiss alert" })).toHaveLength(20);
-    // Newest-first, oldest dropped: the most recent 20 (alert-5..alert-24) survive.
+    expect(screen.getAllByRole("button", { name: "Dismiss alert" })).toHaveLength(5);
+    // Newest-first, oldest dropped: the most recent 5 (alert-20..alert-24) survive.
     expect(screen.getByText("pattern-24")).toBeInTheDocument();
-    expect(screen.queryByText("pattern-4")).not.toBeInTheDocument();
+    expect(screen.queryByText("pattern-19")).not.toBeInTheDocument();
   });
 });

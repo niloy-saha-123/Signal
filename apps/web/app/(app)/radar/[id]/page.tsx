@@ -1,13 +1,21 @@
-// apps/web/app/radar/[id]/page.tsx
 // Competitor radar — Signal Score over time, mention volume trend, sentiment trajectory,
-// hiring velocity by department. GET /:id/scores backs SignalScoreCard's sparkline;
-// GET /:id/trend and GET /:id/hiring back TrendChart's other two panels and HiringChart.
+// hiring velocity by department. GET /:id/scores backs the sparkline; GET /:id/trend and
+// GET /:id/hiring back the other panels.
 import { notFound } from "next/navigation";
-import { ApiError, getCompetitor, getCompetitorHiring, getCompetitorScore, getCompetitorScoreHistory, getCompetitorTrend } from "@/lib/api";
+import {
+  ApiError,
+  getCompetitor,
+  getCompetitorHiring,
+  getCompetitorScore,
+  getCompetitorScoreHistory,
+  getCompetitorTrend,
+} from "@/lib/api";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 import { SignalScoreCard } from "@/components/SignalScoreCard";
 import { TrendChart } from "@/components/TrendChart";
 import { HiringChart } from "@/components/HiringChart";
+import { ExportCsvButton } from "@/components/ExportCsvButton";
+import { AnalyzeButton } from "@/components/AnalyzeButton";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -27,26 +35,45 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       console.error("Failed to fetch competitor score", { competitorId: id, error });
       return null;
     }),
-    getCompetitorScoreHistory(id, 30, token).catch((error) => {
-      console.error("Failed to fetch competitor score history", { competitorId: id, error });
-      return [];
-    }),
-    getCompetitorTrend(id, 30, token).catch((error) => {
-      console.error("Failed to fetch competitor trend", { competitorId: id, error });
-      return [];
-    }),
-    getCompetitorHiring(id, 30, token).catch((error) => {
-      console.error("Failed to fetch competitor hiring", { competitorId: id, error });
-      return [];
-    }),
+    getCompetitorScoreHistory(id, 90, token).catch(() => []),
+    getCompetitorTrend(id, 30, token).catch(() => []),
+    getCompetitorHiring(id, 30, token).catch(() => []),
   ]);
 
+  const scoreExportRows = history.map((row) => ({
+    date: row.computed_at,
+    score: row.score,
+    delta_7d: row.delta_7d ?? "",
+    delta_30d: row.delta_30d ?? "",
+  }));
+
   return (
-    <div className="flex flex-col gap-8">
-      <h1 className="font-serif text-4xl font-semibold text-slate-900">{competitor.name}</h1>
-      
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+            {competitor.name}
+          </h1>
+          <p className="text-sm text-studio-muted">Signal Score, trend, and hiring over time.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <AnalyzeButton competitorId={competitor.id} />
+          <ExportCsvButton
+            rows={scoreExportRows}
+            columns={[
+              { key: "date", label: "Date" },
+              { key: "score", label: "Signal Score" },
+              { key: "delta_7d", label: "Δ 7d" },
+              { key: "delta_30d", label: "Δ 30d" },
+            ]}
+            filename={`${competitor.name.toLowerCase().replace(/\s+/g, "-")}-score.csv`}
+            label="Export score"
+          />
+        </div>
+      </div>
+
       {score ? (
-        <div className="rounded-2xl bg-white p-6 shadow-sm">
+        <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
           <SignalScoreCard
             competitorName={competitor.name}
             score={score.score}
@@ -55,16 +82,16 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           />
         </div>
       ) : (
-        <div className="flex items-center justify-center rounded-2xl bg-white p-12 shadow-sm">
-          <p className="font-sans text-sm text-slate-400">No score yet.</p>
+        <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-12 text-center">
+          <p className="text-sm text-studio-muted">No score yet.</p>
         </div>
       )}
-      
-      <div className="rounded-2xl bg-white p-6 shadow-sm">
+
+      <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
         <TrendChart data={trend} />
       </div>
-      
-      <div className="rounded-2xl bg-white p-6 shadow-sm">
+
+      <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
         <HiringChart data={hiring} />
       </div>
     </div>

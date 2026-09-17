@@ -167,3 +167,50 @@ export function previewBoardCards() {
     { id: PREVIEW_LUMEN_ID, name: "Lumen", score: 61 },
   ];
 }
+
+export function previewTrackedEntities() {
+  return [
+    {
+      id: "preview-te-1",
+      workspace_id: "33333333-3333-4333-8333-333333333333",
+      source: "discovered",
+      status: "candidate",
+      candidate_name: "Rivalex",
+      candidate_domain: "rivalex.com",
+      relationship_type: "competitor",
+      relationship_confidence: 0.82,
+      candidate_reason: "Same ICP, launched a directly competing feature last month.",
+      competitor_id: null,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: "preview-te-2",
+      workspace_id: "33333333-3333-4333-8333-333333333333",
+      source: "user_added",
+      status: "confirmed",
+      candidate_name: "Northstar",
+      candidate_domain: "northstar.io",
+      relationship_type: "competitor",
+      relationship_confidence: 1,
+      candidate_reason: "Tracked since launch.",
+      competitor_id: PREVIEW_NORTHSTAR_ID,
+      created_at: oldest,
+      updated_at: now,
+    },
+    {
+      id: "preview-te-3",
+      workspace_id: "33333333-3333-4333-8333-333333333333",
+      source: "discovered",
+      status: "dismissed",
+      candidate_name: "Notion",
+      candidate_domain: "notion.so",
+      relationship_type: "other",
+      relationship_confidence: 0.4,
+      candidate_reason: "Adjacent, not a real competitor.",
+      competitor_id: null,
+      created_at: earlier,
+      updated_at: earlier,
+    },
+  ];
+}

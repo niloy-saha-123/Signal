@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { listCompetitors, createChatThread } from "../lib/api";
+import { listCompetitors } from "../lib/api";
 import { ChatInterface } from "./ChatInterface";
 
 export function ChatSidebar() {
@@ -16,21 +16,8 @@ export function ChatSidebar() {
         setCompetitorIds(activeIds);
         setLoading(false);
       })
-      .catch((error) => {
-        console.error("Failed to load competitors:", error);
-        setLoading(false);
-      });
+      .catch(() => setLoading(false));
   }, []);
-
-  const handleNewChat = async () => {
-    try {
-      await createChatThread();
-      // Force ChatInterface to refresh by changing key
-      setChatKey((prev) => prev + 1);
-    } catch (error) {
-      console.error("Failed to create new chat:", error);
-    }
-  };
 
   if (isCollapsed) {
     return (
@@ -49,12 +36,12 @@ export function ChatSidebar() {
   }
 
   return (
-    <aside className="fixed top-0 right-0 z-20 flex h-screen w-80 flex-col border-l border-studio-line bg-studio-paper">
-      <div className="flex h-14 items-center justify-between border-b border-studio-line px-4">
+    <aside className="fixed top-0 right-0 z-20 flex h-screen w-96 flex-col border-l border-studio-line bg-studio-paper">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-studio-line px-4">
         <h2 className="text-sm font-semibold text-studio-ink">Chat</h2>
         <div className="flex items-center gap-1">
           <button
-            onClick={handleNewChat}
+            onClick={() => setChatKey((prev) => prev + 1)}
             className="rounded-full px-3 py-1.5 text-xs font-medium text-studio-ink hover:bg-studio-sky-soft"
           >
             New chat
@@ -71,21 +58,20 @@ export function ChatSidebar() {
         </div>
       </div>
 
-      {/* Chat content - clean minimal design */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1">
         {loading ? (
           <div className="flex items-center justify-center p-8">
             <p className="text-sm text-studio-muted">Loading workspace chat…</p>
           </div>
         ) : competitorIds.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-8 text-center">
+          <div className="flex h-full flex-col items-center justify-center p-8 text-center">
             <p className="text-sm leading-relaxed text-studio-muted">
-              Research chat stays tied to collected evidence. Sign in to ask a follow-up
-              against this workspace.
+              Research chat stays tied to collected evidence. Sign in to ask a follow-up against
+              this workspace.
             </p>
           </div>
         ) : (
-          <ChatInterface key={chatKey} competitorIds={competitorIds} />
+          <ChatInterface key={chatKey} competitorIds={competitorIds} showThreads={false} />
         )}
       </div>
     </aside>

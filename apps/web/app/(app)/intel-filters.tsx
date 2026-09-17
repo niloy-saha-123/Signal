@@ -1,6 +1,5 @@
-// apps/web/app/intel-filters.tsx
-// Filter controls for /intel — SignalFeed itself deliberately has no filtering logic (Part 5),
-// this page owns it. Filter state lives in the URL for shareability/bookmarking.
+// Filter controls for /intel — source, competitor, and a date range. Filter state lives in
+// the URL for shareability/bookmarking; SignalFeed itself stays filter-agnostic.
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Competitor } from "@/lib/api";
@@ -19,7 +18,7 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
   }
 
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap items-end gap-3">
       <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
         Source
         <select
@@ -49,6 +48,24 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
             </option>
           ))}
         </select>
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
+        From
+        <input
+          type="date"
+          value={searchParams.get("from") ?? ""}
+          onChange={(event) => updateParam("from", event.target.value)}
+          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
+        />
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
+        To
+        <input
+          type="date"
+          value={searchParams.get("to") ?? ""}
+          onChange={(event) => updateParam("to", event.target.value)}
+          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
+        />
       </label>
     </div>
   );

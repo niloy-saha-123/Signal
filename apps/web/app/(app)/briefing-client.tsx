@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import type { Competitor } from "@/lib/api";
+import type { Competitor, DashboardSummary } from "@/lib/api";
 
 type Movement = {
   id: string;
@@ -14,6 +14,7 @@ type Movement = {
 };
 
 type Props = {
+  summary: DashboardSummary | null;
   highestScore: number;
   highestScoreDelta: number;
   highestScoreCompetitor: string;
@@ -21,7 +22,17 @@ type Props = {
   competitors: Competitor[];
 };
 
+function StatTile({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-[1.4rem] border border-studio-line bg-studio-paper p-5">
+      <p className="text-sm font-semibold text-studio-muted">{label}</p>
+      <p className="font-display text-3xl font-semibold tabular-nums text-studio-ink">{value}</p>
+    </div>
+  );
+}
+
 export function BriefingClient({
+  summary,
   highestScore,
   highestScoreDelta,
   highestScoreCompetitor,
@@ -86,24 +97,11 @@ export function BriefingClient({
         </h1>
       </div>
 
-      <div className="inline-flex gap-2">
-        {[
-          { value: "today" as const, label: "Today" },
-          { value: "7days" as const, label: "7 days" },
-          { value: "30days" as const, label: "30 days" },
-        ].map((option) => (
-          <button
-            key={option.value}
-            onClick={() => setTimeFilter(option.value)}
-            className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${
-              timeFilter === option.value
-                ? "bg-studio-ink text-white"
-                : "bg-studio-paper text-studio-muted hover:bg-studio-sky-soft"
-            }`}
-          >
-            {option.label}
-          </button>
-        ))}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatTile label="Competitors tracked" value={summary?.competitors_tracked ?? 0} />
+        <StatTile label="Signals this week" value={summary?.signals_this_week ?? 0} />
+        <StatTile label="Open alerts" value={summary?.open_alerts ?? 0} />
+        <StatTile label="Pending candidates" value={summary?.pending_candidates ?? 0} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
@@ -130,44 +128,61 @@ export function BriefingClient({
         </div>
 
         <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
-          <p className="text-sm font-bold text-studio-ink">Signal volume</p>
-          <div className="flex h-24 items-end justify-between gap-2">
-            {[40, 52, 48, 56, 64, 60, 88].map((height, i) => (
-              <div key={i} className="flex flex-1 flex-col items-center gap-2">
-                <div
-                  className={`w-full rounded-t-md ${i === 6 ? "bg-studio-action" : "bg-studio-sky"}`}
-                  style={{ height: `${height}%` }}
-                />
-                <span className="text-xs text-studio-muted">{"FSSMTTW"[i]}</span>
+          <p className="text-sm font-bold text-studio-ink">View</p>
+          <div className="inline-flex w-fit gap-2">
+            {[
+              { value: "today" as const, label: "Today" },
+              { value: "7days" as const, label: "7 days" },
+              { value: "30days" as const, label: "30 days" },
+            ].map((option) => (
+              <button
+                key={option.value}
+                onClick={() => setTimeFilter(option.value)}
+                className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${
+                  timeFilter === option.value
+                    ? "bg-studio-ink text-white"
+                    : "bg-studio-paper text-studio-muted hover:bg-studio-sky-soft"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm leading-relaxed text-studio-muted">
+            {movements.length === 0
+              ? "No movements recorded in this window."
+              : `${movements.length} movement${movements.length === 1 ? "" : "s"} across your tracked competitors.`}
+          </p>
+        </div>
+      </div>
+
+      {movements.length > 0 && (
+        <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
+          <h2 className="text-sm font-bold text-studio-ink">The other movements</h2>
+          <div className="flex flex-col divide-y divide-studio-line">
+            {movements.slice(0, 4).map((movement) => (
+              <div key={movement.id} className="flex gap-4 py-4 first:pt-0">
+                <div className="w-24 shrink-0">
+                  <p className="text-xs font-extrabold text-studio-ink">{movement.competitor}</p>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-studio-ink">{movement.title}</p>
+                  <p className="mt-1 text-sm leading-relaxed text-studio-muted">
+                    {movement.detail}
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <span
+                    className={`inline-block rounded-full px-2.5 py-1 text-xs font-extrabold ${getCategoryColor(movement.category)}`}
+                  >
+                    {movement.category}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
         </div>
-      </div>
-
-      <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
-        <h2 className="text-sm font-bold text-studio-ink">The other two</h2>
-        <div className="flex flex-col divide-y divide-studio-line">
-          {movements.slice(0, 2).map((movement) => (
-            <div key={movement.id} className="flex gap-4 py-4 first:pt-0">
-              <div className="w-24 shrink-0">
-                <p className="text-xs font-extrabold text-studio-ink">{movement.competitor}</p>
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-studio-ink">{movement.title}</p>
-                <p className="mt-1 text-sm leading-relaxed text-studio-muted">{movement.detail}</p>
-              </div>
-              <div className="shrink-0">
-                <span
-                  className={`inline-block rounded-full px-2.5 py-1 text-xs font-extrabold ${getCategoryColor(movement.category)}`}
-                >
-                  {movement.category}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 }

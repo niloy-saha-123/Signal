@@ -1,17 +1,13 @@
 // Pushes new alerts into view without a page refresh. AlertCreatedPayload is self-sufficient
-// to render (pattern + confidence) — unlike SignalFeed, this never needs to refetch.
+// to render (pattern + confidence). Mounted in the (app) layout's shell so it lives for the
+// whole client-side session. alert:created is a global broadcast with no per-user dismissal
+// persistence; the cap keeps the toast stack bounded.
 "use client";
 import { useEffect, useState } from "react";
 import type { AlertCreatedPayload } from "@signal/shared";
-import { STATUS_COLORS } from "../lib/chart-colors";
 import { onAlertCreated } from "../lib/socket";
 
-// ponytail: fixed cap, not a "load more"/dismiss-all affordance — this is now mounted in the
-// root layout (apps/web/app/layout.tsx) so it lives for the whole client-side session;
-// alert:created is a global broadcast with no per-user dismissal persistence, so an
-// uncapped array grows for as long as the tab stays open. Revisit if alert volume or a real
-// notification-center UX makes 20 too small.
-const MAX_ALERTS = 20;
+const MAX_ALERTS = 5;
 
 export function AlertBanner() {
   const [alerts, setAlerts] = useState<AlertCreatedPayload[]>([]);
@@ -29,20 +25,22 @@ export function AlertBanner() {
   if (alerts.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-2 p-4">
+    <div className="pointer-events-none fixed top-20 right-6 z-50 flex flex-col gap-2">
       {alerts.map((alert) => (
         <div
           key={alert.id}
-          className="flex items-center justify-between rounded-md border-l-4 bg-white px-4 py-2 shadow-sm"
-          style={{ borderLeftColor: STATUS_COLORS.warning }}
+          className="pointer-events-auto flex items-center justify-between gap-3 rounded-2xl border border-studio-line bg-studio-paper px-4 py-3 shadow-[0_12px_32px_-16px_rgba(10,32,51,0.4)]"
         >
-          <p className="text-sm text-slate-800">
-            New alert: <span className="font-medium">{alert.pattern}</span>
-          </p>
+          <div className="flex items-center gap-2.5">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-studio-action" />
+            <p className="text-sm text-studio-ink">
+              New alert on <span className="font-semibold">{alert.pattern.replace(/_/g, " ")}</span>
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => dismiss(alert.id)}
-            className="text-xs text-slate-400 transition-colors hover:text-slate-600"
+            className="text-xs text-studio-muted transition-colors hover:text-studio-ink"
             aria-label="Dismiss alert"
           >
             ✕

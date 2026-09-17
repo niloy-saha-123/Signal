@@ -5,11 +5,13 @@ const {
   listCompetitorsMock,
   getCompetitorScoreMock,
   listAlertsMock,
+  getDashboardSummaryMock,
   getOptionalAccessTokenMock,
 } = vi.hoisted(() => ({
   listCompetitorsMock: vi.fn(),
   getCompetitorScoreMock: vi.fn(),
   listAlertsMock: vi.fn(),
+  getDashboardSummaryMock: vi.fn(),
   getOptionalAccessTokenMock: vi.fn(),
 }));
 
@@ -22,6 +24,7 @@ vi.mock("@/lib/api", () => ({
   listCompetitors: listCompetitorsMock,
   getCompetitorScore: getCompetitorScoreMock,
   listAlerts: listAlertsMock,
+  getDashboardSummary: getDashboardSummaryMock,
 }));
 
 import BriefingPage from "../../app/(app)/briefing/page";
@@ -31,8 +34,15 @@ describe("BriefingPage", () => {
     listCompetitorsMock.mockReset();
     getCompetitorScoreMock.mockReset();
     listAlertsMock.mockReset();
+    getDashboardSummaryMock.mockReset();
     getOptionalAccessTokenMock.mockReset();
     getOptionalAccessTokenMock.mockResolvedValue("server-token");
+    getDashboardSummaryMock.mockResolvedValue({
+      competitors_tracked: 0,
+      signals_this_week: 0,
+      open_alerts: 0,
+      pending_candidates: 0,
+    });
   });
 
   it("renders the new-workspace empty state without requesting alerts or scores", async () => {

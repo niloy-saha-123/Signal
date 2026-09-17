@@ -1,4 +1,5 @@
 import { listAlerts, listCompetitors } from "@/lib/api";
+import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { PREVIEW_ALERTS, PREVIEW_COMPETITORS } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 
@@ -23,16 +24,39 @@ export default async function Page() {
 
   const names = new Map(competitors.map((competitor) => [competitor.id, competitor.name]));
 
+  const exportRows = alerts.map((alert) => ({
+    competitor: names.get(alert.competitor_id) ?? "Unknown",
+    pattern: alert.pattern.replace(/_/g, " "),
+    interpretation: alert.interpretation,
+    confidence: Math.round(alert.confidence * 100),
+    vulnerability_window_days: alert.vulnerability_window_days ?? "",
+    created_at: alert.created_at,
+  }));
+
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-2">
-        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
-          Alerts
-        </h1>
-        <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
-          Movements that crossed the confidence bar. Each one still points at the evidence
-          that produced it.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-2">
+          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+            Alerts
+          </h1>
+          <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
+            Movements that crossed the confidence bar. Each one still points at the evidence
+            that produced it.
+          </p>
+        </div>
+        <ExportCsvButton
+          rows={exportRows}
+          columns={[
+            { key: "competitor", label: "Competitor" },
+            { key: "pattern", label: "Pattern" },
+            { key: "interpretation", label: "Interpretation" },
+            { key: "confidence", label: "Confidence %" },
+            { key: "vulnerability_window_days", label: "Window (days)" },
+            { key: "created_at", label: "Detected at" },
+          ]}
+          filename="signal-alerts.csv"
+        />
       </div>
       {alerts.length === 0 ? (
         <div className="flex items-center justify-center rounded-[1.6rem] border border-studio-line bg-studio-paper px-8 py-16">
