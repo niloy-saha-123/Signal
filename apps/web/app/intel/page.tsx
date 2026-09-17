@@ -25,9 +25,19 @@ export default async function Page({
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold text-slate-900">Intel</h1>
+    <div className="flex flex-col gap-8">
+      {/* Header with search */}
+      <div className="flex items-center justify-between">
+        <h1 className="font-serif text-4xl font-semibold text-slate-900">Intel</h1>
+        <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 shadow-sm">
+          <span className="text-sm text-slate-400">Search intel...</span>
+        </div>
+      </div>
+
+      {/* Filters */}
       <IntelFilters competitors={competitors} />
+
+      {/* Signal Feed */}
       <SignalFeed signals={signals} competitorIds={competitorIds} />
     </div>
   );

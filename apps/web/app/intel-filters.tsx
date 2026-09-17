@@ -20,12 +20,12 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
 
   return (
     <div className="flex flex-wrap gap-3">
-      <label className="flex flex-col text-sm text-slate-700">
+      <label className="flex flex-col gap-1 font-sans text-xs font-medium text-slate-700">
         Source
         <select
           value={searchParams.get("source") ?? ""}
           onChange={(event) => updateParam("source", event.target.value)}
-          className="rounded-md border border-slate-200 px-2 py-1 text-sm"
+          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
         >
           <option value="">All sources</option>
           {SOURCES.map((source) => (
@@ -35,12 +35,12 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
           ))}
         </select>
       </label>
-      <label className="flex flex-col text-sm text-slate-700">
+      <label className="flex flex-col gap-1 font-sans text-xs font-medium text-slate-700">
         Competitor
         <select
           value={searchParams.get("competitor_id") ?? ""}
           onChange={(event) => updateParam("competitor_id", event.target.value)}
-          className="rounded-md border border-slate-200 px-2 py-1 text-sm"
+          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
         >
           <option value="">All competitors</option>
           {competitors.map((competitor) => (
