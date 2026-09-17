@@ -1,13 +1,18 @@
 // Discovery graph tests. The loop round-trip hits the local docker-compose
-// Postgres (localhost:5433) for checkpoints — never the Supabase project. Set
-// before import so loadRootEnv() (which never overwrites an already-set var)
-// can't inject the Supabase URL. The model and both tools are mocked, so the
-// ReAct loop is hermetic; only the checkpoint write/read is real.
-process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
-
+// Postgres (localhost:5433) for checkpoints — never the Supabase project. The
+// graph compiles eagerly at import (unlike the lazy chat graph), so the URL
+// must be set inside vi.hoisted — which runs before the imports that trigger
+// the eager compile — rather than as a top-level statement, which ES module
+// import-hoisting would evaluate only after discovery-graph has already
+// captured the ambient DATABASE_URL. The model and both tools are mocked, so
+// the ReAct loop is hermetic; only the checkpoint write/read is real.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { AIMessage } from "@langchain/core/messages";
+
+vi.hoisted(() => {
+  process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
+});
 
 const DB_TIMEOUT = 20_000;
 const dbIt = (name: string, fn: () => Promise<void>, timeout = DB_TIMEOUT) =>

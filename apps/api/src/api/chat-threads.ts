@@ -6,9 +6,11 @@
 // to the caller's workspace — getChatThreadForWorkspace is the sole tenant
 // boundary, since the checkpointer has no workspace concept.
 import express, { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import * as queries from "../db/queries";
-import { getChatCheckpointer } from "../agents/chat/chat-graph";
+import { getChatCheckpointer, getChatGraph, setupChatCheckpointer } from "../agents/chat/chat-graph";
+import type { ChatAgentResult } from "@signal/shared";
 import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler, requireUuidParam } from "./http";
 
@@ -22,12 +24,68 @@ export interface ChatThreadCheckpointer {
   deleteThread(threadId: string): Promise<void>;
 }
 
+export interface CheckpointSummary {
+  checkpoint_id: string;
+  created_at: string | undefined;
+  message_count: number;
+}
+
 export interface ChatThreadsRouterDeps {
   createChatThread: typeof queries.createChatThread;
   listChatThreadsForWorkspace: typeof queries.listChatThreadsForWorkspace;
   getChatThreadForWorkspace: typeof queries.getChatThreadForWorkspace;
   deleteChatThreadForWorkspace: typeof queries.deleteChatThreadForWorkspace;
   checkpointer: ChatThreadCheckpointer;
+  // Time-travel: list a thread's checkpoints and fork from one to re-run
+  // generation. Default impls use the compiled chat graph's checkpointer API.
+  listCheckpoints: (threadId: string) => Promise<CheckpointSummary[]>;
+  regenerate: (threadId: string, checkpointId: string) => Promise<ChatAgentResult>;
+}
+
+// The chat graph's getStateHistory yields snapshots newest-first; the picker
+// wants oldest-first. Only the turn-start checkpoints (`next` = ["compact"]) are
+// valid regenerate points — one per turn, at the user-question boundary — so the
+// list filters to those. message_count is the length of the checkpoint's
+// `messages` channel: assistant answer at message index i regenerates from the
+// checkpoint with message_count === i, enough to render a picker without
+// exposing full message bodies.
+export async function listCheckpointsDefault(threadId: string): Promise<CheckpointSummary[]> {
+  await setupChatCheckpointer();
+  const graph = getChatGraph();
+  const out: CheckpointSummary[] = [];
+  for await (const snapshot of graph.getStateHistory({ configurable: { thread_id: threadId } })) {
+    if (!snapshot.next.includes("compact")) continue;
+    out.push({
+      checkpoint_id: snapshot.config.configurable?.checkpoint_id ?? "",
+      created_at: snapshot.createdAt,
+      message_count: Array.isArray(snapshot.values?.messages) ? snapshot.values.messages.length : 0,
+    });
+  }
+  return out.reverse();
+}
+
+// Fork-and-replay (LangGraph time travel): fork a fresh branch from the target
+// checkpoint, then re-run generation from the turn start (compact). The reset
+// values mirror compactNode's per-turn reset so the replayed turn starts with a
+// clean nonce/loop/evidence state rather than stale prior-turn leftovers. The
+// original checkpoint history is untouched — updateState + invoke(null,
+// forkConfig) creates a child branch, never an edit-in-place.
+export async function regenerateDefault(threadId: string, checkpointId: string): Promise<ChatAgentResult> {
+  await setupChatCheckpointer();
+  const graph = getChatGraph();
+  const target = await graph.getState({
+    configurable: { thread_id: threadId, checkpoint_id: checkpointId },
+  });
+  if (!target.values || Object.keys(target.values).length === 0) {
+    throw new Error("chat-threads: unknown checkpoint");
+  }
+  const forkConfig = await graph.updateState(
+    target.config,
+    { nonce: randomUUID(), iterationCount: 0, loopMessages: [], evidence: [], draft: "" },
+    "compact"
+  );
+  const result = await graph.invoke(null, forkConfig);
+  return result.citation_result as ChatAgentResult;
 }
 
 export const defaultChatThreadsRouterDeps: ChatThreadsRouterDeps = {
@@ -36,10 +94,16 @@ export const defaultChatThreadsRouterDeps: ChatThreadsRouterDeps = {
   getChatThreadForWorkspace: queries.getChatThreadForWorkspace,
   deleteChatThreadForWorkspace: queries.deleteChatThreadForWorkspace,
   checkpointer: getChatCheckpointer() as unknown as ChatThreadCheckpointer,
+  listCheckpoints: listCheckpointsDefault,
+  regenerate: regenerateDefault,
 };
 
 const CreateThreadBodySchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
+}).strict();
+
+const RegenerateBodySchema = z.object({
+  checkpoint_id: z.string().min(1),
 }).strict();
 
 // Checkpoint messages are BaseMessage instances carrying langchain internals
@@ -101,6 +165,41 @@ export function createChatThreadsRouter(
       res.status(200).json({
         messages: (Array.isArray(raw) ? raw : []).map(serializeMessage),
       });
+    })
+  );
+
+  router.get(
+    "/:id/checkpoints",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (!id) return;
+      const owned = await deps.getChatThreadForWorkspace(id, req.workspaceId!);
+      if (!owned) {
+        res.status(404).json({ error: "unknown_thread" });
+        return;
+      }
+      const checkpoints = await deps.listCheckpoints(id);
+      res.status(200).json({ checkpoints });
+    })
+  );
+
+  router.post(
+    "/:id/regenerate",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (!id) return;
+      const parsed = RegenerateBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      const owned = await deps.getChatThreadForWorkspace(id, req.workspaceId!);
+      if (!owned) {
+        res.status(404).json({ error: "unknown_thread" });
+        return;
+      }
+      const result = await deps.regenerate(id, parsed.data.checkpoint_id);
+      res.status(200).json(result);
     })
   );
 

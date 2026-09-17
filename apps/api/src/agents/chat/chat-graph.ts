@@ -329,9 +329,17 @@ async function compactNode(
   state: ChatGraphStateType,
   config: LangGraphRunnableConfig
 ): Promise<Partial<ChatGraphStateType>> {
-  // Per-turn reset: a fresh nonce for the security prompt/evidence markers and
-  // a clean loop transcript for this invoke's tool-calling stage.
-  const reset = { nonce: randomUUID(), iterationCount: 0, loopMessages: [] };
+  // Per-turn reset: a fresh nonce for the security prompt/evidence markers, a
+  // clean loop transcript and evidence set for this invoke's tool-calling stage,
+  // and an empty draft so a stale prior-turn draft can never leak into
+  // citationCheck if this turn's generate is skipped by the iteration cap.
+  const reset = {
+    nonce: randomUUID(),
+    iterationCount: 0,
+    loopMessages: [],
+    evidence: [],
+    draft: "",
+  };
   if (!needsCompaction(state.messages)) return reset;
   const summary = await summarizeConversation(state, config);
   return { ...reset, summary };
@@ -382,7 +390,7 @@ async function retrieveNode(
     }
   }
 
-  return { messages: toolMessages, loopMessages: [...state.loopMessages, ...toolMessages], evidence };
+  return { loopMessages: [...state.loopMessages, ...toolMessages], evidence };
 }
 
 async function generateNode(

@@ -25,6 +25,12 @@ function makeDeps(over: Partial<ChatThreadsRouterDeps> = {}): ChatThreadsRouterD
       getTuple: vi.fn(async () => undefined),
       deleteThread: vi.fn(async () => undefined),
     },
+    listCheckpoints: vi.fn(async () => []),
+    regenerate: vi.fn(async () => ({
+      refused: true as const,
+      reason: "none",
+      suggested_query: "try again",
+    })),
     ...over,
   };
 }
@@ -149,6 +155,65 @@ describe("GET /api/chat-threads/:id/messages", () => {
 
     expect(res.status).toBe(400);
     expect(deps.getChatThreadForWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/chat-threads/:id/checkpoints", () => {
+  it("returns the thread's checkpoints for an owned thread", async () => {
+    const rows = [
+      { checkpoint_id: "cp-1", created_at: "2026-09-16T00:00:00Z", message_count: 1 },
+      { checkpoint_id: "cp-3", created_at: "2026-09-16T00:01:00Z", message_count: 3 },
+    ];
+    const deps = makeDeps({ listCheckpoints: vi.fn(async () => rows) });
+    const res = await request(buildApp(deps)).get(`/${THREAD_ID}/checkpoints`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ checkpoints: rows });
+    expect(deps.getChatThreadForWorkspace).toHaveBeenCalledWith(THREAD_ID, WORKSPACE_ID);
+    expect(deps.listCheckpoints).toHaveBeenCalledWith(THREAD_ID);
+  });
+
+  it("404s on a foreign-workspace thread without listing checkpoints", async () => {
+    const deps = makeDeps({ getChatThreadForWorkspace: vi.fn(async () => undefined) });
+    const res = await request(buildApp(deps)).get(`/${THREAD_ID}/checkpoints`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "unknown_thread" });
+    expect(deps.listCheckpoints).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/chat-threads/:id/regenerate", () => {
+  it("regenerates from a checkpoint and returns the new result", async () => {
+    const regenerated = { refused: false, answer: "new answer", citations: [] } as any;
+    const deps = makeDeps({ regenerate: vi.fn(async () => regenerated) });
+    const res = await request(buildApp(deps))
+      .post(`/${THREAD_ID}/regenerate`)
+      .send({ checkpoint_id: "cp-3" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(regenerated);
+    expect(deps.getChatThreadForWorkspace).toHaveBeenCalledWith(THREAD_ID, WORKSPACE_ID);
+    expect(deps.regenerate).toHaveBeenCalledWith(THREAD_ID, "cp-3");
+  });
+
+  it("400s on a missing checkpoint_id", async () => {
+    const deps = makeDeps();
+    const res = await request(buildApp(deps)).post(`/${THREAD_ID}/regenerate`).send({});
+
+    expect(res.status).toBe(400);
+    expect(deps.regenerate).not.toHaveBeenCalled();
+  });
+
+  it("404s on a foreign-workspace thread without regenerating", async () => {
+    const deps = makeDeps({ getChatThreadForWorkspace: vi.fn(async () => undefined) });
+    const res = await request(buildApp(deps))
+      .post(`/${THREAD_ID}/regenerate`)
+      .send({ checkpoint_id: "cp-3" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "unknown_thread" });
+    expect(deps.regenerate).not.toHaveBeenCalled();
   });
 });
 

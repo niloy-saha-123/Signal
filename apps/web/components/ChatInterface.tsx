@@ -17,6 +17,8 @@ import {
   createChatThread,
   getChatThreadMessages,
   listChatThreads,
+  listChatThreadCheckpoints,
+  regenerateChatThread,
   type ChatThreadSummary,
 } from "../lib/api";
 
@@ -77,10 +79,16 @@ function ChatTurnView({ turn }: { turn: ChatTurn }) {
   );
 }
 
-function HistoryView({ messages }: { messages: HistoryMessage[] }) {
+function HistoryView({
+  messages,
+  onRegenerate,
+}: {
+  messages: HistoryMessage[];
+  onRegenerate: (messageIndex: number) => void;
+}) {
   return (
     <div className="flex flex-col gap-3">
-      {messages.map((message) =>
+      {messages.map((message, index) =>
         message.role === "user" ? (
           <div
             key={message.id}
@@ -91,9 +99,17 @@ function HistoryView({ messages }: { messages: HistoryMessage[] }) {
         ) : (
           <div
             key={message.id}
-            className="mr-auto max-w-[80%] rounded-xl bg-white px-4 py-2 text-sm text-slate-700 shadow-sm"
+            className="mr-auto flex max-w-[80%] items-start gap-1 rounded-xl bg-white px-4 py-2 text-sm text-slate-700 shadow-sm"
           >
-            {message.text}
+            <p className="flex-1">{message.text}</p>
+            <button
+              type="button"
+              onClick={() => onRegenerate(index)}
+              title="Regenerate from here"
+              className="shrink-0 rounded px-1 text-slate-400 hover:text-indigo-600"
+            >
+              ↻
+            </button>
           </div>
         )
       )}
@@ -150,6 +166,23 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
     }
     setHistory([]);
     setTurns([]);
+  }
+
+  // Regenerate from the assistant message at `messageIndex`: fork the thread at
+  // the checkpoint whose message_count === messageIndex and re-run generation.
+  // The backend leaves the original history untouched (a fork), and this reload
+  // surfaces the regenerated branch.
+  async function handleRegenerate(messageIndex: number) {
+    if (!activeThreadId) return;
+    try {
+      const checkpoints = await listChatThreadCheckpoints(activeThreadId);
+      const checkpoint = checkpoints.find((c) => c.message_count === messageIndex);
+      if (!checkpoint) return;
+      await regenerateChatThread(activeThreadId, checkpoint.checkpoint_id);
+      await handleSelectThread(activeThreadId);
+    } catch {
+      // Regeneration is best-effort; the existing history stays visible.
+    }
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -225,7 +258,7 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
       />
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         <div className="flex flex-col gap-4">
-          <HistoryView messages={history} />
+          <HistoryView messages={history} onRegenerate={handleRegenerate} />
           {turns.map((turn) => (
             <ChatTurnView key={turn.id} turn={turn} />
           ))}
