@@ -222,10 +222,46 @@ describe("POST /api/competitors", () => {
 });
 
 describe("GET /api/competitors", () => {
+  const OWN_COMPANY_UUID = "44444444-4444-4444-8444-444444444444";
+
+  const listDeps = () =>
+    makeDeps({
+      listCompetitorsForWorkspace: vi.fn(async () => [
+        { id: OWN_COMPANY_UUID, is_own_company: true },
+        { id: UUID, is_own_company: false },
+      ]) as any,
+    });
+
   it("lists competitors", async () => {
     const res = await call(app(makeDeps()), "GET", "/api/competitors");
     expect(res.status).toBe(200);
     expect(res.body).toEqual([{ id: UUID }]);
+  });
+
+  it("returns all competitors when no is_own_company param is present", async () => {
+    const res = await call(app(listDeps()), "GET", "/api/competitors");
+    expect(res.status).toBe(200);
+    expect(res.body.map((c: any) => c.id)).toEqual([OWN_COMPANY_UUID, UUID]);
+  });
+
+  it("returns only the own-company row when is_own_company=true", async () => {
+    const res = await call(app(listDeps()), "GET", "/api/competitors?is_own_company=true");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: OWN_COMPANY_UUID, is_own_company: true }]);
+  });
+
+  it("returns only the non-own-company rows when is_own_company=false", async () => {
+    const res = await call(app(listDeps()), "GET", "/api/competitors?is_own_company=false");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: UUID, is_own_company: false }]);
+  });
+
+  it("400 on a malformed is_own_company value", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "GET", "/api/competitors?is_own_company=maybe");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("validation");
+    expect(deps.listCompetitorsForWorkspace).not.toHaveBeenCalled();
   });
 });
 
