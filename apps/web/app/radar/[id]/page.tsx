@@ -49,20 +49,31 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   ]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold text-slate-900">{competitor.name}</h1>
+    <div className="flex flex-col gap-8">
+      <h1 className="font-serif text-4xl font-semibold text-slate-900">{competitor.name}</h1>
+      
       {score ? (
-        <SignalScoreCard
-          competitorName={competitor.name}
-          score={score.score}
-          delta7d={score.delta_7d}
-          history={history.map((row) => ({ date: row.computed_at, score: row.score }))}
-        />
+        <div className="rounded-2xl bg-white p-6 shadow-sm">
+          <SignalScoreCard
+            competitorName={competitor.name}
+            score={score.score}
+            delta7d={score.delta_7d}
+            history={history.map((row) => ({ date: row.computed_at, score: row.score }))}
+          />
+        </div>
       ) : (
-        <p className="text-sm text-slate-400">No score yet.</p>
+        <div className="flex items-center justify-center rounded-2xl bg-white p-12 shadow-sm">
+          <p className="font-sans text-sm text-slate-400">No score yet.</p>
+        </div>
       )}
-      <TrendChart data={trend} />
-      <HiringChart data={hiring} />
+      
+      <div className="rounded-2xl bg-white p-6 shadow-sm">
+        <TrendChart data={trend} />
+      </div>
+      
+      <div className="rounded-2xl bg-white p-6 shadow-sm">
+        <HiringChart data={hiring} />
+      </div>
     </div>
   );
 }

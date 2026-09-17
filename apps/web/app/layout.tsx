@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Manrope } from "next/font/google";
-import { SiteNav } from "@/components/SiteNav";
+import { LeftSidebar } from "@/components/LeftSidebar";
+import { TopBar } from "@/components/TopBar";
+import { ChatSidebar } from "@/components/ChatSidebar";
 import { AlertBanner } from "@/components/AlertBanner";
 import { AppCommandBar } from "./app-command-bar";
 import "./globals.css";
@@ -25,10 +27,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={manrope.variable}>
       <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
-        <SiteNav />
+        {/* Three-column layout: nav (256px) | content (flex) | chat (384px) */}
+        <LeftSidebar />
+        <TopBar />
+        <ChatSidebar />
         <AppCommandBar />
         <AlertBanner />
-        <main className="mx-auto max-w-6xl px-8 py-10">{children}</main>
+        
+        {/* Main content area - offset by left sidebar and right chat */}
+        <main className="ml-64 mr-96 mt-16 min-h-screen px-8 py-10">
+          {children}
+        </main>
       </body>
     </html>
   );

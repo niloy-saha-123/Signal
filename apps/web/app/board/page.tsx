@@ -33,12 +33,13 @@ export default async function Page() {
     }));
 
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold text-slate-900">Board</h1>
-      <p className="text-sm text-slate-500">
-        Drag cards to arrange your own view. Exploratory first pass — competitors without a
-        score yet aren&apos;t shown here.
-      </p>
+    <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-2">
+        <h1 className="font-serif text-4xl font-semibold text-slate-900">Board</h1>
+        <p className="font-sans text-sm font-semibold text-slate-600">
+          Drag cards to arrange your own view. Competitors without a score aren&apos;t shown here.
+        </p>
+      </div>
       <Board initialCards={cards} />
     </div>
   );
