@@ -24,6 +24,7 @@ import { getSupabaseBrowserClient } from "./supabase-browser";
 export type { CompanyProfile, SignalSource } from "@signal/shared";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+const REQUEST_TIMEOUT_MS = 8_000;
 
 export class ApiError extends Error {
   constructor(
@@ -49,8 +50,31 @@ export async function authHeader(token?: string): Promise<Record<string, string>
   return session ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit) {
+  const controller = new AbortController();
+  const externalSignal = init?.signal;
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+
+  if (externalSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  const timeout = setTimeout(() => {
+    controller.abort(new Error("Signal API request timed out after 8 seconds"));
+  }, REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -77,6 +101,7 @@ export interface Competitor {
   pricing_url: string | null;
   changelog_rss: string | null;
   is_active: boolean;
+  is_own_company: boolean;
   discovery_status: DiscoveryStatus;
   discovered_at: string | null;
   created_at: string;
@@ -268,7 +293,9 @@ export function listAlerts(
 // --- Company profile ---
 
 export async function getCompanyProfile(): Promise<CompanyProfile | null> {
-  const res = await fetch(`${API_BASE}/api/company-profile`, { headers: await authHeader() });
+  const res = await fetchWithTimeout(`${API_BASE}/api/company-profile`, {
+    headers: await authHeader(),
+  });
   if (res.status === 404) return null;
   if (!res.ok) {
     const body = await res.json().catch(() => undefined);
@@ -294,6 +321,17 @@ export interface ChatThreadSummary {
 
 export function listChatThreads(token?: string): Promise<ChatThreadSummary[]> {
   return request<ChatThreadSummary[]>("/api/chat-threads", undefined, token);
+}
+
+export async function deleteChatThread(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/chat-threads/${id}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
 }
 
 export function createChatThread(): Promise<ChatThreadSummary> {
@@ -337,5 +375,127 @@ export function regenerateChatThread(
   return request<ChatAgentResult>(`/api/chat-threads/${id}/regenerate`, {
     method: "POST",
     body: JSON.stringify({ checkpoint_id: checkpointId }),
+  });
+}
+
+// ── Discovery Board ──────────────────────────────────────────────────────────
+
+export interface TrackedEntity {
+  id: string;
+  workspace_id: string;
+  source: string;
+  status: string;
+  candidate_name: string;
+  candidate_domain: string;
+  relationship_type: string | null;
+  relationship_confidence: number | null;
+  candidate_reason: string;
+  competitor_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export async function listTrackedEntities(token?: string) {
+  return request<TrackedEntity[]>("/api/tracked-entities", undefined, token);
+}
+
+export async function resumeDiscovery(threadId: string, decision: "confirm" | "dismiss") {
+  return request(`/api/discovery/${threadId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+  });
+}
+
+export async function triggerDiscovery() {
+  return request("/api/discovery/trigger", { method: "POST", body: "{}" });
+}
+
+// ── Company Documents ────────────────────────────────────────────────────────
+
+export interface CompanyDocument {
+  id: string;
+  workspace_id: string;
+  filename: string;
+  mime_type: string;
+  doc_type: string;
+  extraction_status: string;
+  pinecone_namespace: string | null;
+  created_at: Date;
+}
+
+export async function listCompanyDocuments(token?: string) {
+  return request<CompanyDocument[]>("/api/company-documents", undefined, token);
+}
+
+export async function uploadCompanyDocument(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${API_BASE}/api/company-documents`, {
+    method: "POST",
+    headers: await authHeader(),
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
+  return res.json();
+}
+
+export async function submitCompanyText(text: string) {
+  return request("/api/company-documents/text", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+// ── Dashboard Summary ────────────────────────────────────────────────────────
+
+export interface DashboardSummary {
+  competitors_tracked: number;
+  signals_this_week: number;
+  open_alerts: number;
+  pending_candidates: number;
+}
+
+export async function getDashboardSummary(token?: string) {
+  return request<DashboardSummary>("/api/dashboard/summary", undefined, token);
+}
+
+// ── Signal goal (long-term memory) ───────────────────────────────────────────
+
+export interface SignalGoal {
+  goal: string | null;
+  confidence: number | null;
+}
+
+export function getSignalGoal(token?: string): Promise<SignalGoal> {
+  return request<SignalGoal>("/api/company-profile/signal-goal", undefined, token);
+}
+
+export async function saveSignalGoal(goal: string): Promise<SignalGoal> {
+  return request<SignalGoal>("/api/company-profile/signal-goal", {
+    method: "PUT",
+    body: JSON.stringify({ goal }),
+  });
+}
+
+// ── Workspace (account / profile) ────────────────────────────────────────────
+
+export interface Workspace {
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: string;
+}
+
+export function getWorkspace(token?: string): Promise<Workspace> {
+  return request<Workspace>("/api/workspaces", undefined, token);
+}
+
+export function renameWorkspace(name: string): Promise<Workspace> {
+  return request<Workspace>("/api/workspaces", {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
   });
 }

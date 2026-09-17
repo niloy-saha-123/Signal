@@ -31,6 +31,7 @@ export interface CompanyDocumentsRouterDeps {
     fields: Partial<CompanyProfileInput>
   ) => Promise<unknown>;
   createCompanyDocument: (input: queries.CompanyDocumentCreateInput) => Promise<{ id: string }>;
+  listCompanyDocumentsForWorkspace: typeof queries.listCompanyDocumentsForWorkspace;
   invalidateCompanyContextCache: (workspaceId: string) => Promise<unknown>;
 }
 
@@ -47,6 +48,7 @@ export const defaultCompanyDocumentsRouterDeps: CompanyDocumentsRouterDeps = {
   upsertCompanyProfileForWorkspace: (workspaceId, fields) =>
     queries.upsertCompanyProfileForWorkspace(fields as CompanyProfileInput, workspaceId),
   createCompanyDocument: queries.createCompanyDocument,
+  listCompanyDocumentsForWorkspace: queries.listCompanyDocumentsForWorkspace,
   invalidateCompanyContextCache: invalidateCompanyContextCacheImpl,
 };
 
@@ -103,6 +105,14 @@ export function createCompanyDocumentsRouter(
     }
     next();
   });
+
+  router.get(
+    "/",
+    wrap(async (req, res) => {
+      const docs = await deps.listCompanyDocumentsForWorkspace(req.workspaceId!);
+      res.status(200).json(docs);
+    })
+  );
 
   router.post(
     "/text",

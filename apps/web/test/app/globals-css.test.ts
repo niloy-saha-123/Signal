@@ -12,8 +12,8 @@ describe("globals.css", () => {
     expect(result.css.length).toBeGreaterThan(0);
     expect(result.css).toContain("::before");
     // Proves Tailwind's content detection reaches components/, not just app/ —
-    // this class only exists because SiteNav.tsx uses hover:bg-indigo-50.
-    expect(result.css).toContain("hover\\:bg-indigo-50");
+    // this class only exists because the landing and dashboard use hover:bg-studio-sky-soft.
+    expect(result.css).toContain("hover\\:bg-studio-sky-soft");
   });
 
   it("emits the Part 4 semantic color tokens as CSS custom properties", async () => {

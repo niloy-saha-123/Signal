@@ -90,7 +90,7 @@ export function CommandBar({ commands }: CommandBarProps) {
                 type="button"
                 onClick={() => select(command)}
                 className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${
-                  index === activeIndex ? "bg-indigo-50 text-indigo-700" : "text-slate-700"
+                  index === activeIndex ? "bg-studio-sky-soft text-studio-ink" : "text-studio-muted"
                 }`}
               >
                 <span>{command.label}</span>

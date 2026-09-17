@@ -1,6 +1,23 @@
 @import "tailwindcss";
 
 @theme {
+  /* Typography — Onest is exposed through the legacy variable for app compatibility. */
+  --font-sans: var(--font-manrope);
+  --font-serif: var(--font-manrope);
+  --font-display: var(--font-manrope);
+
+  /* Signal Studio — one tonal blue family, paper, and deep ink. */
+  --color-studio-sky: #e2f3ff;
+  --color-studio-sky-soft: #f3faff;
+  --color-studio-sky-deep: #b9ddf7;
+  --color-studio-paper: #ffffff;
+  --color-studio-ink: #0a2033;
+  --color-studio-muted: #49677f;
+  --color-studio-line: #beddf2;
+  --color-studio-action: #0876cf;
+  --color-studio-action-hover: #0564b2;
+  --color-studio-action-soft: #d5edff;
+  
   /* Categorical — signal sources (packages/shared SignalSourceSchema), fixed slot order
      from the dataviz skill's validated reference palette. Never reassign per filter state. */
   --color-source-reddit: #2a78d6;
@@ -22,4 +39,82 @@
 
   /* Sequential — single-series magnitude (Signal Score sparklines/lines) */
   --color-sequential: #2a78d6;
+}
+
+::selection {
+  background: #b9ddf7;
+  color: #0a2033;
+}
+
+:focus-visible {
+  outline: 3px solid #0876cf;
+  outline-offset: 3px;
+}
+
+html {
+  scrollbar-color: #87bfe7 #f3faff;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f3faff;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #87bfe7;
+  border: 3px solid #f3faff;
+  border-radius: 999px;
+}
+
+.studio-evidence-pulse {
+  animation: studio-evidence-pulse 5.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  transform-origin: left center;
+}
+
+.studio-stage-enter {
+  animation: studio-stage-enter 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes studio-evidence-pulse {
+  0%,
+  18% {
+    opacity: 0.35;
+    transform: scaleX(0.12);
+  }
+  44%,
+  72% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0.35;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes studio-stage-enter {
+  from {
+    opacity: 0.72;
+    transform: translate3d(2rem, 1.5rem, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

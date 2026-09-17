@@ -43,7 +43,7 @@ export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
   }, [competitorIdsKey]);
 
   if (signals.length === 0) {
-    return <p className="text-sm text-slate-500">No signals yet.</p>;
+    return <p className="text-sm text-studio-muted">No signals yet.</p>;
   }
 
   return (
@@ -51,7 +51,7 @@ export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
       {signals.map((signal) => (
         <li
           key={signal.id}
-          className="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-3"
+          className="flex items-start gap-3 rounded-2xl border border-studio-line bg-studio-sky-soft p-4"
         >
           <span
             className="mt-1 h-2 w-2 shrink-0 rounded-full"
@@ -60,9 +60,9 @@ export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
           />
           <div>
             {signal.title ? (
-              <p className="text-sm font-medium text-slate-900">{signal.title}</p>
+              <p className="text-sm font-medium text-studio-ink">{signal.title}</p>
             ) : null}
-            <p className="text-sm text-slate-600">{signal.raw_text}</p>
+            <p className="text-sm text-studio-muted">{signal.raw_text}</p>
           </div>
         </li>
       ))}

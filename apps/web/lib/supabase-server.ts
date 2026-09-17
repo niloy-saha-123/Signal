@@ -9,6 +9,14 @@ export async function getServerAccessToken(): Promise<string | undefined> {
   return session?.access_token;
 }
 
+export async function getOptionalAccessToken(): Promise<string | undefined> {
+  try {
+    return await getServerAccessToken();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function getSupabaseServerClient() {
   const cookieStore = await cookies();
   return createServerClient(

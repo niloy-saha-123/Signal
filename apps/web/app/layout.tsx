@@ -1,26 +1,31 @@
-import type { Metadata } from "next";
-import { SiteNav } from "@/components/SiteNav";
-import { AlertBanner } from "@/components/AlertBanner";
-import { AppCommandBar } from "./app-command-bar";
+import type { Metadata, Viewport } from "next";
+import { Onest } from "next/font/google";
 import "./globals.css";
+
+// Keep the existing variable name so authenticated surfaces retain their font contract.
+const onest = Onest({
+  subsets: ["latin"],
+  variable: "--font-manrope",
+  display: "swap",
+  weight: ["400", "500", "600", "700", "800"],
+});
 
 export const metadata: Metadata = {
   title: "Signal — Competitive Intelligence",
   description: "Autonomous competitive strategy intelligence engine",
 };
 
-// Every page fetches live data from the API at request time; the API isn't reachable
-// during `next build` (CI, local build), so static prerendering must be off app-wide.
-export const dynamic = "force-dynamic";
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#f3faff",
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
-        <SiteNav />
-        <AppCommandBar />
-        <AlertBanner />
-        <main className="mx-auto max-w-6xl px-8 py-10">{children}</main>
+    <html lang="en" className={onest.variable}>
+      <body className="min-h-screen bg-studio-sky-soft font-sans text-studio-ink antialiased">
+        {children}
       </body>
     </html>
   );

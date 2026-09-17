@@ -5,13 +5,17 @@ import { SiteNav } from "../../components/SiteNav";
 describe("SiteNav", () => {
   it("renders a link for every command-center view", () => {
     render(<SiteNav />);
+    expect(screen.getByRole("link", { name: /signal/i })).toHaveAttribute(
+      "href",
+      "/briefing",
+    );
     const expected = [
-      ["Home", "/"],
+      ["Briefing", "/briefing"],
       ["Intel", "/intel"],
+      ["Discovery", "/discovery"],
       ["Chat", "/chat"],
       ["Alerts", "/alerts"],
       ["Settings", "/settings"],
-      ["Board", "/board"],
     ] as const;
     for (const [label, href] of expected) {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);

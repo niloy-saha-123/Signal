@@ -129,14 +129,22 @@ export function onSignalCreated(handler: (payload: SignalCreatedPayload) => void
 
 export async function joinCompetitor(id: string): Promise<void> {
   joinedCompetitorIds.add(id);
-  const sock = await getSocket();
-  sock.emit("competitor:join", id);
+  try {
+    const sock = await getSocket();
+    sock.emit("competitor:join", id);
+  } catch {
+    // Unsigned preview and missing API sessions have no live socket.
+  }
 }
 
 export async function leaveCompetitor(id: string): Promise<void> {
   joinedCompetitorIds.delete(id);
-  const sock = await getSocket();
-  sock.emit("competitor:leave", id);
+  try {
+    const sock = await getSocket();
+    sock.emit("competitor:leave", id);
+  } catch {
+    // Unsigned preview and missing API sessions have no live socket.
+  }
 }
 
 // Test-only escape hatch — clears the module singleton between test cases so each test

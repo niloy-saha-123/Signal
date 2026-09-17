@@ -35,6 +35,16 @@ function makeDeps(over: Partial<WorkspaceRouterDeps> = {}): WorkspaceRouterDeps 
       name: input.name,
       owner_id: input.ownerId,
     })) as any,
+    getWorkspaceById: vi.fn(async (id: any) => ({
+      id,
+      name: "Acme",
+      owner_id: USER_UUID,
+    })) as any,
+    renameWorkspace: vi.fn(async (id: any, name: any) => ({
+      id,
+      name,
+      owner_id: USER_UUID,
+    })) as any,
     ...over,
   };
 }
@@ -81,5 +91,42 @@ describe("POST /api/workspaces", () => {
     const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(makeDeps()));
     const res = await call(app, "POST", "/", {});
     expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/workspaces", () => {
+  it("returns the caller's current workspace", async () => {
+    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createWorkspaceRouter(makeDeps()));
+    const res = await call(app, "GET", "/");
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe("Acme");
+  });
+
+  it("403s with no workspace", async () => {
+    const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(makeDeps()));
+    const res = await call(app, "GET", "/");
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("PATCH /api/workspaces", () => {
+  it("renames the caller's workspace", async () => {
+    const deps = makeDeps();
+    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createWorkspaceRouter(deps));
+    const res = await call(app, "PATCH", "/", { name: "Acme Inc." });
+    expect(res.status).toBe(200);
+    expect(deps.renameWorkspace).toHaveBeenCalledWith(WS_UUID, "Acme Inc.");
+  });
+
+  it("rejects an empty name with 400", async () => {
+    const app = appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createWorkspaceRouter(makeDeps()));
+    const res = await call(app, "PATCH", "/", { name: "" });
+    expect(res.status).toBe(400);
+  });
+
+  it("403s with no workspace", async () => {
+    const app = appWithUser({ id: USER_UUID, workspaceId: null }, createWorkspaceRouter(makeDeps()));
+    const res = await call(app, "PATCH", "/", { name: "Acme" });
+    expect(res.status).toBe(403);
   });
 });

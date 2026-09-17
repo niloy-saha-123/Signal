@@ -41,6 +41,8 @@ function makeDeps(over: Partial<CompanyProfileRouterDeps> = {}): CompanyProfileR
     getCompanyProfileForWorkspace: vi.fn(async () => null) as any,
     getCompetitorsByIdsForWorkspace: vi.fn(async (ids: string[]) => ids.map((id) => ({ id }))) as any,
     upsertCompanyProfileForWorkspace: vi.fn(async (input: any) => ({ id: "p1", ...input })) as any,
+    getSignalGoalMemory: vi.fn(async () => null),
+    setSignalGoalMemory: vi.fn(async () => undefined),
     invalidateProfileCache: vi.fn(async () => 1),
     enqueue: vi.fn(async () => undefined),
     ...over,
@@ -190,5 +192,44 @@ describe("POST /api/company-profile", () => {
     const res = await call(app(deps), "POST", "/api/company-profile", VALID_BODY);
     expect(res.status).toBe(200);
     expect(deps.upsertCompanyProfileForWorkspace).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("signal goal", () => {
+  it("GET returns null goal fields when no memory exists", async () => {
+    const deps = makeDeps({ getSignalGoalMemory: vi.fn(async () => null) });
+    const res = await call(app(deps), "GET", "/api/company-profile/signal-goal");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ goal: null, confidence: null });
+  });
+
+  it("GET returns the stored goal", async () => {
+    const deps = makeDeps({
+      getSignalGoalMemory: vi.fn(async () => ({ goal: "Catch up to Acme", confidence: 0.8 })),
+    });
+    const res = await call(app(deps), "GET", "/api/company-profile/signal-goal");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ goal: "Catch up to Acme", confidence: 0.8 });
+  });
+
+  it("PUT stores the goal with confidence 1, invalidates the cache, and returns it", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "PUT", "/api/company-profile/signal-goal", {
+      goal: "Defend our enterprise tier",
+    });
+    expect(res.status).toBe(200);
+    expect(deps.setSignalGoalMemory).toHaveBeenCalledWith(WS_UUID, {
+      goal: "Defend our enterprise tier",
+      confidence: 1,
+    });
+    expect(deps.invalidateProfileCache).toHaveBeenCalledWith(WS_UUID);
+    expect(res.body).toEqual({ goal: "Defend our enterprise tier", confidence: 1 });
+  });
+
+  it("PUT rejects an empty goal with 400", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "PUT", "/api/company-profile/signal-goal", { goal: "" });
+    expect(res.status).toBe(400);
+    expect(deps.setSignalGoalMemory).not.toHaveBeenCalled();
   });
 });

@@ -24,7 +24,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => ({ get: searchParamsMock }),
 }));
 
-import { LoginForm } from "../../app/login/login-form";
+import { LoginForm } from "../../app/(auth)/login-form";
 
 describe("LoginForm", () => {
   beforeEach(() => {
@@ -43,7 +43,7 @@ describe("LoginForm", () => {
     searchParamsMock.mockReset();
   });
 
-  it("submits email/password and redirects to / on success when there is no next param", async () => {
+  it("submits email/password and redirects to /briefing when there is no next param", async () => {
     signInWithPasswordMock.mockResolvedValue({ error: null });
     render(<LoginForm />);
     fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.com" } });
@@ -52,7 +52,7 @@ describe("LoginForm", () => {
     await waitFor(() =>
       expect(signInWithPasswordMock).toHaveBeenCalledWith({ email: "a@b.com", password: "hunter2" })
     );
-    expect(pushMock).toHaveBeenCalledWith("/");
+    expect(pushMock).toHaveBeenCalledWith("/briefing");
     expect(refreshMock).toHaveBeenCalledTimes(1);
   });
 
@@ -65,6 +65,16 @@ describe("LoginForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Log in" }));
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/join/abc123"));
     expect(refreshMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an external next destination", async () => {
+    searchParamsMock.mockReturnValue("https://attacker.example/collect");
+    signInWithPasswordMock.mockResolvedValue({ error: null });
+    render(<LoginForm />);
+    fireEvent.change(screen.getByLabelText("Email"), { target: { value: "a@b.com" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/briefing"));
   });
 
   it("renders a Supabase error inline, not as a toast", async () => {
@@ -84,7 +94,7 @@ describe("LoginForm", () => {
     await waitFor(() =>
       expect(signInWithOAuthMock).toHaveBeenCalledWith({
         provider: "google",
-        options: { redirectTo: `${window.location.origin}/` },
+        options: { redirectTo: `${window.location.origin}/briefing` },
       })
     );
   });

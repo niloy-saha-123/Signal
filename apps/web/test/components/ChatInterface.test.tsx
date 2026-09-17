@@ -16,7 +16,11 @@ vi.mock("../../lib/chat-stream", () => ({
 vi.mock("../../lib/api", () => ({
   listChatThreads: listChatThreadsMock,
   createChatThread: createChatThreadMock,
-  getChatThreadMessages: vi.fn(),
+  getChatThreadMessages: vi.fn().mockResolvedValue([]),
+  deleteChatThread: vi.fn().mockResolvedValue(undefined),
+  listChatThreadCheckpoints: vi.fn().mockResolvedValue([]),
+  regenerateChatThread: vi.fn().mockResolvedValue({}),
+  uploadCompanyDocument: vi.fn().mockResolvedValue({}),
 }));
 
 import { ChatInterface } from "../../components/ChatInterface";
@@ -43,6 +47,8 @@ const threadSummary = {
 
 describe("ChatInterface", () => {
   beforeEach(() => {
+    // jsdom has no scrollIntoView — the composer scrolls to the newest message on change.
+    Element.prototype.scrollIntoView = vi.fn();
     streamChatResultMock.mockReset();
     listChatThreadsMock.mockReset();
     listChatThreadsMock.mockResolvedValue([]);
@@ -59,7 +65,7 @@ describe("ChatInterface", () => {
     fireEvent.change(screen.getByPlaceholderText("Ask Signal a question…"), {
       target: { value: query },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
   }
 
   it("shows the query and a pending state immediately after submit", async () => {
@@ -67,7 +73,7 @@ describe("ChatInterface", () => {
     render(<ChatInterface competitorIds={["comp-1"]} />);
     typeAndSubmit("What changed?");
     expect(screen.getByText("What changed?")).toBeInTheDocument();
-    expect(screen.getByText("Thinking…")).toBeInTheDocument();
+    expect(screen.getByText("Signal is responding…")).toBeInTheDocument();
   });
 
   it("creates a thread on first submit and passes its id to streamChatResult", async () => {
@@ -136,7 +142,7 @@ describe("ChatInterface", () => {
       expect(screen.getByText("No grounded evidence for that claim.")).toBeInTheDocument()
     );
     expect(
-      screen.getByText("What pricing changes has Acme made this month?")
+      screen.getByText(/What pricing changes has Acme made this month\?/)
     ).toBeInTheDocument();
   });
 
@@ -154,7 +160,7 @@ describe("ChatInterface", () => {
   it("does not submit an empty query", () => {
     streamChatResultMock.mockImplementation(() => new Promise(() => {}));
     render(<ChatInterface competitorIds={["comp-1"]} />);
-    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     expect(streamChatResultMock).not.toHaveBeenCalled();
   });
 });

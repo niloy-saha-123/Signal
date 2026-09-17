@@ -12,6 +12,7 @@ describe("POST /api/company-documents/text", () => {
       getCompanyProfileForWorkspace: vi.fn(),
       upsertCompanyProfileForWorkspace: vi.fn(),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-1" }),
+      listCompanyDocumentsForWorkspace: vi.fn().mockResolvedValue([]),
       invalidateCompanyContextCache: vi.fn().mockResolvedValue(0),
     };
     const app = express();
@@ -46,6 +47,7 @@ describe("POST /api/company-documents/text", () => {
       getCompanyProfileForWorkspace: vi.fn().mockResolvedValue(null),
       upsertCompanyProfileForWorkspace: vi.fn().mockResolvedValue(undefined),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-2" }),
+      listCompanyDocumentsForWorkspace: vi.fn().mockResolvedValue([]),
       invalidateCompanyContextCache: vi.fn().mockResolvedValue(0),
     };
     const app = express();
@@ -81,6 +83,7 @@ describe("POST /api/company-documents/text", () => {
       getCompanyProfileForWorkspace: vi.fn().mockResolvedValue(null),
       upsertCompanyProfileForWorkspace: vi.fn().mockResolvedValue(undefined),
       createCompanyDocument: vi.fn().mockResolvedValue({ id: "doc-3" }),
+      listCompanyDocumentsForWorkspace: vi.fn().mockResolvedValue([]),
       invalidateCompanyContextCache: vi.fn().mockResolvedValue(0),
     };
     const app = express();

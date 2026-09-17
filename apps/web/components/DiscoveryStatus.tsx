@@ -53,14 +53,14 @@ export function DiscoveryStatus({
   }, [competitorId, pollIntervalMs]);
 
   if (!discovery) {
-    return <p className="text-sm text-slate-500">Checking discovery status…</p>;
+    return <p className="text-sm text-studio-muted">Checking discovery status…</p>;
   }
 
   return (
     <ul className="flex flex-col gap-1">
       {discovery.log.map((entry) => (
         <li key={entry.field_name} className="flex items-center gap-2 text-sm">
-          <span className="text-slate-700">{FIELD_LABELS[entry.field_name]}</span>
+          <span className="text-studio-ink">{FIELD_LABELS[entry.field_name]}</span>
           {entry.status === "found" ? (
             <span className="text-emerald-600">✓</span>
           ) : (
@@ -75,7 +75,7 @@ export function DiscoveryStatus({
                 <button
                   type="button"
                   onClick={() => onManualEntry(entry.field_name)}
-                  className="text-xs text-indigo-600 underline"
+                  className="text-xs text-studio-action underline"
                   aria-label={`Enter ${entry.field_name} manually`}
                 >
                   Enter manually

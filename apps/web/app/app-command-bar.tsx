@@ -10,7 +10,11 @@ export function AppCommandBar() {
 
   const commands: Command[] = [
     { id: "chat", label: "Ask Signal a question", onSelect: () => router.push("/chat") },
-    { id: "add-competitor", label: "Add competitor", onSelect: () => router.push("/") },
+    {
+      id: "add-competitor",
+      label: "Add competitor",
+      onSelect: () => router.push("/briefing"),
+    },
   ];
 
   return <CommandBar commands={commands} />;

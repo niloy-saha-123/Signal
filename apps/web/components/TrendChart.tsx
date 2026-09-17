@@ -49,7 +49,7 @@ export function TrendChart({ data }: TrendChartProps) {
   return (
     <div className="flex flex-col gap-6">
       <section>
-        <h3 className="text-sm font-medium text-slate-700">Mention volume</h3>
+        <h3 className="text-sm font-medium text-studio-muted">Mention volume</h3>
         <div className="h-32 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data}>
@@ -71,7 +71,7 @@ export function TrendChart({ data }: TrendChartProps) {
       </section>
 
       <section>
-        <h3 className="text-sm font-medium text-slate-700">Sentiment</h3>
+        <h3 className="text-sm font-medium text-studio-muted">Sentiment</h3>
         <div className="h-32 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={data}>
@@ -100,7 +100,7 @@ export function TrendChart({ data }: TrendChartProps) {
       </section>
 
       <section>
-        <h3 className="text-sm font-medium text-slate-700">Signal Score</h3>
+        <h3 className="text-sm font-medium text-studio-muted">Signal Score</h3>
         <div className="h-32 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data}>
