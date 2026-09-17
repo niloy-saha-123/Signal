@@ -44,6 +44,7 @@ import { ANTHROPIC_MODEL_IDS, selectModel } from "../../llm/adaptive-router";
 import { trackCost } from "../../llm/cost-tracker";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { loadRootEnv } from "../../lib/env";
+import { withRetry } from "../../lib/retry";
 
 loadRootEnv();
 
@@ -461,7 +462,12 @@ let setupPromise: Promise<void> | undefined;
 
 export async function setupChatCheckpointer(): Promise<void> {
   if (!setupPromise) {
-    setupPromise = getChatCheckpointer().setup();
+    // Retries the first real connection only — a CI service container (or a local
+    // docker-compose Postgres still finishing startup) can reject the very first
+    // connect attempt even after its own health check passes; a bounded retry absorbs
+    // that without masking a genuinely misconfigured DATABASE_URL (3 attempts, ~1.5s
+    // worst case, same helper/defaults used across collectors and LLM calls).
+    setupPromise = withRetry(() => getChatCheckpointer().setup());
   }
   await setupPromise;
 }
