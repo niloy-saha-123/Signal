@@ -80,7 +80,7 @@ describe("agents/chat/chat-agent — single-turn adapter", () => {
     expect(state.run_id).toBe(RUN_ID);
     expect(config).toMatchObject({
       configurable: { thread_id: RUN_ID },
-      recursionLimit: 10,
+      recursionLimit: 15,
     });
   });
 
@@ -208,7 +208,7 @@ describe("agents/chat/chat-agent — streaming adapter", () => {
     expect(config).toMatchObject({
       configurable: { thread_id: "55555555-5555-4555-8555-555555555555" },
       streamMode: ["messages", "values"],
-      recursionLimit: 10,
+      recursionLimit: 15,
     });
   });
 

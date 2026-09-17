@@ -81,3 +81,31 @@ export async function recordSuccess(service: string): Promise<void> {
   await cacheRedis.set(stateKey(service), "closed");
   await logEvent(service, "closed");
 }
+
+// Convenience wrapper pairing the breaker's three primitives around a single
+// external call: short-circuit (throw) while open, recordSuccess on completion,
+// recordFailure + rethrow on error. Mirrors the collector pattern
+// (recordCircuitFailure's guard + the isCircuitOpen pre-check) so callers don't
+// each re-handle the "don't let a Redis blip mask the real error" case.
+export async function withCircuitBreaker<T>(
+  service: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (await isCircuitOpen(service)) {
+    throw new Error(`${service} circuit is open — skipping call`);
+  }
+  try {
+    const result = await fn();
+    await recordSuccess(service);
+    return result;
+  } catch (err) {
+    try {
+      await recordFailure(service, err instanceof Error ? err.message : String(err));
+    } catch (recordErr) {
+      // recordFailure makes unguarded Redis calls that can themselves throw —
+      // never let that mask the real error below.
+      logger.error(`Failed to record circuit-breaker failure for ${service}`, { error: recordErr });
+    }
+    throw err;
+  }
+}

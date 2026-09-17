@@ -35,6 +35,7 @@ import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
+import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { isLlmBudgetExhausted } from "./branch-node";
 import { AnalysisDecisionSchema } from "./contracts";
 
@@ -395,10 +396,12 @@ export async function synthesisNode(
       identity: { kind: "run" as const, runId: state.run_id },
     };
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
-      structuredModel.invoke([
-        ["system", systemPrompt],
-        ["human", contextText],
-      ])
+      withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
+        structuredModel.invoke([
+          ["system", systemPrompt],
+          ["human", contextText],
+        ])
+      )
     );
 
     // The call was made and billed whether or not the response parsed — track it first.

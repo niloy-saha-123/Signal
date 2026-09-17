@@ -13,6 +13,7 @@ import {
   SignalScoreSchema,
   type CompanyProfile,
   type CompetitorCreateInput,
+  type ChatAgentResult,
   type DiscoveryStatus,
   type Signal,
   type SignalScore,
@@ -312,4 +313,29 @@ export async function getChatThreadMessages(id: string): Promise<ChatThreadMessa
     type: m.type ?? "message",
     content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
   }));
+}
+
+// --- Chat thread time travel (apps/api/src/api/chat-threads.ts) ---
+
+export interface ChatThreadCheckpoint {
+  checkpoint_id: string;
+  created_at: string | undefined;
+  message_count: number;
+}
+
+export async function listChatThreadCheckpoints(id: string): Promise<ChatThreadCheckpoint[]> {
+  const raw = await request<{ checkpoints: ChatThreadCheckpoint[] }>(
+    `/api/chat-threads/${id}/checkpoints`
+  );
+  return raw.checkpoints;
+}
+
+export function regenerateChatThread(
+  id: string,
+  checkpointId: string
+): Promise<ChatAgentResult> {
+  return request<ChatAgentResult>(`/api/chat-threads/${id}/regenerate`, {
+    method: "POST",
+    body: JSON.stringify({ checkpoint_id: checkpointId }),
+  });
 }

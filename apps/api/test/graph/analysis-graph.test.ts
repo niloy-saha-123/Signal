@@ -193,6 +193,14 @@ vi.mock("@langchain/anthropic", () => {
   return { ChatAnthropic: vi.fn(ChatAnthropicMockClass) };
 });
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { analysisGraph } from "@/graph/analysis-graph";
 
 const LOG_MESSAGES = {

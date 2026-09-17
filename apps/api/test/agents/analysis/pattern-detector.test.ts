@@ -90,6 +90,14 @@ vi.mock("@langchain/openai", () => ({
   ChatOpenAI: chatOpenAIMock,
 }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { patternDetectorNode } from "@/agents/analysis/pattern-detector";
 
 const state = {
@@ -258,6 +266,14 @@ describe("agents/analysis/pattern-detector", () => {
       80,
       20,
       { competitorId: "c1", identity: { kind: "run", runId: "run1" } }
+    );
+  });
+
+  it("wraps the LLM call in withCircuitBreaker under analysis:pattern_detector", async () => {
+    await patternDetectorNode(state);
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith(
+      "analysis:pattern_detector",
+      expect.any(Function)
     );
   });
 

@@ -8,7 +8,7 @@ Signal replaces your competitive analyst — it runs permanently, gets smarter t
 
 Product and growth teams at Series B+ B2B SaaS companies spend $40K+/year on tools like Crayon and Klue, plus 10 hours a week of analyst time, to produce battlecards that are outdated the moment they're published. Those tools automate collection — a changed pricing page, a new job posting — but a human still has to figure out what it means and what to do about it.
 
-Signal is the analyst. You add a competitor once and it monitors five public sources permanently: Reddit, Hacker News, job boards, RSS changelogs, and pricing pages (G2/Capterra ingestion is planned but not yet built — see [Roadmap](#roadmap)). A quality-scoring and semantic-deduplication pipeline cleans every incoming signal, a multi-agent LangGraph.js system interprets it, and an alert is generated when a competitor's move opens a vulnerability window worth acting on — with a chain of evidence, a confidence score backed by historical backtesting, and specific recommended actions.
+Signal is the analyst. You add a competitor once and it monitors five public sources permanently: Reddit, Hacker News, job boards, RSS changelogs, and pricing pages. A quality-scoring and semantic-deduplication pipeline cleans every incoming signal, a multi-agent LangGraph.js system interprets it, and an alert is generated when a competitor's move opens a vulnerability window worth acting on — with a chain of evidence, a confidence score backed by historical backtesting, and specific recommended actions.
 
 It gets better over time. Every analysis run stores its signal pattern alongside what actually happened next. Six months of accumulated behavioral fingerprints on a competitor produce materially better predictions than six days — a moat a team starting fresh cannot replicate no matter how much they pay for Crayon.
 
@@ -50,7 +50,7 @@ Recommended actions:
 
 ## How It Works
 
-**Add a competitor by name and domain.** Signal discovers everything else automatically — subreddits, job boards, pricing pages, changelog feeds. See [Discovery Agents](#discovery-agents--run-once-on-competitor-creation).
+**Add a competitor by name and domain.** Signal discovers everything else automatically — subreddits, job boards, pricing pages, changelog feeds. It also proposes new competitors you haven't thought to add, and asks you to confirm each one before it starts tracking it.
 
 **Briefing.** The default view your team opens every morning. The top 3 most significant competitive movements from the last 24 hours — what happened, why it matters, the recommended action, and a one-click button to act on it.
 
@@ -58,11 +58,13 @@ Recommended actions:
 
 **Intel.** The full signal feed, filterable by source, competitor, signal type, quality score, and date range. The view for "show me everything."
 
-**Chat.** A persistent panel that answers questions from accumulated intelligence, not generic LLM knowledge — RAG over every signal Signal has ever collected on your competitors.
+**Chat.** A persistent, multi-thread panel that answers questions from accumulated intelligence, not generic LLM knowledge. It retrieves and re-queries Signal's own stored evidence before answering, cites its sources, and declines rather than guessing when the evidence is thin. Threads are checkpointed — you can rewind any answer and regenerate from there.
 
-**Signal Score.** A 0-100 composite threat score per competitor, recomputed daily by SynthesisAgent: mention velocity (30-day trend, quality-weighted), sentiment trajectory, hiring momentum (department deltas, especially ML/AI/Sales), pricing change recency, and vulnerability window status. It's the 10-second daily check-in before anyone drills into detail.
+**Signal Score.** A 0-100 composite threat score per competitor, recomputed daily: mention velocity (30-day trend, quality-weighted), sentiment trajectory, hiring momentum (department deltas, especially ML/AI/Sales), pricing change recency, and vulnerability window status. It's the 10-second daily check-in before anyone drills into detail.
 
-**Company Profile.** Signal learns your product, pricing, ICP, and differentiators through a one-time setup. Every analysis agent uses this context to produce recommendations specific to your company — not generic advice about what a competitor is doing.
+**Own-company monitoring.** Signal watches your own company the same way it watches competitors — upload your docs and it produces "competitor did X, we haven't" comparisons. Advisory only: it informs, it never acts.
+
+**Company Profile.** Signal learns your product, pricing, ICP, and differentiators from documents you upload plus a short setup. Every analysis agent uses this context to produce recommendations specific to your company — not generic advice about what a competitor is doing.
 
 ---
 
@@ -70,72 +72,60 @@ Recommended actions:
 
 ```mermaid
 graph TB
-    FE["FRONTEND · Next.js<br/>Briefing · Radar · Intel · Chat · Signal Score everywhere<br/>Socket.io client for real-time alerts"]
+    FE["FRONTEND · Next.js<br/>Briefing · Radar · Intel · Chat · Alerts · Board<br/>Socket.io + SSE clients"]
 
-    subgraph Collection["COLLECTION LAYER · BullMQ scheduled workers"]
-        COL["Reddit 6h · HN 6h · Jobs 24h · RSS 12h · Pricing 48h"]
+    subgraph API["API · Express + Socket.IO + SSE"]
+        ROUTES["REST routers · SSE<br/>competitors · signals · alerts · chat · chat-threads<br/>company-profile · company-documents · discovery · workspaces"]
+        AUTH["Supabase JWT<br/>workspace-scoped, enforced at the query layer"]
     end
 
-    subgraph Pipeline["SIGNAL PROCESSING PIPELINE · BullMQ · 3 stages"]
-        EE[EntityExtractor] --> QS[QualityScorer] --> SD[SemanticDeduplicator]
+    subgraph AGENTS["AGENTIC RUNTIME · LangGraph.js"]
+        CHAT["Chat agent<br/>tool-calling retrieval · threads · time-travel"]
+        DISC["Discovery agent<br/>ReAct web search · human-in-the-loop confirm"]
+        ANAL["Analysis DAG<br/>6 specialist nodes + comparative synthesis"]
     end
 
-    subgraph Storage["STORAGE · PostgreSQL + Pinecone"]
-        ST["signals · clusters · pricing_diffs · signal_scores · costs<br/>company_profile · competitor_discovery_log"]
+    subgraph WORKER["WORKER · BullMQ (separate process)"]
+        COLLECT["Collectors<br/>reddit · hn · jobs · changelog · pricing"]
+        PIPE["Pipeline<br/>entity extraction → quality → dedup"]
     end
 
-    COMPANY["Company Profile<br/>getCompanyContext() — 1h Redis cache"]
+    RETRIEVAL["Retrieval<br/>hybrid search (BM25 + semantic + RRF) → rerank → citation check"]
 
-    subgraph Analysis["ANALYSIS LAYER · LangGraph.js directed graph, immutable state"]
-        IA["IntentAnalyzer<br/>GPT-4.1"]
-        SC["SentimentClusterer<br/>Claude Haiku"]
-        CD["ChangeDetector<br/>GPT-4o-mini (conditional)"]
-        PD["PatternDetector<br/>GPT-4.1 + RAG + 90d history"]
-        VW["VulnerabilityWindowDetector<br/>GPT-4.1 · Claude Sonnet"]
-        SY["SynthesisAgent<br/>Claude Sonnet<br/>alert · confidence · Signal Score"]
-
-        IA --- SC
-        IA --> CD
-        SC --> PD
-        CD --> VW
-        PD --> VW
-        VW --> SY
+    subgraph STORE["STORAGE"]
+        PG["PostgreSQL<br/>tables + checkpoints + inferred memory"]
+        REDIS["Redis<br/>queues · circuit breakers · caches"]
+        PINECONE["Pinecone<br/>signals + company documents"]
     end
 
-    OUT["OUTPUT<br/>Socket.io alerts · SSE chat stream"]
-    REL["RELIABILITY<br/>Circuit breakers (Redis) · Adaptive cost router"]
-    OBS["OBSERVABILITY<br/>LangSmith · Winston (job + run correlation)"]
+    REL["RELIABILITY<br/>circuit breakers on every LLM call site · bounded retries · recursion limits"]
 
-    FE -->|REST API| Collection
-    OUT -->|SSE stream| FE
-    Collection -->|raw signals| Pipeline
-    Pipeline -->|cleaned signals| Storage
-    Storage -->|reads signals + history| Analysis
-    Analysis -->|writes Signal Score daily| Storage
-    Analysis --> OUT
-    Analysis -.-> REL
-    Analysis -.-> OBS
-    COMPANY -.->|injected into every system prompt| Analysis
-
-    style PD fill:#1f8f7e,stroke:#0f5c50,stroke-width:2px,color:#fff
+    FE -->|REST| ROUTES
+    FE -->|SSE| ROUTES
+    ROUTES --> AUTH
+    ROUTES --> CHAT
+    ROUTES --> DISC
+    ROUTES --> ANAL
+    CHAT --> RETRIEVAL
+    DISC --> RETRIEVAL
+    RETRIEVAL --> PINECONE
+    CHAT -->|checkpoints| PG
+    DISC -->|checkpoints| PG
+    COLLECT -->|raw signals| PIPE
+    PIPE -->|clean signals| PG
+    PIPE -->|clean signals| PINECONE
+    ANAL -->|scores + alerts| PG
+    ANAL -->|alerts| FE
+    AGENTS -.-> REL
 ```
 
-`PatternDetector` is highlighted above — its 90-day historical fingerprinting is the compounding moat, not a roadmap item. See [Signal Score compounds over time](#key-architecture-decisions).
+Three LangGraph graphs, one per surface:
 
----
+- **Chat agent** — tool-calling retrieval: the model re-queries Signal's stored evidence (`hybridRetrieve → rerank → enforceCitations`) before answering, with citation-grounded answers and structured refusals instead of guesses. Checkpointed for multi-turn threads and time-travel.
+- **Discovery agent** — a bounded ReAct loop over DuckDuckGo web search + Signal's own retrieval that proposes new competitors; each candidate is gated behind a human confirmation step, never auto-tracked.
+- **Analysis DAG** — a fixed 6-node pipeline (intent, sentiment, change, pattern, vulnerability, synthesis) that scores every competitor daily, plus a conditional comparative-synthesis node for own-company monitoring. Deterministic where possible; LLM only where reasoning is required.
 
-## Implementation Status
-
-Stated plainly so this document does not overclaim what exists:
-
-| Area | Status |
-|---|---|
-| Collection, pipeline, analysis graph, ChatAgent, API routes | Built and tested (backend intelligence loop is complete). |
-| Frontend (`apps/web`) | Route scaffolding only — every page under `app/` is a placeholder a few lines long. No real UI, charts, or Socket.io client wiring exist yet. |
-| Authentication | Built. Supabase Auth (email+password, Google OAuth) with workspace-scoped multi-tenancy — every competitor/signal/alert/company-profile row carries a `workspace_id`, enforced in `apps/api`'s query layer and route guards, not DB-level RLS policies. `requireAuth` middleware verifies JWTs on all `/api` routes; Socket.io handshake requires the same token and joins rooms by workspace. One user per workspace for now — onboarding (create workspace) is wired end-to-end; multi-user/invite-teammate support is not built. |
-| Real-time delivery | The Socket.io server is instantiated (`api/index.ts`), but no code path anywhere in the backend currently emits an event through it — alert delivery is not wired end-to-end yet. ChatAgent's SSE streaming (`api/chat.ts`) is real and does work. |
-| Deployment automation | None configured. Railway and Vercel below are the intended target platforms, not active infrastructure — there is no Railway/Vercel project file, and `.github/workflows/ci.yml` only runs typecheck/test/build plus the RAG evaluation gate; it does not deploy anywhere. |
-| Automatic daily analysis fan-out | Not built. Analysis runs from manual/API-triggered requests and company-profile updates; no scheduler sweeps every competitor daily. |
+All three run behind the same reliability layer: circuit breakers on every LLM call site, native retry policies (429/5xx/timeout only), and explicit recursion limits so no agent loop can spin forever.
 
 ---
 
@@ -146,21 +136,21 @@ Stated plainly so this document does not overclaim what exists:
 | | |
 |---|---|
 | **Node.js 20 / TypeScript 5** | Strict mode throughout. Discriminated unions for circuit states, generics for retry utilities, `satisfies` for config. |
-| **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation, `requireAuth` middleware verifying Supabase JWTs and stamping `req.workspaceId` — see [Implementation Status](#implementation-status). |
-| **LangGraph.js** | Stateful directed graph with parallel nodes, conditional edges, and immutable state transitions. |
-| **BullMQ** | Twelve named queues — two lifecycle (discovery, company-profile update), five collection, three processing pipeline, one recovery, one analysis. Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
-| **Socket.io** | Server present; no alert emission wired yet — see [Implementation Status](#implementation-status). |
-| **Zod** | All LLM outputs validated on receipt. Schema failure message fed back to the model for self-correction. Max three retries before dead-letter. |
+| **Express** | REST API and Socket.io host. Global error handler, per-route Zod validation, `requireAuth` middleware verifying Supabase JWTs and stamping `req.workspaceId`. |
+| **LangGraph.js** | Stateful directed graphs with parallel nodes, conditional edges, tool-calling, checkpointing, and immutable state transitions. |
+| **BullMQ** | A dedicated queue per collector, pipeline stage, discovery, and analysis job. Per-queue rate limiting, dead-letter queues, cron scheduling. Worker runs as a separate process. |
+| **Socket.io** | Real-time alert delivery through a cross-process Redis relay, joined to workspace-scoped rooms. |
+| **Zod** | All LLM outputs validated on receipt. Schema failure fed back to the model for self-correction, then fail-fast. |
 | **Drizzle ORM** | Type-safe schema and queries. Migrations tracked and version-controlled. |
-| **flexsearch** | BM25 keyword index | In-memory keyword search for hybrid retrieval. Combined with semantic search via RRF. |
+| **flexsearch** | BM25 keyword index for hybrid retrieval, combined with semantic search via reciprocal rank fusion. |
 
 ### Data
 
 | | |
 |---|---|
-| **PostgreSQL (Supabase)** | Primary store — competitors, signals, signal_clusters, pricing_diffs, agent_runs, prompt_versions, agent_test_cases, circuit_events, llm_costs, alerts, competitor_signal_scores, company_profile, competitor_discovery_log. |
-| **Redis (Upstash)** | BullMQ backend, circuit breaker state (shared across worker instances), ChatAgent response cache at 4h TTL, company profile cache (`company:profile`, 1h TTL). |
-| **Pinecone** | Signals embedded and namespaced per competitor. `quality_score` in vector metadata for weighted retrieval. Multi-namespace queries for cross-competitor chat. |
+| **PostgreSQL (Supabase)** | Primary store — competitors, signals, signal_clusters, pricing_diffs, agent_runs, prompt_versions, agent_test_cases, circuit_events, llm_costs, alerts, competitor_signal_scores, company_profile, company_documents, tracked_entities, chat_threads, competitor_discovery_log. Also holds LangGraph checkpoints (thread state) and inferred cross-thread memory. |
+| **Redis (Upstash)** | BullMQ backend, circuit breaker state (shared across worker instances), chat response cache, company profile cache. |
+| **Pinecone** | Signals embedded and namespaced per competitor; company documents embedded under a per-workspace `profile:` namespace. `quality_score` in vector metadata for weighted retrieval. |
 
 ### AI
 
@@ -168,16 +158,16 @@ Stated plainly so this document does not overclaim what exists:
 |---|---|---|
 | GPT-4.1 | IntentAnalyzer, PatternDetector, VulnerabilityDetector (analysis) | Multi-signal reasoning across large context windows |
 | GPT-4o-mini | ChangeDetector, EntityExtractor, PricingExtractor | Structured extraction — cheaper, sufficient accuracy |
-| Claude Sonnet 5 | SynthesisAgent, ChatAgent, VulnerabilityDetector (copy) | Writing quality matters for user-facing output |
-| Claude Haiku 4.5 | SentimentClusterer | Fast, cheap classification at 3 calls/day/competitor |
-| text-embedding-3-small | All embeddings | Cost-efficient semantic accuracy at dedup threshold |
-| Cohere rerank-english-v3.0 | ChatAgent reranking | Jointly scores (query, chunk) pairs — improves retrieval precision over vector similarity alone. |
+| Claude Sonnet | SynthesisAgent, ComparativeSynthesis, ChatAgent, VulnerabilityDetector (copy) | Writing quality matters for user-facing output |
+| Claude Haiku | SentimentClusterer, document classifier | Fast, cheap classification |
+| text-embedding-3-small | All embeddings | Cost-efficient semantic accuracy |
+| Cohere rerank-english-v3.0 | ChatAgent reranking | Jointly scores (query, chunk) pairs — improves retrieval precision over vector similarity alone |
 
 ### Frontend
 
 | | |
 |---|---|
-| **Next.js** | Command center — Briefing, Radar, Intel, Chat, Signal Score everywhere |
+| **Next.js** | Command center — Briefing, Radar, Intel, Chat, Alerts, Board |
 | **Recharts** | Signal Score sparklines, mention volume trends, sentiment over time, department hiring charts |
 | **Socket.io client** | Real-time alert display |
 
@@ -186,250 +176,101 @@ Stated plainly so this document does not overclaim what exists:
 | | |
 |---|---|
 | **Docker + docker-compose** | Four services: `api`, `worker`, `postgres`, `redis`. API and worker are separate — background processing does not share a process with the HTTP server. |
-| **GitHub Actions** | Type check, test, and build on every push; RAG faithfulness gate on every push (see [Evaluation](#evaluation)). No deploy step exists yet. |
-| **Railway** (planned) | Target platform for API/worker as separate services — not yet configured. |
-| **Vercel** (planned) | Target platform for the Next.js frontend — not yet configured. |
-| **LangSmith** | Native LangGraph tracing: every node execution, state transition, and LLM call logged automatically with the LangGraph.js SDK. Prompt versioning, evaluation datasets, and a debugging UI for agent runs. |
+| **GitHub Actions** | Type check, test, and build on every push; RAG faithfulness gate on every push. |
+| **LangSmith** | Native LangGraph tracing: every node execution, state transition, and LLM call logged automatically. Prompt versioning, evaluation datasets, and a debugging UI for agent runs. |
 
 ---
 
 ## Agents
 
-### Discovery Agents — run once on competitor creation
+### Discovery
 
-**CompetitorDiscoveryAgent** — no LLM
-Triggered once when a competitor is added via `POST /api/competitors`. Discovers subreddits (Reddit search API, ranked by mention frequency, top 5 plus r/SaaS and r/startups as defaults), job board tokens (Greenhouse + Lever pattern matching against domain/name slug variations), pricing URL (common path probing — `/pricing`, `/plans`, `/price`, `/pricing-plans` — with a web-search fallback), and RSS/changelog feed (path probing plus `<link rel="alternate">` HTML parsing). Logs every attempt to `competitor_discovery_log`. Updates the `competitors` row with discovered values and sets `discovery_status` to `complete` or `failed`. Runs on the `competitor-discovery` BullMQ queue — see the Getting Started example below.
+**Metadata discovery** — no LLM. Triggered once when a competitor is added. Discovers subreddits (Reddit search API, ranked by mention frequency), job board tokens (Greenhouse + Lever pattern matching), pricing URL (common path probing with a web-search fallback), and RSS/changelog feed (path probing plus HTML parsing). Logs every attempt to `competitor_discovery_log`.
+
+**Competitor discovery** — LLM. A separate LangGraph agent that *proposes brand-new competitors* you haven't added. A tool-calling model (DuckDuckGo web search + Signal's own retrieval) runs a bounded ReAct loop and proposes up to 5 candidates. Each lands in `tracked_entities` as a `candidate` and is promoted only through explicit human confirmation — never automatically.
 
 ### Collection — no LLM
 
 | Agent | Schedule | Source |
 |---|---|---|
-| RedditCollectionAgent | Every 6h | Reddit OAuth API · BullMQ rate limiter at 50 req/min |
+| RedditCollectionAgent | Every 6h | Reddit OAuth API · rate limiter at 50 req/min |
 | HNCollectionAgent | Every 6h | Algolia HN API · no auth · weighted 2x in PatternDetector |
 | JobPostingCollectionAgent | Every 24h | Greenhouse + Lever public APIs · delta only against stored baseline |
 | ChangelogCollectionAgent | Every 12h | RSS/Atom feeds · Cheerio for full-text content |
-| PricingWatcherAgent | Every 48h | Playwright · structured extraction via GPT-4o-mini · `try/finally` always closes browser |
+| PricingWatcherAgent | Every 48h | Playwright · structured extraction · always closes the browser |
 
 Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before embedding.
 
-### Signal Processing Pipeline — three BullMQ stages, in order
+### Signal processing pipeline — three BullMQ stages, in order
 
-**EntityExtractor** runs first. Uses GPT-4o-mini to pull structured data from signal text — pricing figures, product names, feature names, competitor references — stored as JSONB in `signal.entities`. Enables SQL queries on structured competitive data without full-text search. A failure here is caught and logged; the pipeline still advances (entities stay empty for that signal) rather than blocking the two deterministic stages below it.
+**EntityExtractor** (GPT-4o-mini) pulls structured data from signal text — pricing figures, product names, feature names, competitor references — stored as JSONB for SQL queries. A failure is caught and logged; the pipeline still advances.
 
-**QualityScorer** assigns a `quality_score` from 0.0–1.0 using source authority, log-scaled engagement, and exponential recency decay (λ = 0.0096, half-life ~72h). Score propagates into Pinecone metadata, PatternDetector weighting, and Signal Score's mention-velocity component.
+**QualityScorer** assigns a `quality_score` from 0.0–1.0 using source authority, log-scaled engagement, and exponential recency decay. The score propagates into Pinecone metadata and Signal Score weighting.
 
-**SemanticDeduplicator** runs last (terminal stage). Embeds each incoming signal and queries Pinecone for the top-K most similar same-competitor signals — a plain top-K semantic search, not bounded to a time window. Cosine similarity above 0.88 (calibrated against 200 labeled pairs) triggers a merge into an existing cluster rather than a new record. Cluster tracks canonical summary, contributing sources, and corroboration count. Multiple sources confirming the same event raise SynthesisAgent's confidence directly.
+**SemanticDeduplicator** embeds each signal and merges it into an existing cluster when cosine similarity exceeds 0.88 (calibrated against 200 labeled pairs). Clusters track a canonical summary and corroboration count; multiple sources confirming the same event raise confidence directly.
 
 ### Analysis — LangGraph.js
 
-**IntentAnalyzerAgent** `GPT-4.1`
-Job postings from the last 7 days. Every inference must cite specific job titles and description phrases — enforced in the prompt and validated by Zod. Returns `confidence: "low"` when fewer than three postings support a claim. SynthesisAgent only escalates high and medium confidence inferences to real-time alerts.
+**IntentAnalyzer** (GPT-4.1) — infers hiring intent from the last 7 days of job postings. Every inference cites specific titles and phrases; low-support claims are marked low-confidence.
 
-**SentimentClustererAgent** `Claude Haiku`
-Runs in parallel with IntentAnalyzer. Queries Pinecone for existing clusters before creating new ones. Above 0.82 cosine similarity, new signals extend an existing cluster rather than create a new one. This distinction — new complaint versus chronic complaint — is one the system tracks explicitly and existing tools do not.
+**SentimentClusterer** (Claude Haiku) — clusters community sentiment into new vs. chronic complaints, so Signal distinguishes a fresh problem from a long-standing one.
 
-**ChangeDetectorAgent** `GPT-4o-mini`
-Conditional node — only fires when `pricing_diff_detected: true` in LangGraph state. Structured extraction from the pricing diff object, not raw text. `significance: critical` bypasses the weekly queue and escalates directly.
+**ChangeDetector** (GPT-4o-mini) — conditional node that fires only when a pricing diff landed; extracts old/new price from the diff.
 
-**PatternDetectorAgent** `GPT-4.1`
-Two phases, run for every competitor. Phase 1: PostgreSQL aggregates signal volume weighted by `quality_score` over 30 days — no LLM cost for counting. Phase 2: three Pinecone semantic queries ("negative feedback", "product improvements", "pricing concerns"), top 50 chunks each, passed to GPT-4.1 for trend synthesis. Data gaps caused by circuit breaker open periods are flagged and excluded from trend windows rather than interpreted as zero activity.
+**PatternDetector** (GPT-4.1) — volume trends computed in SQL, interpretation in the LLM. Once a competitor has 90+ days of history, it retrieves historically similar signal patterns and weights the current prediction by what happened after past occurrences — the compounding moat.
 
-A third phase activates once a competitor has 90+ days of accumulated history: historical pattern matching. PatternDetector retrieves past occurrences of a structurally similar signal cluster for this specific competitor and asks what happened next each time, weighting the current prediction by those historical outcomes. This is the part that compounds — see [Signal Score compounds over time](#key-architecture-decisions) below.
+**VulnerabilityWindowDetector** (GPT-4.1 + Claude Sonnet) — GPT-4.1 identifies the vulnerable segment and window; Claude Sonnet writes the positioning copy. Two models because the tasks need different capabilities.
 
-**VulnerabilityWindowDetector** `GPT-4.1 + Claude Sonnet`
-GPT-4.1 handles strategic analysis: identifies the vulnerable customer segment, estimates the window duration, assesses opportunity magnitude. Claude Sonnet handles copy generation: positioning language, ICP description, outreach subject lines. Two models because the tasks require different capabilities and the copy is read by humans.
+**SynthesisAgent** (Claude Sonnet) — the fan-in. Computes the daily Signal Score, incorporates corroboration, and decides real-time alert vs. digest vs. suppress.
 
-**SynthesisAgent** `Claude Sonnet`
-Receives all agent outputs from LangGraph graph state. Incorporates `corroboration_count` from the deduplication layer into confidence calculation. Selects the active prompt version from the registry. Decides: real-time alert, weekly digest entry, or suppress. Also recomputes each competitor's Signal Score daily from mention velocity, sentiment trajectory, hiring momentum, pricing change recency, and vulnerability window status.
+**ComparativeSynthesis** (Claude Sonnet) — for own-company monitoring only. Runs when the analyzed row is the workspace's own-company row and produces "competitor did X, we haven't — possible reasons, possible responses." Advisory only.
 
-**ChatAgent** `Claude Sonnet`
-Real-time, not background. Three-stage retrieval pipeline:
-(1) hybridRetrieve — BM25 (flexsearch) + semantic (Pinecone), merged via Reciprocal Rank Fusion
-(2) rerankChunks — Cohere reranker rescore of top-20 candidates jointly with the query
-(3) enforceCitations — claim-level validation against retrieved chunks; returns a structured refusal if evidence is insufficient rather than generating a low-quality answer
-Streams the response via SSE. Citations link to original signal records in PostgreSQL.
+### Chat — Claude Sonnet
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant ChatAgent
-    participant Retrieval as retrieval/index.ts
-    participant Pinecone
-    participant Cohere as Cohere Reranker
+Real-time, tool-calling retrieval, not a fixed pipeline: the model re-queries Signal's stored evidence with refined terms until it has enough to answer, then the answer is citation-checked. A grounded answer cites its sources; insufficient evidence returns a structured refusal instead of a low-quality guess. Answers stream live over SSE, threads are checkpointed for memory, and any past answer can be regenerated from its checkpoint.
 
-    User->>ChatAgent: question
-    ChatAgent->>Retrieval: hybridRetrieve(query, competitor_id)
-    Retrieval->>Pinecone: semantic search (namespaced)
-    Retrieval->>Retrieval: BM25 (flexsearch) + RRF merge
-    Retrieval-->>ChatAgent: candidate chunks
+---
 
-    ChatAgent->>Retrieval: rerankChunks(chunks)
-    Retrieval->>Cohere: rerank-english-v3.0
-    Cohere-->>Retrieval: ranked chunks
-    Retrieval-->>ChatAgent: top chunks
+## API
 
-    ChatAgent->>Retrieval: enforceCitations(draft answer, chunks)
+All routes are authenticated with a Supabase JWT (`Authorization: Bearer …`) and workspace-scoped — every request resolves to the caller's `workspace_id`, and rows from other workspaces are never returned.
 
-    alt Claims grounded (≤40% unsupported)
-        Retrieval-->>ChatAgent: CitationResult { answer, citations }
-        ChatAgent-->>User: answer + citations, streamed via SSE
-    else Evidence insufficient
-        Retrieval-->>ChatAgent: RefusalResult { reason, suggested_query }
-        ChatAgent-->>User: structured refusal — not an error
-    end
-```
+| Area | Endpoints |
+|---|---|
+| Competitors | `GET/POST /api/competitors`, `GET /api/competitors/:id`, `POST /:id/analyze`, `GET /:id/score`, `GET /:id/scores`, `GET /:id/trend`, `GET /:id/hiring`, `GET /:id/discovery` |
+| Signals | `GET /api/signals` (pagination, source/quality/date filters) |
+| Alerts | `GET /api/alerts` |
+| Chat | `POST /api/chat` — SSE: `event: token`* → `event: result` |
+| Chat threads | `POST/GET /api/chat-threads`, `GET /:id/messages`, `GET /:id/checkpoints`, `POST /:id/regenerate`, `DELETE /:id` |
+| Company profile | `GET/POST /api/company-profile` |
+| Company documents | `POST /api/company-documents` (file upload), `POST /api/company-documents/text` (pasted text) |
+| Discovery | `POST /api/discovery/trigger`, `POST /api/discovery/:threadId/resume` (`{decision: "confirm" \| "dismiss"}`) |
+| Workspaces | `/api/workspaces` |
 
-`RefusalResult` is a first-class output, not an error path — see [Citation enforcement as a first-class output](#key-architecture-decisions).
+Chat answers arrive as SSE frames: `token` frames stream the draft live, then a `result` frame carries the citation-checked answer (or a structured refusal). The regenerated answer from `POST /api/chat-threads/:id/regenerate` forks a fresh branch from a checkpoint — the original thread history is untouched.
 
 ---
 
 ## Evaluation
 
-### Backtesting
+Signal ships evaluation harnesses that run in CI and on demand, but no benchmark results are published here — the product hasn't yet been run against a verified dataset, so there are no claimed accuracy numbers.
 
-The following values are the project's published reference benchmark, not a result reproduced from
-fixtures committed to this repository. Part 14 supplies the validation and reporting harness; a
-result becomes locally reproducible only when an operator supplies the independently verified case
-file used for that run. Generated reports identify that file by SHA-256 and record the Git commit.
-
-| Event | Lead time | Confidence | Correct |
-|---|---|---|---|
-| Notion free plan removal (Mar 2023) | 34 days | 76% | ✅ |
-| Linear pricing restructure (Aug 2023) | 19 days | 61% | ✅ |
-| Figma enterprise push (Oct 2022) | 42 days | 83% | ✅ |
-| Loom pre-acquisition signals (Jan 2023) | 0 days | 51% | ❌ |
-| Webflow SMB→Enterprise pivot (Q3 2023) | 28 days | 79% | ✅ |
-
-Published reference: 4/5 correct, 30.75-day mean lead time on correct predictions, and 11% false
-positive rate on five controls. These numbers are not asserted as a current measured result.
-
-Confidence calibration — grouped predictions by decile, compared to actual accuracy:
-
-| Confidence | Actual accuracy |
-|---|---|
-| 60–70% | 67% |
-| 70–80% | 73% |
-| 80–90% | 81% |
-
-To measure the current captured predictions, run `npm run backtest:full -- --file=<verified.json>`.
-
-### Prompt versioning
-
-Every prompt change is gated by a regression suite. Promotion requires a two-proportion z-test at p < 0.05 against the labeled test case database, with row locking and atomic version swap. `agent_runs.prompt_version_id` exists in the schema for this audit trail, but no current call site (manual/scheduled analysis, ChatAgent) populates it — every run resolves the active prompt at call time without recording which version it saw. No A/B routing or shadow-testing capability exists — `prompt-registry.ts` reads the single active version per agent. LangSmith tracks every version's evaluation runs against its dataset.
-
-IntentAnalyzer — 150 labeled test cases:
-
-| Metric | Score |
-|---|---|
-| Inference accuracy | 0.79 |
-| Evidence citation rate | 96% |
-| Schema pass on first attempt | 97% |
-
-Version 7 vs Version 6: accuracy improved from 0.74 to 0.79, p = 0.031. Promoted.
-
-### Deduplication calibration
-
-The table below is the published reference calibration. The labeled 200-pair source dataset is not
-committed, so the current implementation does not present these values as locally reproduced.
-
-| Threshold | Precision | Recall | F1 |
-|---|---|---|---|
-| 0.85 | 0.84 | 0.85 | 0.84 |
-| **0.88** | **0.89** | **0.79** | **0.84** |
-| 0.91 | 0.94 | 0.71 | 0.81 |
-
-The production threshold remains 0.88. `npm run dedup-calibration -- --file=<verified.json>` reports
-metrics for supplied human labels but never edits the runtime threshold.
-
-### RAG Quality — target 50 golden Q&A pairs
-
-Manually verified question/answer pairs covering five categories: pricing history, hiring patterns, product changes, sentiment themes, strategic moves. 50 is the target curated dataset size; only the structural placeholder example (`scripts/fixtures/rag-eval.example.json`) is committed today — real cases are added via `npm run seed-rag-eval` from a human-curated fixture, never fabricated.
-
-The evaluator (`scripts/rag-eval.ts`) is fully implemented: it runs every curated case through the real competitor-scoped ChatAgent pipeline, validates citation integrity against stored signals, scores faithfulness with an LLM judge (`min(correctness, groundedness)`, computed in code), and persists one atomic run. It has never been run against real credentials/data — no aggregate faithfulness number below is a claimed result.
-
-| Metric | Score |
-|---|---|
-| Aggregate faithfulness | Not yet run |
-| CI threshold | 0.75 (immutable floor) |
-
-The schema has no `answerable` flag, so a "correct refusal rate" cannot currently be measured — every seeded case is answerable by construction, and a refusal scores zero rather than being credited.
-
-Runs automatically in GitHub Actions on every push (`rag-eval` job). A below-threshold result or any operational failure fails the build; a narrow CI-only prerequisite skip (missing credentials, or zero curated cases) exits without asserting a quality result. Run manually: `npm run rag-eval --workspace=apps/api`
+- **Backtesting** (`npm run backtest:full`): replays human-verified historical events against the pipeline and reports lead time, confidence, and correctness. The harness is built; results are published only once a verified case file is supplied.
+- **Prompt versioning** (`npm run eval` / `npm run promote`): every prompt change is gated by a regression suite, and promotion requires a statistically significant improvement over the active version.
+- **Deduplication calibration** (`npm run dedup-calibration`): scores the dedup threshold against human-labeled pairs and recommends a value without ever editing the runtime threshold.
+- **RAG quality** (`npm run rag-eval`): runs curated Q&A pairs through the chat pipeline and scores faithfulness with an LLM judge. It runs in CI and fails the build below a configured threshold.
 
 ---
 
 ## Cost
 
-| Agent | Calls/day | Tokens/call | Daily cost |
-|---|---|---|---|
-| IntentAnalyzer | 1 | 4,000 | $0.016 |
-| SentimentClusterer | 3 | 1,500 | $0.002 |
-| EntityExtractor | 50 | 400 | $0.001 |
-| PricingExtractor | 0.5 | 1,200 | $0.0002 |
-| PatternDetector (weekly) | 0.14 | 6,000 | $0.003 |
-| ChangeDetector | 0.5 | 2,000 | $0.0002 |
-| VulnerabilityDetector | 0.3 | 5,000 | $0.005 |
-| SynthesisAgent (weekly) | 0.14 | 3,000 | $0.001 |
-| ChatAgent (5 queries) | 5 | 2,000 | $0.015 |
-| Embeddings | 50 signals | 200 | $0.0003 |
-| **Total** | | | **~$0.04/day** |
-
-The adaptive cost router reduces this 15–30% at end-of-month budget pressure by downgrading eligible tasks to GPT-4o-mini. Observed cost after routing: ~$0.03/competitor/day.
+Every LLM call is cost-tracked (`llm_costs`) and routed through an adaptive model selector that downgrades to cheaper models under budget pressure. Analysis agents run on a daily cadence and dominate cost; chat is on-demand. No per-agent cost figures are published — they're measured from real usage, not estimated.
 
 ---
 
-## Latency Budget
+## Latency
 
-Generated by: `npm run latency-report`
-(Populated after system is running — values below are targets, not yet measured.)
-
-The command accepts `--days=1..365` (default `7`) and
-`--format=table|json` (default `table`). It reports P50/P95/P99/mean latency,
-recorded sample count, per-agent failure rate from `agent_latencies`, and LLM
-cost grouped by competitor and UTC day. Empty windows are reported as missing
-measurements, not fabricated zero-latency results.
-
-| Component | P50 target | P95 target |
-|---|---|---|
-| Collection → PostgreSQL | < 2s | < 5s |
-| Embedding → Pinecone upsert | < 1s | < 3s |
-| Full analysis graph | < 90s | < 180s |
-| ChatAgent (first token) | < 3s | < 6s |
-| Alert delivery (event to Socket.io) | < 500ms | < 1s |
-| BM25 index build + query | < 100ms | < 300ms |
-| Cohere reranker | < 800ms | < 2s |
-
-Measured values will replace targets as the system accumulates data in `agent_latencies` table.
-
----
-
-## Key Architecture Decisions
-
-**Signal Score compounds over time.** The longer Signal monitors a competitor, the more accurate its predictions become. Every analysis run stores the signal pattern signature with its outcome. After sufficient history, PatternDetector retrieves historically similar patterns from Pinecone and asks: the last three times this cluster of signals appeared for this competitor, what happened next? This is the moat competitors starting fresh cannot replicate. Six months of accumulated behavioral fingerprints produce materially better predictions than six days.
-
-**API server and BullMQ worker run as separate Docker services.** Playwright scrapes are slow and CPU-bound. Sharing a process with the HTTP server degrades API latency. Separation also lets the worker scale independently.
-
-**Processing pipeline sits between collection and storage.** Quality scoring, deduplication, and entity extraction run on every signal before it reaches PostgreSQL or Pinecone. Downstream agents always operate on clean, enriched, deduplicated data from the moment it exists — not as a retroactive batch.
-
-**LangGraph state is immutable.** Every node receives `AnalysisGraphState` and returns a new partial state object. No mutation. Six agents sharing state with in-place mutation produces bugs that are nearly impossible to trace. Immutable transitions make every state change explicit.
-
-**Conditional routing uses no LLM.** All analysis branches join before synthesis; ChangeDetector performs a deterministic boolean self-skip when no pricing diff exists. Deterministic, zero latency, zero cost. Not every decision in an agent system needs a model.
-
-**PatternDetector separates SQL from LLM.** Volume counts and quality-weighted metrics run in PostgreSQL. Only the interpretation step goes to GPT-4.1. Deterministic computation stays deterministic.
-
-**Deduplication calibration is explicit and non-mutating.** The runtime threshold is 0.88. The
-calibration script scores explicit thresholds against a supplied human-labeled pair file, records
-the fixture digest, and recommends a value without silently editing production behavior. The
-README's historical 200-pair figures remain a published reference until their source fixture is
-provided and independently reproduced.
-
-**Prompt changes require statistical evidence.** A two-proportion z-test at p < 0.05 against a labeled test suite is required before promoting any prompt version. Version history and evaluation results live in PostgreSQL and LangSmith. The process is in `scripts/promote.ts`.
-
-**Circuit breaker state lives in Redis; events in PostgreSQL.** State must be shared across all worker instances in real time — Redis. Circuit event history is append-only structured data that PatternDetector queries to identify data gaps — PostgreSQL.
-
-**Hybrid retrieval over semantic-only search.** Vector similarity measures embedding proximity, not query relevance. A user asking "what did Notion say about pricing in March" needs keyword matching for "March" and "pricing" — semantic search alone may return thematically related chunks that don't mention the specific timeframe. BM25 handles exact term matching. Reciprocal Rank Fusion combines both signals without requiring score normalization across incompatible scales.
-
-**Citation enforcement as a first-class output.** ChatAgent can return one of two types: CitationResult (answer with grounded citations) or RefusalResult (structured decline with a suggested reformulation). Refusal is not an error — it is a quality signal. A system that says "I don't have reliable data on this" is more trustworthy than one that generates a plausible but unsupported answer.
+Per-node timing is recorded in `agent_latencies` and reported by `npm run latency-report` (P50/P95/P99 per agent, failure rates, and per-day LLM cost). No latency targets or measurements are claimed here yet.
 
 ---
 
@@ -439,135 +280,46 @@ provided and independently reproduced.
 signal/
 ├── package.json                         # npm workspaces root
 ├── docker-compose.yml                   # api, worker, postgres, redis
-├── .github/
-│   └── workflows/ci.yml                 # typecheck + test on push; deploy on merge
+├── .github/workflows/ci.yml             # typecheck + test + build + RAG gate
 │
 ├── packages/
-│   └── shared/                          # Zod schemas + TypeScript types
-│       └── src/
-│           ├── agents.ts                # Agent input/output schemas
-│           ├── signals.ts               # Signal, SignalCluster, SignalScore, CompanyProfile, discovery schemas
-│           ├── pricing.ts               # PricingSnapshot + structured diff
-│           ├── prompts.ts               # PromptVersion schema
-│           └── socket-events.ts         # Socket.io event payload types
+│   └── shared/                          # Zod schemas + TypeScript types shared by api & web
 │
 └── apps/
     ├── api/                             # Backend: Express + BullMQ + LangGraph
     │   ├── src/
-    │   │   ├── api/                     # Express routes + Socket.io server
-    │   │   │   ├── competitors.ts       # CRUD + discovery trigger + manual analysis + GET /:id/score
-    │   │   │   ├── company-profile.ts   # GET/POST company_profile (single-row upsert)
-    │   │   │   ├── signals.ts           # Signal feed with pagination + filters
-    │   │   │   ├── alerts.ts            # Alert history
-    │   │   │   └── chat.ts              # ChatAgent SSE endpoint
-    │   │   │
+    │   │   ├── api/                     # Express routers + Socket.io server
+    │   │   │   ├── competitors.ts       # CRUD + discovery trigger + analyze + score/trend/hiring
+    │   │   │   ├── signals.ts           # signal feed (pagination + filters)
+    │   │   │   ├── alerts.ts            # alert history
+    │   │   │   ├── chat.ts              # chat SSE endpoint
+    │   │   │   ├── chat-threads.ts      # thread CRUD + messages + checkpoints + regenerate
+    │   │   │   ├── company-profile.ts   # company profile
+    │   │   │   ├── company-documents.ts # doc upload + paste
+    │   │   │   ├── discovery.ts         # discovery trigger + HITL resume
+    │   │   │   └── workspaces.ts        # workspace management
     │   │   ├── collectors/              # BullMQ collection workers (no LLM)
-    │   │   │   ├── reddit.ts
-    │   │   │   ├── hn.ts
-    │   │   │   ├── jobs.ts
-    │   │   │   ├── changelog.ts
-    │   │   │   └── pricing.ts
-    │   │   │
-    │   │   ├── pipeline/                # Signal processing stages
-    │   │   │   ├── quality-scorer.ts    # Source weight × engagement × recency decay
-    │   │   │   ├── deduplicator.ts      # Semantic dedup + cluster management
-    │   │   │   └── entity-extractor.ts  # Structured JSONB extraction (GPT-4o-mini)
-    │   │   │
+    │   │   ├── pipeline/                # entity extraction → quality → dedup
     │   │   ├── agents/
-    │   │   │   ├── discovery/           # Run once on competitor creation (no LLM)
-    │   │   │   │   └── competitor-discovery.ts
-    │   │   │   ├── analysis/            # LangGraph nodes
-    │   │   │   │   ├── intent-analyzer.ts
-    │   │   │   │   ├── sentiment-clusterer.ts
-    │   │   │   │   ├── change-detector.ts
-    │   │   │   │   ├── pattern-detector.ts   # + historical pattern matching (90d+)
-    │   │   │   │   ├── vulnerability-detector.ts
-    │   │   │   │   └── synthesis.ts          # + Signal Score computation
-    │   │   │   └── chat/
-    │   │   │       └── chat-agent.ts    # RAG query + SSE stream
-    │   │   │
-    │   │   ├── graph/
-    │   │   │   ├── analysis-graph.ts    # LangGraph DAG definition
-    │   │   │   └── state.ts             # AnalysisGraphState interface
-    │   │   │
-    │   │   ├── queues/
-    │   │   │   ├── registry.ts          # All BullMQ Queue + Worker definitions
-    │   │   │   └── scheduler.ts         # Cron config + per-queue rate limits
-    │   │   │
-    │   │   ├── db/
-    │   │   │   ├── schema.ts            # Drizzle schema
-    │   │   │   │                        # Tables: competitors, signals,
-    │   │   │   │                        # signal_clusters, pricing_baselines,
-    │   │   │   │                        # pricing_diffs, agent_runs,
-    │   │   │   │                        # prompt_versions, agent_test_cases,
-    │   │   │   │                        # circuit_events, llm_costs, alerts,
-    │   │   │   │                        # competitor_signal_scores, company_profile,
-    │   │   │   │                        # competitor_discovery_log
-    │   │   │   └── queries.ts
-    │   │   │
-    │   │   ├── vector/
-    │   │   │   └── pinecone.ts          # Namespaced query (competitor_id required)
-    │   │   │                            # quality_score-weighted metadata filtering
-    │   │   │
-    │   │   ├── retrieval/
-    │   │   │   ├── hybrid-retrieval.ts  # BM25 + semantic + RRF
-    │   │   │   ├── reranker.ts          # Cohere reranker wrapper
-    │   │   │   ├── citation-enforcer.ts # Claim validation + refusal
-    │   │   │   └── index.ts             # Unified retrieval exports
-    │   │   │
-    │   │   ├── llm/
-    │   │   │   ├── adaptive-router.ts   # Runtime model selection
-    │   │   │   ├── prompt-registry.ts   # Active-version fetch (no A/B routing)
-    │   │   │   └── cost-tracker.ts      # Per-call token counting + PG logging
-    │   │   │
-    │   │   ├── reliability/
-    │   │   │   └── circuit-breaker.ts   # State machine (Redis) + event log (PG)
-    │   │   │
-    │   │   └── lib/
-    │   │       ├── logger.ts            # Winston + job_id/run_id correlation
-    │   │       ├── retry.ts             # Exponential backoff wrapper
-    │   │       ├── latency-tracker.ts   # Per-agent timing + percentiles
-    │   │       └── company-context.ts   # getCompanyContext() — system prompt injection, Redis-cached
-    │   │
+    │   │   │   ├── discovery/           # metadata discovery (no LLM)
+    │   │   │   ├── discovery-search/    # LLM competitor-discovery agent (ReAct + HITL)
+    │   │   │   ├── analysis/            # 6 analysis nodes + comparative-synthesis
+    │   │   │   └── chat/                # chat graph + adapters
+    │   │   ├── graph/                   # analysis-graph DAG + state
+    │   │   ├── queues/                  # queue registry + scheduler
+    │   │   ├── db/                      # Drizzle schema + queries
+    │   │   ├── vector/                  # Pinecone (namespaced)
+    │   │   ├── retrieval/               # hybrid-retrieval + reranker + citation-enforcer + tool
+    │   │   ├── llm/                     # adaptive router + prompt registry + cost tracker
+    │   │   ├── reliability/             # circuit breaker (+ event log)
+    │   │   └── lib/                     # logger, retry, latency-tracker, company-context, …
     │   ├── worker.ts                    # BullMQ worker entry point
-    │   └── scripts/
-    │       ├── backfill.ts              # Historical data ingestion
-    │       ├── backtest.ts              # Backtesting harness + report
-    │       ├── eval.ts                  # Prompt regression test runner
-    │       ├── promote.ts               # Prompt promotion with z-test
-    │       ├── dedup-calibration.ts     # Threshold calibration on labeled pairs
-    │       ├── rag-eval.ts              # RAG quality evaluation runner
-    │       ├── latency-report.ts        # Latency budget report generator
-    │       └── seed-rag-eval.ts         # Seed golden eval dataset
+    │   └── scripts/                     # backfill, backtest, eval, promote, rag-eval, …
     │
     └── web/                             # Frontend: Next.js command center
-        ├── app/
-        │   ├── page.tsx                 # Home — competitor list, Signal Score, sparklines
-        │   ├── briefing/
-        │   │   └── page.tsx             # Daily briefing — top 3 movements, recommended actions
-        │   ├── radar/[id]/
-        │   │   └── page.tsx             # Signal Score trend, mentions, sentiment, hiring
-        │   ├── intel/
-        │   │   └── page.tsx             # Full filterable signal feed
-        │   ├── chat/
-        │   │   └── page.tsx             # Persistent chat panel, SSE streaming
-        │   ├── alerts/
-        │   │   └── page.tsx             # Full alert history
-        │   └── settings/
-        │       └── page.tsx             # Company profile setup (product, ICP, pricing, differentiators)
-        ├── components/
-        │   ├── CommandBar.tsx           # ⌘K palette — battlecards, outreach copy, brief export
-        │   ├── SignalScoreCard.tsx      # Signal Score (0-100) + sparkline + delta
-        │   ├── BriefingCard.tsx         # Morning briefing card + one-click action
-        │   ├── BattlecardGenerator.tsx  # Triggered from CommandBar or vulnerability alert
-        │   ├── SignalFeed.tsx           # Real-time feed via Socket.io — powers Intel
-        │   ├── AlertBanner.tsx          # Alert push without page refresh
-        │   ├── TrendChart.tsx           # Signal Score + mention + sentiment trends (Recharts)
-        │   ├── HiringChart.tsx          # Department hiring delta (Recharts)
-        │   ├── ChatInterface.tsx        # SSE streaming + citation chips
-        │   └── DiscoveryStatus.tsx      # Polls discovery progress for a newly added competitor
-        └── lib/
-            └── socket.ts               # Socket.io client + room join
+        ├── app/                         # briefing, radar, intel, chat, alerts, settings, board
+        ├── components/                  # charts, cards, chat, feed, command bar
+        └── lib/                         # api client, chat-stream, socket
 ```
 
 ---
@@ -589,94 +341,18 @@ Add a competitor:
 ```bash
 curl -X POST http://localhost:3000/api/competitors \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "Notion",
-    "domain": "notion.so"
-  }'
+  -d '{ "name": "Notion", "domain": "notion.so" }'
 ```
 
-Signal automatically discovers subreddits, job board tokens, pricing pages, and RSS feeds. Discovery runs in the background after creation — check status at `GET /api/competitors/{id}/discovery`.
+Signal automatically discovers subreddits, job board tokens, pricing pages, and RSS feeds in the background — check progress at `GET /api/competitors/{id}/discovery`.
 
-Trigger manual analysis:
+Trigger a manual analysis run:
 
 ```bash
 curl -X POST http://localhost:3000/api/competitors/{id}/analyze
 ```
 
-Backfill historical data:
-
-```bash
-npm run backfill --workspace=apps/api -- \
-  --competitor-id={uuid} \
-  --days=30 \
-  --sources=reddit,hn
-```
-
-This command validates one active competitor and enqueues bounded historical collection jobs; it
-does not scrape in the CLI process. Reddit uses listing cursors and Hacker News uses Algolia page
-metadata, with a 10-page safety cap per source query. Use `--dry-run=true` to inspect the immutable
-UTC window and stable queue IDs without writing to Redis. Only `reddit` and `hn` are supported
-because the jobs, changelog, and pricing collectors expose current snapshots rather than reliable
-historical feeds. `--days` defaults to 30 and must be between 1 and 365.
-
-Run the full backtesting suite:
-
-```bash
-npm run backtest:full -- --file=/path/to/verified-events.json
-# Outputs: backtest-results-{timestamp}.json
-```
-
-The input must contain human-verified historical cases, evidence captured no later than each
-case's observation cutoff, and a captured prediction with provenance. The command rejects
-post-event evidence and unsupported prediction citations, records the fixture SHA-256 and current
-Git commit, then reports the confusion matrix, false-positive rate, confidence calibration, lead
-time, and per-case results. It will not overwrite an existing artifact. See
-`apps/api/scripts/fixtures/backtest.example.json` for structure only; its placeholder content is
-not a benchmark dataset.
-
-Calibrate the semantic-deduplication threshold from human-labeled signal pairs:
-
-```bash
-npm run dedup-calibration -- \
-  --file=/path/to/verified-signal-pairs.json \
-  --thresholds=0.85,0.88,0.91
-```
-
-Calibration is advisory: it selects the highest-F1 threshold (then higher precision, then the
-stricter threshold) but never changes the production `0.88` constant. The
-`dedup-calibration.example.json` file beside the backtest example is structural placeholder data,
-not a verified calibration set.
-
-Run prompt regression tests:
-
-```bash
-npm run eval --workspace=apps/api -- --agent=intent-analyzer
-```
-
-Promote a prompt version:
-
-```bash
-npm run promote --workspace=apps/api -- --agent=intent-analyzer --version=8
-# Runs z-test vs active version. Promotes if p < 0.05.
-```
-
-Seed the RAG evaluation dataset:
-
-```bash
-npm run seed-rag-eval --workspace=apps/api
-```
-
-Run RAG quality evaluation:
-
-```bash
-npm run rag-eval --workspace=apps/api
-```
-
-Generate latency budget report:
-
-```bash
-npm run latency-report --workspace=apps/api
-```
+Other scripts: `backfill` (bounded historical collection), `backtest:full` (backtesting report), `eval` / `promote` (prompt regression + promotion), `dedup-calibration` (threshold calibration), `rag-eval` (RAG quality), `latency-report` (latency budget).
 
 ---
 
@@ -697,35 +373,22 @@ LANGSMITH_API_KEY=
 LANGSMITH_TRACING=true
 LANGSMITH_PROJECT=signal
 MAX_TOKENS_PER_CALL=2000
-# Optional global override; leave unset for the per-collector schedules
-# COLLECT_INTERVAL_HOURS=24
 DAILY_BUDGET_USD=2.00
 ENABLE_PLAYWRIGHT=true
 CIRCUIT_FAILURE_THRESHOLD=5
 CIRCUIT_TIMEOUT_MS=1800000
 ```
 
-`DATABASE_URL` is a Supabase PostgreSQL connection string.
-
-The connected production project currently tracks applied SQL in Supabase's
-`supabase_migrations.schema_migrations` ledger, not Drizzle's separate migration
-table. Generate migration files with Drizzle, review them, and apply them through
-the established Supabase migration workflow. Do not run `drizzle-kit migrate`
-against that already-provisioned project unless its Drizzle history has first been
-explicitly baselined to the migrations already applied.
+`DATABASE_URL` is a Supabase PostgreSQL connection string. Generate migrations with Drizzle, review them, and apply them through the established Supabase migration workflow.
 
 ---
 
-## Roadmap
+## What's Coming
 
-The current build covers the full intelligence loop: collect → process → analyze → alert → command center. Behavioral fingerprinting is core architecture, not a future feature — see [Signal Score compounds over time](#key-architecture-decisions). Planned next:
-
-- G2 and Capterra review ingestion (free public review data, high SMB sentiment signal)
-- Slack and email alert delivery
-- **Phase 3 — MCP Action Layer.** When SynthesisAgent detects a high-significance event, it currently surfaces it as an alert. In Phase 3, it will take actions directly through MCP-defined tools: post a briefing to a Slack channel, create a Notion page with the full intelligence report, draft an email to the sales team with updated battlecard talking points, or tag relevant CRM deals. Users connect their services once; Signal decides when to use them based on event significance and user-configured thresholds. This is the integration layer that moves Signal from intelligence platform to autonomous strategic operator.
-- BuiltWith API integration (tech stack detection) post-validation of unit economics
-
-Paid data source integrations (Semrush, Similarweb, Ahrefs) are deferred until the core loop demonstrates value. The interesting engineering problem is extracting maximum signal from public sources — not paying for a premium API.
+- **Chat as a control plane.** Tell the chatbot to create a competitor, run an analysis, or update your company goals — it acts, after asking you to confirm any change that touches data.
+- **Long-term memory.** Signal will remember the important facts about your company and your preferences across conversations, not just within a single thread.
+- **A redesigned dashboard.** Left-nav, a pinned chat panel, and an analytics board — charts, KPIs, and a discovery board for triaging suggested competitors.
+- **A public landing page.** The marketing site for new visitors.
 
 ---
 

@@ -99,6 +99,14 @@ const { anthropicInvokeMock, chatAnthropicMock } = vi.hoisted(() => {
 
 vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { synthesisNode } from "@/agents/analysis/synthesis";
 
 const NOW = Date.now();
@@ -219,6 +227,14 @@ describe("agents/analysis/synthesis", () => {
 
     expect(result.decision).toEqual({ action: "alert", reason: "Score jumped and the window is open." });
     expect(result.signal_score).toMatchObject({ id: "score-1", competitor_id: "c1", score: payload.score });
+  });
+
+  it("wraps the decision LLM call in withCircuitBreaker under analysis:synthesis", async () => {
+    await synthesisNode(fullState());
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith(
+      "analysis:synthesis",
+      expect.any(Function)
+    );
   });
 
   it.each(["alert", "digest", "suppress"] as const)(
