@@ -44,37 +44,63 @@ interface HistoryMessage {
 
 function ChatTurnView({ turn }: { turn: ChatTurn }) {
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-sm font-medium text-slate-900">{turn.query}</p>
-      {turn.error ? (
-        <p className="text-sm text-red-600">{turn.error}</p>
-      ) : turn.result === null ? (
-        <p className="text-sm text-slate-700">{turn.draft ?? "Thinking…"}</p>
-      ) : turn.result.refused ? (
-        <div className="rounded-md bg-amber-50 p-3">
-          <p className="text-sm text-amber-800">{turn.result.reason}</p>
-          <p className="mt-1 text-xs text-amber-700">{turn.result.suggested_query}</p>
+    <div className="flex flex-col gap-4 px-4 py-3">
+      {/* User message */}
+      <div className="flex justify-end">
+        <div className="max-w-[85%] rounded-2xl bg-slate-100 px-4 py-2.5">
+          <p className="font-sans text-sm text-slate-900">{turn.query}</p>
         </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <p className="text-sm text-slate-700">{turn.result.answer}</p>
-          <div className="flex flex-wrap gap-1">
-            {turn.result.citations.map((citation) => (
-              <span
-                key={citation.chunk_id}
-                title={citation.claim}
-                className="rounded-full border px-2 py-0.5 text-xs"
-                style={{
-                  borderColor: SOURCE_COLORS[citation.source],
-                  color: SOURCE_COLORS[citation.source],
-                }}
-              >
-                {citation.source}
-              </span>
-            ))}
+      </div>
+
+      {/* Assistant response */}
+      <div className="flex flex-col gap-2">
+        {turn.error ? (
+          <p className="font-sans text-sm text-red-600">{turn.error}</p>
+        ) : turn.result === null ? (
+          <div className="flex items-center gap-2">
+            {turn.draft ? (
+              <p className="font-sans text-sm leading-relaxed text-slate-700">{turn.draft}</p>
+            ) : (
+              <>
+                <div className="flex gap-1">
+                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
+                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
+                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+                </div>
+                <span className="font-sans text-xs text-slate-400">Thinking...</span>
+              </>
+            )}
           </div>
-        </div>
-      )}
+        ) : turn.result.refused ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="font-sans text-sm text-amber-900">{turn.result.reason}</p>
+            {turn.result.suggested_query && (
+              <button className="mt-2 font-sans text-xs text-amber-700 underline">
+                Try: {turn.result.suggested_query}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <p className="font-sans text-sm leading-relaxed text-slate-700">
+              {turn.result.answer}
+            </p>
+            {turn.result.citations.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {turn.result.citations.map((citation) => (
+                  <span
+                    key={citation.chunk_id}
+                    title={citation.claim}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 font-sans text-xs text-slate-600"
+                  >
+                    {citation.source}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -87,28 +113,28 @@ function HistoryView({
   onRegenerate: (messageIndex: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4 px-4">
       {messages.map((message, index) =>
         message.role === "user" ? (
-          <div
-            key={message.id}
-            className="ml-auto max-w-[80%] rounded-xl bg-indigo-600 px-4 py-2 text-sm text-white"
-          >
-            {message.text}
+          <div key={message.id} className="flex justify-end">
+            <div className="max-w-[85%] rounded-2xl bg-slate-100 px-4 py-2.5">
+              <p className="font-sans text-sm text-slate-900">{message.text}</p>
+            </div>
           </div>
         ) : (
-          <div
-            key={message.id}
-            className="mr-auto flex max-w-[80%] items-start gap-1 rounded-xl bg-white px-4 py-2 text-sm text-slate-700 shadow-sm"
-          >
-            <p className="flex-1">{message.text}</p>
+          <div key={message.id} className="group flex items-start gap-2">
+            <div className="flex-1">
+              <p className="font-sans text-sm leading-relaxed text-slate-700">{message.text}</p>
+            </div>
             <button
               type="button"
               onClick={() => onRegenerate(index)}
-              title="Regenerate from here"
-              className="shrink-0 rounded px-1 text-slate-400 hover:text-indigo-600"
+              title="Regenerate"
+              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
             >
-              ↻
+              <svg className="h-4 w-4 text-slate-400 hover:text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
             </button>
           </div>
         )
@@ -249,36 +275,48 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
   }
 
   return (
-    <div className="flex gap-6">
-      <ThreadList
-        threads={threads}
-        activeThreadId={activeThreadId}
-        onSelect={handleSelectThread}
-        onNew={handleNewThread}
-      />
-      <div className="flex min-w-0 flex-1 flex-col gap-4">
-        <div className="flex flex-col gap-4">
-          <HistoryView messages={history} onRegenerate={handleRegenerate} />
-          {turns.map((turn) => (
-            <ChatTurnView key={turn.id} turn={turn} />
-          ))}
-        </div>
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Ask Signal a question…"
-            className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm outline-none"
-            disabled={submitting}
-          />
+    <div className="flex h-full flex-col">
+      {/* Messages area - scrollable */}
+      <div className="flex-1 overflow-y-auto">
+        <HistoryView messages={history} onRegenerate={handleRegenerate} />
+        {turns.map((turn) => (
+          <ChatTurnView key={turn.id} turn={turn} />
+        ))}
+      </div>
+
+      {/* Input area - fixed at bottom */}
+      <div className="border-t border-slate-100 p-4">
+        <form onSubmit={handleSubmit} className="flex items-end gap-2">
+          <div className="flex-1">
+            <textarea
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e as any);
+                }
+              }}
+              placeholder="Message Signal..."
+              rows={1}
+              className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2.5 font-sans text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300"
+              disabled={submitting}
+            />
+          </div>
           <button
             type="submit"
             disabled={submitting || query.trim().length === 0}
-            className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+            title="Send message"
           >
-            Ask
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </svg>
           </button>
         </form>
+        {submitting && (
+          <p className="mt-2 font-sans text-xs text-slate-400">Shift + Enter for new line</p>
+        )}
       </div>
     </div>
   );
