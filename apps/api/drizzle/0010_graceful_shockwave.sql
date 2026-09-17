@@ -1,0 +1,1 @@
+ALTER TABLE "competitors" ADD COLUMN "is_own_company" boolean DEFAULT false NOT NULL;

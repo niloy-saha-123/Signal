@@ -1512,6 +1512,51 @@ export async function createCompetitorForWorkspace(
   return row;
 }
 
+// R1: the synthetic own-company row derives `name` from workspaces.name
+// (falling back to the literal "Own Company" when unavailable) and `domain`
+// from a deterministic per-workspace placeholder `own-company.<workspace_id>.invalid`.
+// company_profile has no name/domain columns, so it can't be the source; the real
+// discriminator is `is_own_company`, name/domain are cosmetic but must be non-empty
+// (competitors.name/domain are NOT NULL) and unique per workspace (unique index on
+// workspace_id+domain) — the deterministic placeholder satisfies both.
+export async function getOwnCompanyCompetitorForWorkspace(
+  workspaceId: string
+): Promise<Competitor | null> {
+  const [row] = await db
+    .select()
+    .from(competitorsTable)
+    .where(
+      and(
+        eq(competitorsTable.workspace_id, workspaceId),
+        eq(competitorsTable.is_own_company, true)
+      )
+    );
+  return row ?? null;
+}
+
+export async function createOwnCompanyCompetitorRow(workspaceId: string): Promise<Competitor> {
+  const existing = await getOwnCompanyCompetitorForWorkspace(workspaceId);
+  if (existing) return existing;
+
+  const [workspace] = await db
+    .select({ name: workspacesTable.name })
+    .from(workspacesTable)
+    .where(eq(workspacesTable.id, workspaceId));
+  const name = workspace?.name || "Own Company";
+  const domain = `own-company.${workspaceId}.invalid`;
+
+  const [row] = await db
+    .insert(competitorsTable)
+    .values({
+      workspace_id: workspaceId,
+      name,
+      domain,
+      is_own_company: true,
+    })
+    .returning();
+  return row;
+}
+
 export interface TrackedEntityCandidateInput {
   workspace_id: string;
   source: string;

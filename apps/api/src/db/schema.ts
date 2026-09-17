@@ -46,6 +46,10 @@ export const competitorsTable = pgTable(
     // Pause monitoring without losing history — hard delete would orphan
     // every signal/alert/score row a RESTRICT/CASCADE choice below depends on.
     is_active: boolean("is_active").notNull().default(true),
+    // Synthetic "own company" row flag — the user's own company is represented
+    // as a competitor row so the existing monitoring pipeline runs over it.
+    // The real discriminator; name/domain are cosmetic (see queries.ts R1).
+    is_own_company: boolean("is_own_company").notNull().default(false),
     discovery_status: text("discovery_status").notNull().default("pending"),
     discovered_at: timestamp("discovered_at", { withTimezone: true }),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

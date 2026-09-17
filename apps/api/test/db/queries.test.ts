@@ -148,6 +148,8 @@ import {
   createCompetitorForWorkspace,
   getCompanyProfileForWorkspace,
   upsertCompanyProfileForWorkspace,
+  getOwnCompanyCompetitorForWorkspace,
+  createOwnCompanyCompetitorRow,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -2809,6 +2811,90 @@ describe("workspace-scoped competitor/profile queries", () => {
         set: { ...profileInput, updated_at: expect.any(Date) },
       });
       expect(result).toEqual(inserted);
+    });
+  });
+});
+
+describe("own-company synthetic competitor row", () => {
+  const WS_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const OWN_COMPETITOR_UUID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectMock.mockReturnValue({ from: fromMock });
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+  });
+
+  describe("getOwnCompanyCompetitorForWorkspace", () => {
+    it("filters on workspace_id AND is_own_company = true", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([{ id: OWN_COMPETITOR_UUID, workspace_id: WS_UUID, is_own_company: true }]);
+
+      const result = await getOwnCompanyCompetitorForWorkspace(WS_UUID);
+
+      expect(and).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(competitorsTable.workspace_id, WS_UUID);
+      expect(eq).toHaveBeenCalledWith(competitorsTable.is_own_company, true);
+      expect(result).toEqual({ id: OWN_COMPETITOR_UUID, workspace_id: WS_UUID, is_own_company: true });
+    });
+
+    it("returns null when the workspace has no own-company row", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([]);
+
+      await expect(getOwnCompanyCompetitorForWorkspace(WS_UUID)).resolves.toBeNull();
+    });
+  });
+
+  describe("createOwnCompanyCompetitorRow", () => {
+    it("returns the existing own-company row without inserting when one exists", async () => {
+      const existing = { id: OWN_COMPETITOR_UUID, workspace_id: WS_UUID, is_own_company: true };
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValueOnce([existing]);
+
+      const result = await createOwnCompanyCompetitorRow(WS_UUID);
+
+      expect(result).toEqual(existing);
+      expect(insertMock).not.toHaveBeenCalled();
+    });
+
+    it("inserts a synthetic row naming it after the workspace, with a deterministic own-company domain", async () => {
+      // First select (own-company lookup) finds nothing, second select (workspace name) finds the workspace.
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: WS_UUID, name: "Acme Corp" }]);
+      const inserted = { id: OWN_COMPETITOR_UUID, workspace_id: WS_UUID, name: "Acme Corp", domain: "own-company." + WS_UUID + ".invalid", is_own_company: true };
+      insertReturningMock.mockResolvedValueOnce([inserted]);
+
+      const result = await createOwnCompanyCompetitorRow(WS_UUID);
+
+      expect(insertMock).toHaveBeenCalledWith(competitorsTable);
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        workspace_id: WS_UUID,
+        name: "Acme Corp",
+        domain: `own-company.${WS_UUID}.invalid`,
+        is_own_company: true,
+      });
+      expect(result).toEqual(inserted);
+    });
+
+    it("falls back to the 'Own Company' literal when the workspace name is unavailable", async () => {
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      insertReturningMock.mockResolvedValueOnce([{ id: OWN_COMPETITOR_UUID, workspace_id: WS_UUID, name: "Own Company", is_own_company: true }]);
+
+      await createOwnCompanyCompetitorRow(WS_UUID);
+
+      expect(insertValuesMock).toHaveBeenCalledWith({
+        workspace_id: WS_UUID,
+        name: "Own Company",
+        domain: `own-company.${WS_UUID}.invalid`,
+        is_own_company: true,
+      });
     });
   });
 });

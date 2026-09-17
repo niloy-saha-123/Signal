@@ -71,6 +71,13 @@
       "when": 1789594506994,
       "tag": "0009_messy_jetstream",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789611789925,
+      "tag": "0010_graceful_shockwave",
+      "breakpoints": true
     }
   ]
 }
