@@ -1,11 +1,18 @@
 // Time-travel integration test: proves listCheckpointsDefault and
 // regenerateDefault work against the real PostgresSaver (getStateHistory +
 // updateState fork + invoke), not just that the router compiles.
-process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
-
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { AIMessageChunk, HumanMessage } from "@langchain/core/messages";
+
+// chat-threads.ts constructs the chat checkpointer eagerly (defaultChatThreadsRouterDeps),
+// so DATABASE_URL must be set inside vi.hoisted — which runs before the imports that trigger
+// that eager construction — not as a top-level statement, which ES module import-hoisting
+// evaluates only after getChatCheckpointer() has already captured the ambient URL (unset in
+// CI → defaults to 127.0.0.1:5432 → ECONNREFUSED). Same pattern as discovery-graph.test.ts.
+vi.hoisted(() => {
+  process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
+});
 
 const DB_TIMEOUT = 20_000;
 const dbIt = (name: string, fn: () => Promise<void>, timeout = DB_TIMEOUT) =>
