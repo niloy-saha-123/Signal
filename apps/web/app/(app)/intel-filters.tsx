@@ -20,12 +20,12 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
 
   return (
     <div className="flex flex-wrap gap-3">
-      <label className="flex flex-col gap-1 font-sans text-xs font-medium text-slate-700">
+      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
         Source
         <select
           value={searchParams.get("source") ?? ""}
           onChange={(event) => updateParam("source", event.target.value)}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
         >
           <option value="">All sources</option>
           {SOURCES.map((source) => (
@@ -35,12 +35,12 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-1 font-sans text-xs font-medium text-slate-700">
+      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
         Competitor
         <select
           value={searchParams.get("competitor_id") ?? ""}
           onChange={(event) => updateParam("competitor_id", event.target.value)}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
         >
           <option value="">All competitors</option>
           {competitors.map((competitor) => (

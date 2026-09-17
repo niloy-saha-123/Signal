@@ -2,13 +2,35 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = ["/", "/login", "/signup"];
+const PREVIEW_APP_PATHS = [
+  "/briefing",
+  "/intel",
+  "/discovery",
+  "/alerts",
+  "/board",
+  "/settings",
+  "/chat",
+  "/onboarding",
+];
+
+function allowUnauthenticatedApp() {
+  return (
+    process.env.NODE_ENV === "development" ||
+    process.env.NEXT_PUBLIC_PREVIEW_UNAUTH === "1"
+  );
+}
+
+function isPublicPath(pathname: string) {
+  if (PUBLIC_PATHS.includes(pathname)) return true;
+  if (!allowUnauthenticatedApp()) return false;
+  return PREVIEW_APP_PATHS.includes(pathname) || pathname.startsWith("/radar/");
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const isPublic = PUBLIC_PATHS.includes(pathname);
   let response = NextResponse.next({ request });
 
-  if (isPublic) {
+  if (isPublicPath(pathname)) {
     return response;
   }
 

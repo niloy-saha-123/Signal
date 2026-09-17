@@ -1,144 +1,108 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import type { CompanyProfile } from "@/lib/api";
+import { getCompanyProfile, listCompetitors, saveCompanyProfile } from "@/lib/api";
+
+function splitTags(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
 export function SettingsClient() {
-  const [emailNotifications, setEmailNotifications] = useState(true);
-  const [slackIntegration, setSlackIntegration] = useState(true);
-  const [weeklySummary, setWeeklySummary] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [hasProfile, setHasProfile] = useState(false);
+  const [productDescription, setProductDescription] = useState("");
+  const [icpIndustries, setIcpIndustries] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  // Profile fields
-  const [name, setName] = useState("Sarah Chen");
-  const [email, setEmail] = useState("sarah@company.com");
-  const [role, setRole] = useState("Product Manager");
+  useEffect(() => {
+    Promise.all([getCompanyProfile().catch(() => null), listCompetitors().catch(() => [])])
+      .then(([profile]) => {
+        if (!profile) return;
+        setHasProfile(true);
+        setProductDescription(profile.product_description);
+        setIcpIndustries(profile.icp_industries.join(", "));
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSave(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    const profile: CompanyProfile = {
+      product_description: productDescription,
+      icp_industries: splitTags(icpIndustries),
+      pricing_tiers: [],
+      key_differentiators: [],
+      primary_competitor_ids: [],
+    };
+    try {
+      await saveCompanyProfile(profile);
+      setHasProfile(true);
+    } catch {
+      setError("Could not save the company profile. Sign in and try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Header */}
-      <h1 className="font-serif text-4xl font-semibold text-slate-900">Settings</h1>
-
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[370px_1fr]">
-        {/* Left: Profile Card */}
-        <div className="flex flex-col gap-6 rounded-2xl bg-white p-8 shadow-sm">
-          <h2 className="font-sans text-xl font-extrabold text-slate-900">Profile</h2>
-
-          {/* Avatar */}
-          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-indigo-600 font-sans text-3xl font-extrabold text-white">
-            SC
-          </div>
-
-          {/* Profile Fields */}
-          <div className="flex flex-col gap-4">
-            <label className="flex flex-col gap-1 font-sans">
-              <span className="text-xs font-bold text-slate-400">Name</span>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="rounded-lg bg-slate-100 px-3.5 py-2.5 font-sans text-sm font-semibold text-slate-900 outline-none focus:bg-slate-200"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 font-sans">
-              <span className="text-xs font-bold text-slate-400">Email</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="rounded-lg bg-slate-100 px-3.5 py-2.5 font-sans text-sm font-semibold text-slate-900 outline-none focus:bg-slate-200"
-              />
-            </label>
-
-            <label className="flex flex-col gap-1 font-sans">
-              <span className="text-xs font-bold text-slate-400">Role</span>
-              <input
-                type="text"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="rounded-lg bg-slate-100 px-3.5 py-2.5 font-sans text-sm font-semibold text-slate-900 outline-none focus:bg-slate-200"
-              />
-            </label>
-
-            <button className="mt-2 rounded-lg bg-indigo-600 px-6 py-3 font-sans text-sm font-bold text-white transition-colors hover:bg-indigo-700">
-              Save changes
-            </button>
-          </div>
-        </div>
-
-        {/* Right: Preferences Card */}
-        <div className="flex flex-col gap-6 rounded-2xl bg-white p-8 shadow-sm">
-          <h2 className="font-sans text-xl font-extrabold text-slate-900">Preferences</h2>
-
-          {/* Preference Toggles */}
-          <div className="flex flex-col divide-y divide-slate-200">
-            {/* Email notifications */}
-            <div className="flex items-center justify-between py-5 first:pt-0">
-              <div>
-                <p className="font-sans text-sm font-bold text-slate-900">Email notifications</p>
-                <p className="mt-1 font-sans text-xs text-slate-600">
-                  Receive daily briefing emails
-                </p>
-              </div>
-              <button
-                onClick={() => setEmailNotifications(!emailNotifications)}
-                className={`relative h-6 w-11 rounded-full transition-colors ${
-                  emailNotifications ? "bg-indigo-600" : "bg-slate-300"
-                }`}
-              >
-                <div
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                    emailNotifications ? "translate-x-[22px]" : "translate-x-0.5"
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Slack integration */}
-            <div className="flex items-center justify-between py-5">
-              <div>
-                <p className="font-sans text-sm font-bold text-slate-900">Slack integration</p>
-                <p className="mt-1 font-sans text-xs text-slate-600">
-                  Post high-signal movements to Slack
-                </p>
-              </div>
-              <button
-                onClick={() => setSlackIntegration(!slackIntegration)}
-                className={`relative h-6 w-11 rounded-full transition-colors ${
-                  slackIntegration ? "bg-indigo-600" : "bg-slate-300"
-                }`}
-              >
-                <div
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                    slackIntegration ? "translate-x-[22px]" : "translate-x-0.5"
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Weekly summary */}
-            <div className="flex items-center justify-between py-5">
-              <div>
-                <p className="font-sans text-sm font-bold text-slate-900">Weekly summary</p>
-                <p className="mt-1 font-sans text-xs text-slate-600">
-                  Get a weekly competitive landscape summary
-                </p>
-              </div>
-              <button
-                onClick={() => setWeeklySummary(!weeklySummary)}
-                className={`relative h-6 w-11 rounded-full transition-colors ${
-                  weeklySummary ? "bg-indigo-600" : "bg-slate-300"
-                }`}
-              >
-                <div
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
-                    weeklySummary ? "translate-x-[22px]" : "translate-x-0.5"
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
-        </div>
+      <div className="flex flex-col gap-2">
+        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          Settings
+        </h1>
+        <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
+          Company context is what keeps briefings specific to your market instead of generic
+          competitor news.
+        </p>
       </div>
+
+      {!loading && !hasProfile ? (
+        <p className="rounded-[1.4rem] border border-studio-line bg-studio-sky-soft px-5 py-4 text-sm leading-relaxed text-studio-ink">
+          Complete your company profile to get personalized intelligence instead of generic analysis.
+        </p>
+      ) : null}
+
+      <form
+        onSubmit={handleSave}
+        className="flex max-w-2xl flex-col gap-5 rounded-[1.6rem] border border-studio-line bg-studio-paper p-8"
+      >
+        <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+          Product description
+          <textarea
+            value={productDescription}
+            onChange={(event) => setProductDescription(event.target.value)}
+            required
+            rows={5}
+            className="rounded-2xl bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+          />
+        </label>
+        <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+          ICP industries (comma-separated)
+          <input
+            value={icpIndustries}
+            onChange={(event) => setIcpIndustries(event.target.value)}
+            className="rounded-full bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+          />
+        </label>
+        {error ? (
+          <p role="alert" className="text-sm text-red-600">
+            {error}
+          </p>
+        ) : null}
+        <button
+          type="submit"
+          disabled={saving}
+          className="self-start rounded-full bg-studio-ink px-6 py-3 text-sm font-bold text-white hover:bg-[#071625] disabled:opacity-50"
+        >
+          Save
+        </button>
+      </form>
     </div>
   );
 }

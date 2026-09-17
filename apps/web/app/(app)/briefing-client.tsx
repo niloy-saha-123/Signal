@@ -30,7 +30,6 @@ export function BriefingClient({
 }: Props) {
   const [timeFilter, setTimeFilter] = useState<"today" | "7days" | "30days">("today");
 
-  // Format date for kicker
   const today = new Date();
   const dateStr = today.toLocaleDateString("en-US", {
     weekday: "long",
@@ -43,7 +42,7 @@ export function BriefingClient({
       <div className="flex flex-col gap-8">
         <div className="flex flex-col gap-3">
           <p className="text-sm font-semibold text-studio-muted">{dateStr}</p>
-          <h1 className="font-display text-4xl font-semibold text-studio-ink">
+          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
             Overnight briefing
           </h1>
         </div>
@@ -58,7 +57,7 @@ export function BriefingClient({
           </p>
           <Link
             href="/discovery"
-            className="mt-7 inline-flex min-h-11 items-center rounded-full bg-studio-action px-5 text-sm font-bold text-white transition-colors hover:bg-studio-action-hover"
+            className="mt-7 inline-flex min-h-11 items-center rounded-full bg-studio-ink px-5 text-sm font-bold text-white transition-colors hover:bg-[#071625]"
           >
             Add your first competitor
           </Link>
@@ -67,27 +66,26 @@ export function BriefingClient({
     );
   }
 
-  // Category colors
   const getCategoryColor = (category: string) => {
     const colors: Record<string, string> = {
-      pricing: "bg-blue-100 text-blue-700",
-      product: "bg-rose-100 text-rose-700",
+      pricing: "bg-studio-action-soft text-studio-action",
+      product: "bg-[#fde8ee] text-[#9b3858]",
       hiring: "bg-emerald-100 text-emerald-700",
-      content: "bg-violet-100 text-violet-700",
-      default: "bg-slate-100 text-slate-600",
+      content: "bg-studio-sky-soft text-studio-ink",
+      default: "bg-studio-sky-soft text-studio-muted",
     };
     return colors[category] || colors.default;
   };
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Header */}
       <div className="flex flex-col gap-3">
-        <p className="font-sans text-sm font-semibold text-slate-600">{dateStr}</p>
-        <h1 className="font-serif text-4xl font-semibold text-slate-900">Overnight briefing</h1>
+        <p className="text-sm font-semibold text-studio-muted">{dateStr}</p>
+        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          Overnight briefing
+        </h1>
       </div>
 
-      {/* Filter Pills */}
       <div className="inline-flex gap-2">
         {[
           { value: "today" as const, label: "Today" },
@@ -99,8 +97,8 @@ export function BriefingClient({
             onClick={() => setTimeFilter(option.value)}
             className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${
               timeFilter === option.value
-                ? "bg-slate-900 text-white"
-                : "bg-white text-slate-600 hover:bg-slate-50"
+                ? "bg-studio-ink text-white"
+                : "bg-studio-paper text-studio-muted hover:bg-studio-sky-soft"
             }`}
           >
             {option.label}
@@ -108,62 +106,56 @@ export function BriefingClient({
         ))}
       </div>
 
-      {/* Hero Metrics */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
-        {/* Signal Score Card */}
-        <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm">
-          <p className="font-sans text-sm font-bold text-slate-900">Highest-signal movement</p>
+        <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
+          <p className="text-sm font-bold text-studio-ink">Highest-signal movement</p>
           {highestScore > 0 ? (
             <>
-              <p className="font-serif text-5xl font-semibold text-slate-900">{highestScore}</p>
-              <p className="font-sans text-sm font-bold text-red-600">
+              <p className="font-display text-5xl font-semibold tabular-nums text-studio-ink">
+                {highestScore}
+              </p>
+              <p className="text-sm font-bold text-studio-action">
                 {highestScoreCompetitor} · {highestScoreDelta > 0 ? "+" : ""}
                 {highestScoreDelta} vs last week
               </p>
               {movements.length > 0 && (
-                <p className="font-sans text-sm leading-relaxed text-slate-600">
-                  {movements[0].detail}
-                </p>
+                <p className="text-sm leading-relaxed text-studio-muted">{movements[0].detail}</p>
               )}
             </>
           ) : (
-            <p className="font-sans text-sm text-slate-400">No signal data yet. Add competitors to start tracking.</p>
+            <p className="text-sm text-studio-muted">
+              No signal data yet. Add competitors to start tracking.
+            </p>
           )}
         </div>
 
-        {/* Signal volume chart */}
-        <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm">
-          <p className="font-sans text-sm font-bold text-slate-900">Signal volume</p>
+        <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
+          <p className="text-sm font-bold text-studio-ink">Signal volume</p>
           <div className="flex h-24 items-end justify-between gap-2">
             {[40, 52, 48, 56, 64, 60, 88].map((height, i) => (
               <div key={i} className="flex flex-1 flex-col items-center gap-2">
                 <div
-                  className={`w-full rounded-t-md ${i === 6 ? "bg-indigo-600" : "bg-slate-200"}`}
+                  className={`w-full rounded-t-md ${i === 6 ? "bg-studio-action" : "bg-studio-sky"}`}
                   style={{ height: `${height}%` }}
                 />
-                <span className="text-xs text-slate-400">{"FSSMTTW"[i]}</span>
+                <span className="text-xs text-studio-muted">{"FSSMTTW"[i]}</span>
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Movements List */}
-      <div className="flex flex-col gap-4 rounded-2xl bg-white p-6 shadow-sm">
-        <h2 className="font-sans text-sm font-bold text-slate-900">The other two</h2>
-        <div className="flex flex-col divide-y divide-slate-200">
+      <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
+        <h2 className="text-sm font-bold text-studio-ink">The other two</h2>
+        <div className="flex flex-col divide-y divide-studio-line">
           {movements.slice(0, 2).map((movement) => (
             <div key={movement.id} className="flex gap-4 py-4 first:pt-0">
               <div className="w-24 shrink-0">
-                <p className="font-sans text-xs font-extrabold text-slate-900">
-                  {movement.competitor}
-                </p>
+                <p className="text-xs font-extrabold text-studio-ink">{movement.competitor}</p>
               </div>
               <div className="flex-1">
-                <p className="font-sans text-sm font-semibold text-slate-900">{movement.title}</p>
-                <p className="mt-1 font-sans text-sm leading-relaxed text-slate-600">
-                  {movement.detail}
-                </p>
+                <p className="text-sm font-semibold text-studio-ink">{movement.title}</p>
+                <p className="mt-1 text-sm leading-relaxed text-studio-muted">{movement.detail}</p>
               </div>
               <div className="shrink-0">
                 <span

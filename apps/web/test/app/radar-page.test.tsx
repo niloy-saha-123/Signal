@@ -30,6 +30,7 @@ vi.mock("../../lib/api", async () => {
 
 vi.mock("../../lib/supabase-server", () => ({
   getServerAccessToken: vi.fn().mockResolvedValue(undefined),
+  getOptionalAccessToken: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../components/TrendChart", () => ({

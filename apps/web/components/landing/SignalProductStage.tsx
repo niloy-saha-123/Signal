@@ -46,26 +46,54 @@ function ArrowUpRightIcon() {
   );
 }
 
+function RailIcon({ d }: { d: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none">
+      <path d={d} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function SignalProductStage() {
   return (
-    <div className="studio-stage-enter relative w-full overflow-hidden rounded-4xl border border-white/80 bg-studio-paper shadow-[0_28px_70px_-32px_rgba(10,32,51,0.38)]">
+    <div className="studio-stage-enter relative w-full overflow-hidden rounded-[2rem] border border-white/90 bg-studio-paper shadow-[0_32px_80px_-36px_rgba(10,32,51,0.42)] sm:rounded-[2.4rem]">
       <div className="flex min-h-14 items-center justify-between border-b border-studio-line/80 px-4 sm:px-6">
-        <div className="flex items-center gap-2.5">
-          <span className="h-2 w-2 rounded-full bg-studio-action" />
-          <span className="text-xs font-semibold text-studio-ink sm:text-sm">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-bold tracking-[-0.03em] text-studio-ink">
             Overnight briefing
           </span>
-          <span className="hidden text-xs text-studio-muted sm:inline">
-            Example workspace
-          </span>
+          <div className="hidden gap-1 rounded-full bg-studio-sky-soft p-1 sm:flex">
+            <span className="rounded-full bg-studio-ink px-3 py-1 text-[0.7rem] font-bold text-white">
+              Today
+            </span>
+            <span className="rounded-full px-3 py-1 text-[0.7rem] font-bold text-studio-muted">
+              7 days
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-[0.7rem] font-medium text-studio-muted sm:text-xs">
-          <span>Evidence current</span>
-          <span className="h-1 w-1 rounded-full bg-studio-action" />
-        </div>
+        <p className="text-[0.7rem] font-medium text-studio-muted sm:text-xs">
+          Example workspace
+        </p>
       </div>
 
-      <div className="grid lg:grid-cols-[1.08fr_0.92fr]">
+      <div className="grid lg:grid-cols-[3.25rem_1.08fr_0.92fr]">
+        <div className="hidden flex-col items-center gap-3 border-r border-studio-line/80 py-5 lg:flex">
+          {[
+            "M8 7h8M8 12h8M8 17h5",
+            "M13 10V3L4 14h7v7l9-11h-7z",
+            "M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2c0 .5-.2 1-.6 1.4L4 17h5",
+            "M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z",
+          ].map((d, index) => (
+            <span
+              key={d}
+              className={`grid h-9 w-9 place-items-center rounded-2xl ${
+                index === 0 ? "bg-studio-ink text-white" : "text-studio-muted"
+              }`}
+            >
+              <RailIcon d={d} />
+            </span>
+          ))}
+        </div>
         <div className="border-b border-studio-line/80 p-4 sm:p-6 lg:border-r lg:border-b-0">
           <div className="flex items-start justify-between gap-5">
             <div>
@@ -74,32 +102,27 @@ export function SignalProductStage() {
               </h2>
             </div>
             <div className="shrink-0 text-right">
-              <p className="text-[0.65rem] font-semibold text-studio-muted uppercase">
-                Signal score
-              </p>
-              <div className="mt-1 flex items-baseline justify-end gap-1.5">
+              <div className="flex items-baseline justify-end gap-1.5">
                 <span className="font-display text-3xl font-bold tracking-[-0.04em] text-studio-ink">
                   82
                 </span>
                 <span className="text-xs font-bold text-studio-action">+8</span>
               </div>
+              <p className="mt-1 text-[0.7rem] font-medium text-studio-muted">Score this week</p>
             </div>
           </div>
 
           <div className="relative mt-6">
             <div className="absolute top-[1.45rem] bottom-[1.45rem] left-[0.43rem] w-px bg-studio-line" />
             <div className="space-y-4">
-              {evidence.map((item, index) => (
+              {evidence.map((item) => (
                 <div
                   key={item.source}
                   className="relative grid grid-cols-[1rem_1fr_auto] items-start gap-3"
                 >
                   <span className="relative z-10 mt-1 h-3.5 w-3.5 rounded-full border-[3px] border-studio-paper bg-studio-action shadow-[0_0_0_1px_#87bfe7]" />
                   <div>
-                    <div className="flex flex-wrap items-center gap-x-2">
-                      <p className="text-xs font-bold text-studio-ink">{item.source}</p>
-                      <span className="text-[0.68rem] text-studio-muted">Source {index + 1}</span>
-                    </div>
+                    <p className="text-xs font-bold text-studio-ink">{item.source}</p>
                     <p className="mt-0.5 text-xs leading-relaxed text-studio-muted sm:text-sm">
                       {item.detail}
                     </p>

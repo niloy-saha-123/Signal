@@ -72,7 +72,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-studio-action px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-studio-action-hover disabled:opacity-50"
+        className="rounded-full bg-studio-ink px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#071625] disabled:opacity-50"
       >
         Log in
       </button>
@@ -84,7 +84,7 @@ export function LoginForm() {
       <button
         type="button"
         onClick={handleGoogle}
-        className="rounded-md border border-studio-line px-4 py-2 text-sm font-medium text-studio-ink transition-colors hover:bg-studio-sky-soft"
+        className="rounded-full border border-studio-line px-4 py-2.5 text-sm font-medium text-studio-ink transition-colors hover:bg-studio-sky-soft"
       >
         Continue with Google
       </button>

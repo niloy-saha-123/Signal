@@ -23,7 +23,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <AppCommandBar />
       
       {/* Main content area - dynamic margins based on sidebar state */}
-      <main className="ml-64 mr-96 mt-16 min-h-screen px-8 py-10 transition-all duration-300">
+      <main className="mt-16 mr-12 ml-64 min-h-screen bg-studio-sky-soft px-8 py-10 text-studio-ink transition-all duration-300">
         {children}
       </main>
     </>

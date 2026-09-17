@@ -47,8 +47,8 @@ function ChatTurnView({ turn }: { turn: ChatTurn }) {
     <div className="flex flex-col gap-4 px-4 py-3">
       {/* User message */}
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl bg-slate-100 px-4 py-2.5">
-          <p className="font-sans text-sm text-slate-900">{turn.query}</p>
+        <div className="max-w-[85%] rounded-2xl bg-studio-sky-soft px-4 py-2.5">
+          <p className="text-sm text-studio-ink">{turn.query}</p>
         </div>
       </div>
 
@@ -62,12 +62,7 @@ function ChatTurnView({ turn }: { turn: ChatTurn }) {
               <p className="font-sans text-sm leading-relaxed text-slate-700">{turn.draft}</p>
             ) : (
               <>
-                <div className="flex gap-1">
-                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
-                </div>
-                <span className="font-sans text-xs text-slate-400">Thinking...</span>
+                <span className="text-xs text-studio-muted">Thinking…</span>
               </>
             )}
           </div>
@@ -75,8 +70,8 @@ function ChatTurnView({ turn }: { turn: ChatTurn }) {
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
             <p className="font-sans text-sm text-amber-900">{turn.result.reason}</p>
             {turn.result.suggested_query && (
-              <button className="mt-2 font-sans text-xs text-amber-700 underline">
-                Try: {turn.result.suggested_query}
+              <button className="mt-2 text-xs text-amber-800 underline">
+                Try: <span>{turn.result.suggested_query}</span>
               </button>
             )}
           </div>
@@ -285,7 +280,7 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
       </div>
 
       {/* Input area - fixed at bottom */}
-      <div className="border-t border-slate-100 p-4">
+      <div className="border-t border-studio-line p-4">
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
           <div className="flex-1">
             <textarea
@@ -297,17 +292,18 @@ export function ChatInterface({ competitorIds }: ChatInterfaceProps) {
                   handleSubmit(e as any);
                 }
               }}
-              placeholder="Message Signal..."
+              placeholder="Ask Signal a question…"
               rows={1}
-              className="w-full resize-none rounded-lg border border-slate-200 px-3 py-2.5 font-sans text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-300 focus:outline-none focus:ring-1 focus:ring-slate-300"
+              className="w-full resize-none rounded-2xl border border-studio-line bg-studio-sky-soft px-3 py-2.5 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
               disabled={submitting}
             />
           </div>
           <button
             type="submit"
             disabled={submitting || query.trim().length === 0}
-            className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-studio-ink text-white transition-opacity hover:opacity-90 disabled:opacity-30"
             title="Send message"
+            aria-label="Ask"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />

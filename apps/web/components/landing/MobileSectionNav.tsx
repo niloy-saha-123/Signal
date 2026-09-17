@@ -3,9 +3,11 @@
 import { useRef, useState } from "react";
 
 const SECTION_LINKS = [
-  ["#workflow", "How it works"],
   ["#product", "Product"],
+  ["#workflow", "How it works"],
   ["#research", "Research chat"],
+  ["#questions", "Questions"],
+  ["/briefing", "Workspace"],
 ] as const;
 
 export function MobileSectionNav() {
@@ -22,7 +24,7 @@ export function MobileSectionNav() {
   return (
     <details
       ref={detailsRef}
-      className="group relative ml-auto md:hidden"
+      className="group relative ml-auto xl:hidden"
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
     >
       <summary

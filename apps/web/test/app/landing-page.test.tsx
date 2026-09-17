@@ -21,6 +21,14 @@ describe("LandingPage", () => {
       "href",
       "#research",
     );
+    expect(within(mobileNav).getByRole("link", { name: "Questions" })).toHaveAttribute(
+      "href",
+      "#questions",
+    );
+    expect(within(mobileNav).getByRole("link", { name: "Workspace" })).toHaveAttribute(
+      "href",
+      "/briefing",
+    );
 
     const details = mobileNav.closest("details");
     expect(details).not.toBeNull();
@@ -39,5 +47,20 @@ describe("LandingPage", () => {
         name: "A packaging change signals enterprise intent",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("has a product footer with workspace and account destinations", () => {
+    render(<LandingPage />);
+
+    const footer = screen.getByRole("contentinfo");
+    expect(within(footer).getByRole("link", { name: "Briefing" })).toHaveAttribute(
+      "href",
+      "/briefing",
+    );
+    expect(within(footer).getByRole("link", { name: "Create a workspace" })).toHaveAttribute(
+      "href",
+      "/signup",
+    );
+    expect(within(footer).getByRole("navigation", { name: "Product" })).toBeInTheDocument();
   });
 });

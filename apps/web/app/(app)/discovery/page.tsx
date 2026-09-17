@@ -1,35 +1,38 @@
-// apps/web/app/discovery/page.tsx
-// Discovery — New competitive movements to review (track or dismiss)
-import { getServerAccessToken } from "@/lib/supabase-server";
 import { listAlerts, listCompetitors } from "@/lib/api";
+import { previewDiscoveries } from "@/lib/preview-workspace";
+import { getOptionalAccessToken } from "@/lib/supabase-server";
 import { DiscoveryClient } from "./discovery-client";
 
 export default async function DiscoveryPage() {
-  const token = await getServerAccessToken();
-  
-  const competitors = await listCompetitors(token);
-  const competitorIds = competitors.map((c) => c.id);
-  
-  // Get recent alerts to review
-  const alerts = await listAlerts(
-    { competitor_ids: competitorIds, limit: 20 },
-    token
-  );
+  const token = await getOptionalAccessToken();
+  if (!token) {
+    return <DiscoveryClient discoveries={previewDiscoveries()} />;
+  }
 
-  // Map alerts to discovery items
-  const discoveries = alerts.data.map((alert) => {
-    const competitor = competitors.find((c) => c.id === alert.competitor_id);
-    return {
-      id: alert.id,
-      competitor: competitor?.name || "Unknown",
-      type: alert.pattern.split("_")[0] || "signal",
-      title: alert.pattern.replace(/_/g, " "),
-      source: "competitive intelligence", // Could extract from evidence
-      detected: new Date(alert.created_at).toLocaleString(),
-      snippet: alert.interpretation,
-      confidence: alert.confidence,
-    };
-  });
+  try {
+    const competitors = await listCompetitors(token);
+    const competitorIds = competitors.map((competitor) => competitor.id);
+    const alerts =
+      competitorIds.length > 0
+        ? await listAlerts({ competitor_ids: competitorIds, limit: 20 }, token)
+        : { data: [] };
 
-  return <DiscoveryClient discoveries={discoveries} />;
+    const discoveries = alerts.data.map((alert) => {
+      const competitor = competitors.find((item) => item.id === alert.competitor_id);
+      return {
+        id: alert.id,
+        competitor: competitor?.name || "Unknown",
+        type: alert.pattern.split("_")[0] || "signal",
+        title: alert.pattern.replace(/_/g, " "),
+        source: "collected evidence",
+        detected: new Date(alert.created_at).toLocaleString(),
+        snippet: alert.interpretation,
+        confidence: alert.confidence,
+      };
+    });
+
+    return <DiscoveryClient discoveries={discoveries} />;
+  } catch {
+    return <DiscoveryClient discoveries={previewDiscoveries()} />;
+  }
 }

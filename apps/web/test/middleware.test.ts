@@ -125,4 +125,28 @@ describe("middleware", () => {
       expect(getUser).not.toHaveBeenCalled();
     });
   });
+
+  describe("unauthenticated app preview", () => {
+    beforeEach(() => {
+      getUser.mockResolvedValue({ data: { user: null } });
+    });
+
+    it("lets /briefing through when NEXT_PUBLIC_PREVIEW_UNAUTH is set", async () => {
+      vi.stubEnv("NEXT_PUBLIC_PREVIEW_UNAUTH", "1");
+
+      const response = await middleware(makeRequest("/briefing"));
+
+      expect(response.headers.get("location")).toBeNull();
+      expect(getUser).not.toHaveBeenCalled();
+    });
+
+    it("lets /briefing through in development", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+
+      const response = await middleware(makeRequest("/intel"));
+
+      expect(response.headers.get("location")).toBeNull();
+      expect(getUser).not.toHaveBeenCalled();
+    });
+  });
 });

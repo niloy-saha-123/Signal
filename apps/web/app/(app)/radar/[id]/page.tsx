@@ -3,28 +3,21 @@
 // hiring velocity by department. GET /:id/scores backs SignalScoreCard's sparkline;
 // GET /:id/trend and GET /:id/hiring back TrendChart's other two panels and HiringChart.
 import { notFound } from "next/navigation";
-import {
-  ApiError,
-  getCompetitor,
-  getCompetitorHiring,
-  getCompetitorScore,
-  getCompetitorScoreHistory,
-  getCompetitorTrend,
-} from "@/lib/api";
-import { getServerAccessToken } from "@/lib/supabase-server";
+import { ApiError, getCompetitor, getCompetitorHiring, getCompetitorScore, getCompetitorScoreHistory, getCompetitorTrend } from "@/lib/api";
+import { getOptionalAccessToken } from "@/lib/supabase-server";
 import { SignalScoreCard } from "@/components/SignalScoreCard";
 import { TrendChart } from "@/components/TrendChart";
 import { HiringChart } from "@/components/HiringChart";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const token = await getServerAccessToken();
+  const token = await getOptionalAccessToken();
 
   let competitor;
   try {
     competitor = await getCompetitor(id, token);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) notFound();
+    if (error instanceof ApiError && (error.status === 404 || error.status === 401)) notFound();
     throw error;
   }
 

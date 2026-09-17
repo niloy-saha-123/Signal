@@ -20,74 +20,58 @@ export function DiscoveryClient({ discoveries: initialDiscoveries }: { discoveri
   };
 
   const handleTrack = async (id: string) => {
-    // This would call resumeDiscovery API when backend is fully connected
-    // For now, optimistically update UI
     setDiscoveries((prev) => prev.filter((d) => d.id !== id));
   };
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Header */}
       <div className="flex flex-col gap-2">
-        <h1 className="font-serif text-4xl font-semibold text-slate-900">Discovery</h1>
-        <p className="font-sans text-sm font-semibold text-slate-600">
+        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          Discovery
+        </h1>
+        <p className="text-sm font-semibold text-studio-muted">
           {discoveries.length} new movements to review
         </p>
       </div>
 
-      {/* Discovery Feed */}
       <div className="flex flex-col gap-4">
         {discoveries.length === 0 ? (
-          <div className="flex items-center justify-center rounded-2xl bg-white p-12 shadow-sm">
-            <p className="font-sans text-sm text-slate-400">No new movements to review</p>
+          <div className="flex items-center justify-center rounded-[1.6rem] border border-studio-line bg-studio-paper p-12">
+            <p className="text-sm text-studio-muted">No new movements to review</p>
           </div>
         ) : (
           discoveries.map((discovery) => (
             <div
               key={discovery.id}
-              className="flex gap-6 rounded-2xl bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
+              className="flex gap-6 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6"
             >
-              {/* Left: Content */}
               <div className="flex-1">
-                {/* Meta row */}
-                <div className="flex items-center gap-2 font-sans text-xs">
-                  <span className="font-extrabold text-slate-900">{discovery.competitor}</span>
-                  <span className="text-slate-400">·</span>
-                  <span className="inline-block rounded-md bg-slate-100 px-2 py-0.5 font-bold text-slate-600">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-extrabold text-studio-ink">{discovery.competitor}</span>
+                  <span className="rounded-full bg-studio-sky-soft px-2 py-0.5 font-bold text-studio-muted">
                     {discovery.type}
                   </span>
-                  <span className="text-slate-400">·</span>
-                  <span className="text-slate-600">{discovery.detected}</span>
+                  <span className="text-studio-muted">{discovery.detected}</span>
                 </div>
-
-                {/* Title */}
-                <h3 className="mt-3 font-sans text-lg font-extrabold capitalize leading-snug text-slate-900">
+                <h3 className="mt-3 text-lg leading-snug font-extrabold text-studio-ink capitalize">
                   {discovery.title}
                 </h3>
-
-                {/* Snippet */}
-                <p className="mt-2 font-sans text-sm leading-relaxed text-slate-600">
-                  {discovery.snippet}
-                </p>
-
-                {/* Source */}
-                <div className="mt-3 flex items-center gap-2 font-sans text-xs">
-                  <span className="text-slate-400">Source:</span>
-                  <span className="font-semibold text-indigo-600">{discovery.source}</span>
+                <p className="mt-2 text-sm leading-relaxed text-studio-muted">{discovery.snippet}</p>
+                <div className="mt-3 flex items-center gap-2 text-xs">
+                  <span className="text-studio-muted">Source</span>
+                  <span className="font-semibold text-studio-action">{discovery.source}</span>
                 </div>
               </div>
-
-              {/* Right: Actions */}
               <div className="flex flex-col gap-2">
                 <button
                   onClick={() => handleDismiss(discovery.id)}
-                  className="rounded-lg bg-slate-100 px-4 py-2 font-sans text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-200"
+                  className="rounded-full bg-studio-sky-soft px-4 py-2 text-sm font-semibold text-studio-muted hover:bg-studio-sky"
                 >
                   Dismiss
                 </button>
                 <button
                   onClick={() => handleTrack(discovery.id)}
-                  className="rounded-lg bg-indigo-600 px-4 py-2 font-sans text-sm font-bold text-white transition-colors hover:bg-indigo-700"
+                  className="rounded-full bg-studio-ink px-4 py-2 text-sm font-bold text-white hover:bg-[#071625]"
                 >
                   Track
                 </button>

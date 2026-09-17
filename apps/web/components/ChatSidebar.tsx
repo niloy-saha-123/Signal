@@ -6,7 +6,7 @@ import { ChatInterface } from "./ChatInterface";
 export function ChatSidebar() {
   const [competitorIds, setCompetitorIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
   const [chatKey, setChatKey] = useState(0);
 
   useEffect(() => {
@@ -34,10 +34,10 @@ export function ChatSidebar() {
 
   if (isCollapsed) {
     return (
-      <aside className="fixed right-0 top-0 z-10 flex h-screen w-12 flex-col border-l border-slate-200 bg-white">
+      <aside className="fixed top-0 right-0 z-20 flex h-screen w-12 flex-col border-l border-studio-line bg-studio-paper">
         <button
           onClick={() => setIsCollapsed(false)}
-          className="mt-4 flex h-12 items-center justify-center text-slate-400 hover:bg-slate-50 hover:text-slate-700"
+          className="mt-4 flex h-12 items-center justify-center text-studio-muted hover:bg-studio-sky-soft hover:text-studio-ink"
           aria-label="Expand chat"
         >
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -49,20 +49,19 @@ export function ChatSidebar() {
   }
 
   return (
-    <aside className="fixed right-0 top-0 z-10 flex h-screen w-96 flex-col border-l border-slate-200 bg-white transition-all duration-300">
-      {/* Chat header - CLEAN design, no purple */}
-      <div className="flex h-14 items-center justify-between border-b border-slate-100 px-4">
-        <h2 className="font-sans text-sm font-semibold text-slate-900">Chat</h2>
+    <aside className="fixed top-0 right-0 z-20 flex h-screen w-80 flex-col border-l border-studio-line bg-studio-paper">
+      <div className="flex h-14 items-center justify-between border-b border-studio-line px-4">
+        <h2 className="text-sm font-semibold text-studio-ink">Chat</h2>
         <div className="flex items-center gap-1">
-          <button 
+          <button
             onClick={handleNewChat}
-            className="rounded-md px-3 py-1.5 font-sans text-xs font-medium text-slate-700 hover:bg-slate-50 active:bg-slate-100"
+            className="rounded-full px-3 py-1.5 text-xs font-medium text-studio-ink hover:bg-studio-sky-soft"
           >
             New chat
           </button>
           <button
             onClick={() => setIsCollapsed(true)}
-            className="rounded-md p-1.5 text-slate-400 hover:bg-slate-50 hover:text-slate-700"
+            className="rounded-full p-1.5 text-studio-muted hover:bg-studio-sky-soft hover:text-studio-ink"
             aria-label="Collapse chat"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -76,16 +75,13 @@ export function ChatSidebar() {
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center p-8">
-            <div className="flex gap-1">
-              <div className="h-2 w-2 animate-bounce rounded-full bg-slate-300 [animation-delay:-0.3s]" />
-              <div className="h-2 w-2 animate-bounce rounded-full bg-slate-300 [animation-delay:-0.15s]" />
-              <div className="h-2 w-2 animate-bounce rounded-full bg-slate-300" />
-            </div>
+            <p className="text-sm text-studio-muted">Loading workspace chat…</p>
           </div>
         ) : competitorIds.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-8 text-center">
-            <p className="font-sans text-sm text-slate-400">
-              Add competitors to start asking questions
+            <p className="text-sm leading-relaxed text-studio-muted">
+              Research chat stays tied to collected evidence. Sign in to ask a follow-up
+              against this workspace.
             </p>
           </div>
         ) : (
