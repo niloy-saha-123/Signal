@@ -80,6 +80,14 @@ vi.mock("@langchain/openai", () => ({
   ChatOpenAI: chatOpenAIMock,
 }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { changeDetectorNode } from "@/agents/analysis/change-detector";
 
 const state = {
@@ -241,6 +249,17 @@ describe("agents/analysis/change-detector", () => {
     expect(result).toEqual({ pricing_change: parsedResult });
     expect(result.pricing_change?.old_price).toBe("$39/mo");
     expect(result.pricing_change?.new_price).toBe("$49/mo");
+  });
+
+  it("wraps the LLM call in withCircuitBreaker under analysis:change_detector", async () => {
+    getRecentPricingDiffsMock.mockResolvedValue([
+      makeDiff({ diff: { added: ["Pro tier: $49/mo"], removed: ["Pro tier: $39/mo"] } }),
+    ]);
+    await changeDetectorNode(state);
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith(
+      "analysis:change_detector",
+      expect.any(Function)
+    );
   });
 
   it("narrows a malformed diff jsonb payload to empty added/removed arrays instead of throwing", async () => {

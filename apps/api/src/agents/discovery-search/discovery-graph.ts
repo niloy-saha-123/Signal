@@ -21,6 +21,7 @@ import { z } from "zod";
 import { getCompanyContext } from "../../lib/company-context";
 import { createTrackedEntityCandidate } from "../../db/queries";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
+import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { loadRootEnv } from "../../lib/env";
 
 loadRootEnv();
@@ -91,20 +92,24 @@ async function searchNode(
     maxRetries: LLM_MAX_RETRIES,
   }).withStructuredOutput(CandidatesSchema, { includeRaw: true });
 
-  const searchResults = await tavily.invoke({
-    query: `companies competing with: ${companyContext.slice(0, 500)}`,
-  });
+  const searchResults = await withCircuitBreaker("discovery:search", () =>
+    tavily.invoke({
+      query: `companies competing with: ${companyContext.slice(0, 500)}`,
+    })
+  );
 
-  const result = await model.invoke([
-    {
-      role: "system",
-      content:
-        "Given this company's profile and web search results, propose up to 5 real " +
-        "competitor candidates with their domain and a one-sentence reason each. " +
-        "Only propose companies that genuinely compete for the same customers.",
-    },
-    { role: "user", content: `Company:\n${companyContext}\n\nSearch results:\n${formatTavilyResults(searchResults)}` },
-  ]);
+  const result = await withCircuitBreaker("discovery:llm", () =>
+    model.invoke([
+      {
+        role: "system",
+        content:
+          "Given this company's profile and web search results, propose up to 5 real " +
+          "competitor candidates with their domain and a one-sentence reason each. " +
+          "Only propose companies that genuinely compete for the same customers.",
+      },
+      { role: "user", content: `Company:\n${companyContext}\n\nSearch results:\n${formatTavilyResults(searchResults)}` },
+    ])
+  );
 
   if (!result.parsed) return { candidates: [] };
   return { candidates: result.parsed.candidates };

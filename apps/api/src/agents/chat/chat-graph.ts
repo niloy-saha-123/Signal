@@ -45,6 +45,7 @@ import { trackCost } from "../../llm/cost-tracker";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { loadRootEnv } from "../../lib/env";
 import { withRetry } from "../../lib/retry";
+import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 
 loadRootEnv();
 
@@ -309,12 +310,14 @@ async function summarizeConversation(
     maxTokens: maxOutputTokens(),
   });
 
-  const response = (await model.invoke(
-    [
-      ["system", COMPACTION_SYSTEM_PROMPT],
-      ["human", transcript],
-    ],
-    { signal: config.signal }
+  const response = (await withCircuitBreaker("chat:compact", () =>
+    model.invoke(
+      [
+        ["system", COMPACTION_SYSTEM_PROMPT],
+        ["human", transcript],
+      ],
+      { signal: config.signal }
+    )
   )) as AIMessage;
 
   const summary = messageText(response);
@@ -394,11 +397,17 @@ async function generateNode(
 
       let draft = "";
       let usage: { input_tokens?: number; output_tokens?: number } | undefined;
-      for await (const chunk of stream) {
-        draft += streamText(chunk);
-        if (chunk.usage_metadata) usage = chunk.usage_metadata;
-      }
-      draft = draft.trim();
+      const streamed = await withCircuitBreaker("chat:generate", async () => {
+        let text = "";
+        let used: { input_tokens?: number; output_tokens?: number } | undefined;
+        for await (const chunk of stream) {
+          text += streamText(chunk);
+          if (chunk.usage_metadata) used = chunk.usage_metadata;
+        }
+        return { text: text.trim(), used };
+      });
+      draft = streamed.text;
+      usage = streamed.used;
 
       await trackCost(
         "chat_agent",

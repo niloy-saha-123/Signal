@@ -62,6 +62,14 @@ const { anthropicInvokeMock, chatAnthropicMock } = vi.hoisted(() => {
 
 vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import {
   DISCOVERY_RECURSION_LIMIT,
   confirmNode,
@@ -127,6 +135,14 @@ describe("discovery-graph", () => {
     const result = await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
 
     expect(result).toEqual({ candidates: [] });
+  });
+
+  it("wraps the Tavily search and the LLM classification call in distinct circuit breakers", async () => {
+    anthropicInvokeMock.mockResolvedValue({ parsed: { candidates: [] } });
+    await searchNode({ workspace_id: WORKSPACE_ID, candidates: [] } as never);
+
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith("discovery:search", expect.any(Function));
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith("discovery:llm", expect.any(Function));
   });
 
   it("serializes Tavily results into readable text instead of [object Object]", async () => {

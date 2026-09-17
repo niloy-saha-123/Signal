@@ -81,6 +81,14 @@ vi.mock("@langchain/openai", () => ({
   ChatOpenAI: chatOpenAIMock,
 }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { intentAnalyzerNode } from "@/agents/analysis/intent-analyzer";
 
 const state = {
@@ -237,6 +245,14 @@ describe("agents/analysis/intent-analyzer", () => {
     expect(trackLatencyMock).toHaveBeenCalledWith(
       "intent_analyzer",
       { competitorId: "c1", identity: { kind: "run", runId: "run1" } },
+      expect.any(Function)
+    );
+  });
+
+  it("wraps the LLM call in withCircuitBreaker under analysis:intent_analyzer", async () => {
+    await intentAnalyzerNode(state);
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith(
+      "analysis:intent_analyzer",
       expect.any(Function)
     );
   });

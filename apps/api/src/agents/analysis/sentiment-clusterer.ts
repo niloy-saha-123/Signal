@@ -10,6 +10,7 @@ import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
+import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "sentiment_clusterer" as const;
@@ -87,10 +88,12 @@ export async function sentimentClustererNode(
       identity: { kind: "run" as const, runId: state.run_id },
     };
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
-      structuredModel.invoke([
-        ["system", systemPrompt],
-        ["human", buildSignalsText(signals)],
-      ])
+      withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
+        structuredModel.invoke([
+          ["system", systemPrompt],
+          ["human", buildSignalsText(signals)],
+        ])
+      )
     );
 
     // The call was made and billed whether or not the response parsed — track it first.

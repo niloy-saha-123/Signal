@@ -9,7 +9,13 @@ vi.mock("@/db/client", () => ({
 
 import { cacheRedis } from "@/lib/redis-client";
 import { db } from "@/db/client";
-import { getCircuitState, recordFailure, recordSuccess, isCircuitOpen } from "@/reliability/circuit-breaker";
+import {
+  getCircuitState,
+  recordFailure,
+  recordSuccess,
+  isCircuitOpen,
+  withCircuitBreaker,
+} from "@/reliability/circuit-breaker";
 
 describe("circuit breaker", () => {
   beforeEach(() => {
@@ -112,6 +118,31 @@ describe("circuit breaker", () => {
       );
       expect(cacheRedis.incr).not.toHaveBeenCalled();
       expect(db.insert).toHaveBeenCalled();
+    });
+  });
+
+  describe("withCircuitBreaker", () => {
+    it("returns fn's result and records success when the call completes", async () => {
+      (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      const result = await withCircuitBreaker("reddit", async () => "ok");
+      expect(result).toBe("ok");
+      expect(cacheRedis.del).toHaveBeenCalledWith("circuit:reddit:failures");
+    });
+
+    it("short-circuits without invoking fn when the circuit is open", async () => {
+      (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue("open");
+      const fn = vi.fn();
+      await expect(withCircuitBreaker("reddit", fn)).rejects.toThrow(/circuit is open/);
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it("records failure and rethrows the original error when fn throws", async () => {
+      (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (cacheRedis.del as ReturnType<typeof vi.fn>).mockResolvedValue(0); // no half-open trial active
+      (cacheRedis.incr as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      const original = new Error("upstream timeout");
+      await expect(withCircuitBreaker("reddit", async () => { throw original; })).rejects.toBe(original);
+      expect(cacheRedis.incr).toHaveBeenCalledWith("circuit:reddit:failures");
     });
   });
 });

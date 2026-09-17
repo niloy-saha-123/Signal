@@ -74,6 +74,14 @@ const { anthropicStreamMock, anthropicInvokeMock, chatAnthropicMock } = vi.hoist
 });
 vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { getChatGraph, setupChatCheckpointer, CHAT_RECURSION_LIMIT } from "@/agents/chat/chat-graph";
 
 const COMPETITOR_1 = "11111111-1111-4111-8111-111111111111";
@@ -230,6 +238,11 @@ describe("agents/chat/chat-graph", () => {
     await invokeGraph(turn([new HumanMessage("Second question?")], RUN_ID_2), threadId);
 
     expect(anthropicInvokeMock).not.toHaveBeenCalled();
+  });
+
+  dbIt("wraps the generate node's model call in withCircuitBreaker under chat:generate", async () => {
+    await invokeGraph(turn([new HumanMessage("What changed?")], RUN_ID), randomUUID());
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith("chat:generate", expect.any(Function));
   });
 
   dbIt("returns a citation-enforced answer after streaming and enforcing", async () => {

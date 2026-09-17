@@ -19,6 +19,7 @@ import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
 import { selectModel } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
+import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 
 const AGENT_NAME = "pattern_detector" as const;
@@ -155,10 +156,12 @@ export async function patternDetectorNode(
           includeRaw: true,
         });
 
-        const { raw, parsed } = await structuredModel.invoke([
-          ["system", systemPrompt],
-          ["human", buildContextText(volumeByDay, chunks)],
-        ]);
+        const { raw, parsed } = await withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
+          structuredModel.invoke([
+            ["system", systemPrompt],
+            ["human", buildContextText(volumeByDay, chunks)],
+          ])
+        );
         return { kind: "llm", model, raw, parsed: parsed as PatternsResult | null };
       }
     );

@@ -85,6 +85,14 @@ vi.mock("@langchain/anthropic", () => ({
   ChatAnthropic: chatAnthropicMock,
 }));
 
+const { withCircuitBreakerMock } = vi.hoisted(() => ({
+  withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
+}));
+
+vi.mock("@/reliability/circuit-breaker", () => ({
+  withCircuitBreaker: withCircuitBreakerMock,
+}));
+
 import { sentimentClustererNode } from "@/agents/analysis/sentiment-clusterer";
 
 const state = {
@@ -196,6 +204,14 @@ describe("agents/analysis/sentiment-clusterer", () => {
     expect(humanMessage[1]).toContain(redditSignal.raw_text);
     expect(humanMessage[1]).toContain(hnSignal.raw_text);
     expect(result).toEqual({ sentiment_clusters: parsedResult });
+  });
+
+  it("wraps the LLM call in withCircuitBreaker under analysis:sentiment_clusterer", async () => {
+    await sentimentClustererNode(state);
+    expect(withCircuitBreakerMock).toHaveBeenCalledWith(
+      "analysis:sentiment_clusterer",
+      expect.any(Function)
+    );
   });
 
   it("injects company context into the system prompt when a profile exists", async () => {
