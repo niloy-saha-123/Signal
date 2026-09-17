@@ -453,13 +453,6 @@ let checkpointer: PostgresSaver | undefined;
 
 export function getChatCheckpointer(): PostgresSaver {
   if (!checkpointer) {
-    // TEMP DIAGNOSTIC (remove once the CI-only ECONNREFUSED:5432 root cause is
-    // confirmed) — proves what DATABASE_URL actually was at construction time,
-    // rather than what the test file assumed it had already set.
-    console.error(
-      "[DIAG chat-graph] DATABASE_URL at checkpointer construction:",
-      JSON.stringify(process.env.DATABASE_URL)
-    );
     checkpointer = PostgresSaver.fromConnString(process.env.DATABASE_URL!);
   }
   return checkpointer;
@@ -479,8 +472,23 @@ export async function setupChatCheckpointer(): Promise<void> {
   await setupPromise;
 }
 
+// Lazy, not eager (root cause of a CI-only failure — see PR discussion): compiling
+// at module-import time forced getChatCheckpointer() to run during module load,
+// before an *importing* test file's own `process.env.DATABASE_URL = "..."`
+// override was guaranteed to have executed. ES module imports resolve before the
+// importing module's own top-level statements, so "set env, then import" only
+// reliably works when construction is deferred past module load — exactly how
+// getChatCheckpointer() and getMemoryStore() (memory-store.ts) already behave.
+// getChatGraph() now follows the same proven-safe lazy-singleton shape.
+let compiledGraph: ReturnType<typeof builder.compile> | undefined;
+
 // Same dual-copy cast as discovery-graph (checkpoint-postgres carries its own
 // nested @langchain/langgraph-checkpoint copy; see that file's comment).
-export const chatGraph = builder.compile({
-  checkpointer: getChatCheckpointer() as unknown as BaseCheckpointSaver,
-});
+export function getChatGraph(): ReturnType<typeof builder.compile> {
+  if (!compiledGraph) {
+    compiledGraph = builder.compile({
+      checkpointer: getChatCheckpointer() as unknown as BaseCheckpointSaver,
+    });
+  }
+  return compiledGraph;
+}

@@ -14,7 +14,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import type { AIMessageChunk } from "@langchain/core/messages";
 import type { ChatAgentResult } from "@signal/shared";
 import {
-  chatGraph,
+  getChatGraph,
   ChatAgentInputSchema,
   setupChatCheckpointer,
   CHAT_RECURSION_LIMIT,
@@ -60,7 +60,7 @@ export async function runChatAgent(
   const work = (async () => {
     await setupChatCheckpointer();
     signal.throwIfAborted();
-    const finalized = await chatGraph.invoke(
+    const finalized = await getChatGraph().invoke(
       {
         messages: [new HumanMessage(parsed.query)],
         workspace_id: parsed.workspace_id,
@@ -135,7 +135,7 @@ export async function* streamChat(
   // compaction model's summary tokens appear here too. The node name is the first
   // checkpoint-namespace segment ("generate:<taskId>"); filter to it so only the
   // answer draft is forwarded to the client, never the internal summary.
-  const stream = await chatGraph.stream(
+  const stream = await getChatGraph().stream(
     {
       messages: [new HumanMessage(parsed.query)],
       workspace_id: parsed.workspace_id,

@@ -1,8 +1,8 @@
 // Adapter tests for the thin single-turn runChatAgent over the checkpointed
-// graph. The graph module is mocked (chatGraph.invoke / setupChatCheckpointer)
-// so these are hermetic — no Postgres. A dummy DATABASE_URL is set before import
-// so chat-graph's loadRootEnv() can't inject the real Supabase URL into the
-// checkpointer it builds at module load (the pg.Pool it wraps never connects).
+// graph. The graph module is mocked (getChatGraph()/setupChatCheckpointer) so
+// these are hermetic — no Postgres. A dummy DATABASE_URL is set before import so
+// chat-graph's loadRootEnv() can't inject the real Supabase URL — though it no
+// longer matters for construction timing here, since getChatGraph() is lazy.
 process.env.DATABASE_URL = "postgres://signal:signal@localhost:5433/signal";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ vi.mock("@/agents/chat/chat-graph", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/agents/chat/chat-graph")>();
   return {
     ...actual,
-    chatGraph: { invoke: invokeMock, stream: streamMock },
+    getChatGraph: () => ({ invoke: invokeMock, stream: streamMock }),
     setupChatCheckpointer: setupMock,
   };
 });

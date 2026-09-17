@@ -74,7 +74,7 @@ const { anthropicStreamMock, anthropicInvokeMock, chatAnthropicMock } = vi.hoist
 });
 vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 
-import { chatGraph, setupChatCheckpointer, CHAT_RECURSION_LIMIT } from "@/agents/chat/chat-graph";
+import { getChatGraph, setupChatCheckpointer, CHAT_RECURSION_LIMIT } from "@/agents/chat/chat-graph";
 
 const COMPETITOR_1 = "11111111-1111-4111-8111-111111111111";
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000000";
@@ -124,7 +124,7 @@ function turn(messages: BaseMessage[], runId: string) {
 }
 
 async function invokeGraph(state: ReturnType<typeof turn>, threadId: string) {
-  return chatGraph.invoke(state, {
+  return getChatGraph().invoke(state, {
     configurable: { thread_id: threadId },
     recursionLimit: CHAT_RECURSION_LIMIT,
   });
@@ -435,7 +435,7 @@ describe("agents/chat/chat-graph", () => {
 
   dbIt("passes the request signal into the model stream", async () => {
     const controller = new AbortController();
-    await chatGraph.invoke(turn([new HumanMessage("What changed?")], RUN_ID), {
+    await getChatGraph().invoke(turn([new HumanMessage("What changed?")], RUN_ID), {
       configurable: { thread_id: "77777777-8888-9999-aaaa-bbbbbbbbbbbb" },
       signal: controller.signal,
       recursionLimit: CHAT_RECURSION_LIMIT,
