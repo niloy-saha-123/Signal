@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
-import { Manrope } from "next/font/google";
+import { Onest } from "next/font/google";
 import "./globals.css";
 
-// Load Manrope font for the entire app
-const manrope = Manrope({
+// Keep the existing variable name so authenticated surfaces retain their font contract.
+const onest = Onest({
   subsets: ["latin"],
   variable: "--font-manrope",
   display: "swap",
+  weight: ["400", "500", "600", "700", "800"],
 });
 
 export const metadata: Metadata = {
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={manrope.variable}>
+    <html lang="en" className={onest.variable}>
       <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
         {children}
       </body>

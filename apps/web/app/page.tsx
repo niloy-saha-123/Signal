@@ -1,122 +1,377 @@
-// Public landing page
+import Link from "next/link";
+import { SignalMark } from "@/components/landing/SignalMark";
+import { SignalProductStage } from "@/components/landing/SignalProductStage";
+
+const workflow = [
+  {
+    label: "Source",
+    title: "Signal watches the places change appears first.",
+    body: "Pricing pages, product changelogs, hiring, community, and company sources remain connected to the movement they reveal.",
+  },
+  {
+    label: "Movement",
+    title: "Related changes become one legible event.",
+    body: "A pricing edit, packaging release, and hiring pattern can be reviewed together instead of scattered across separate feeds.",
+  },
+  {
+    label: "Meaning",
+    title: "Interpretation stays attached to evidence.",
+    body: "Signal explains the strategic pattern, assigns a score, and keeps the underlying source trail open for analyst review.",
+  },
+  {
+    label: "Briefing",
+    title: "The right movement reaches the morning brief.",
+    body: "Alerts and briefings organize what changed so analysts can investigate, share context, and decide what deserves action.",
+  },
+];
+
+function DirectionArrow() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-9" viewBox="0 0 36 20" fill="none">
+      <path
+        d="M1 10h31m-6-6 6 6-6 6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-50 border-b border-slate-200 bg-white/90 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-8 py-4">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
-              <span className="font-sans text-sm font-extrabold text-white">S</span>
-            </div>
-            <span className="font-sans text-lg font-extrabold text-slate-900">signal</span>
-          </div>
-          <div className="flex items-center gap-4">
+    <div className="min-h-screen overflow-x-hidden bg-studio-paper text-studio-ink">
+      <header className="relative z-50 border-b border-studio-line/70 bg-studio-paper">
+        <div className="mx-auto flex h-18 max-w-368 items-center justify-between px-5 sm:px-8 lg:px-12">
+          <Link href="/" aria-label="Signal home">
+            <SignalMark />
+          </Link>
+          <nav aria-label="Main navigation" className="hidden items-center gap-7 md:flex">
             <a
+              href="#workflow"
+              className="text-sm font-semibold text-studio-muted transition-colors hover:text-studio-ink"
+            >
+              How it works
+            </a>
+            <a
+              href="#product"
+              className="text-sm font-semibold text-studio-muted transition-colors hover:text-studio-ink"
+            >
+              Product
+            </a>
+            <a
+              href="#research"
+              className="text-sm font-semibold text-studio-muted transition-colors hover:text-studio-ink"
+            >
+              Research chat
+            </a>
+          </nav>
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            <Link
               href="/login"
-              className="rounded-lg px-4 py-2 font-sans text-sm font-semibold text-slate-600 transition-colors hover:text-slate-900"
+              className="rounded-full px-3 py-2.5 text-sm font-bold text-studio-ink transition-colors hover:bg-studio-sky-soft sm:px-4"
             >
-              Sign In
-            </a>
-            <a
+              Sign in
+            </Link>
+            <Link
               href="/signup"
-              className="rounded-lg bg-indigo-600 px-4 py-2 font-sans text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+              className="rounded-full bg-studio-ink px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-studio-action sm:px-5"
             >
-              Get Started
-            </a>
+              Start tracking
+            </Link>
           </div>
         </div>
       </header>
 
-      {/* Hero */}
-      <div className="mx-auto max-w-5xl px-8 pt-32 pb-20 text-center">
-        <h1 className="font-serif text-5xl font-semibold leading-tight text-slate-900 md:text-6xl">
-          Know what your competitors are doing before everyone else
-        </h1>
-        <p className="mx-auto mt-6 max-w-2xl font-sans text-lg leading-relaxed text-slate-600">
-          Signal continuously monitors your competitive landscape and surfaces the movements that matter—pricing changes, product launches, hiring spikes—before they become industry news.
-        </p>
-        <div className="mt-10 flex items-center justify-center gap-4">
-          <a
-            href="/signup"
-            className="rounded-lg bg-indigo-600 px-6 py-3 font-sans text-base font-semibold text-white transition-colors hover:bg-indigo-700"
-          >
-            Start tracking
-          </a>
-          <a
-            href="/login"
-            className="rounded-lg border border-slate-300 px-6 py-3 font-sans text-base font-semibold text-slate-700 transition-colors hover:border-slate-400 hover:bg-white"
-          >
-            Sign in
-          </a>
-        </div>
-      </div>
-
-      {/* How it works */}
-      <div className="mx-auto max-w-7xl px-8 py-20">
-        <div className="grid gap-8 md:grid-cols-3">
-          <div className="rounded-2xl bg-white p-8 shadow-sm">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100">
-              <svg className="h-6 w-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+      <main>
+        <section className="relative bg-studio-sky">
+          <div className="mx-auto grid min-h-[calc(100svh-4.5rem)] max-w-368 items-center gap-12 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[0.72fr_1.28fr] lg:gap-8 lg:px-12 lg:py-16">
+            <div className="relative z-10 max-w-156">
+              <h1 className="text-balance font-display text-[clamp(3.25rem,6.3vw,6rem)] leading-[0.94] font-extrabold tracking-[-0.04em] text-studio-ink">
+                See the competitor move before it becomes the story.
+              </h1>
+              <p className="mt-7 max-w-xl text-lg leading-relaxed text-studio-muted sm:text-xl">
+                Signal continuously connects market changes to their sources, explains why
+                they matter, and brings the movements worth acting on into one calm workspace.
+              </p>
+              <div className="mt-9 flex flex-wrap items-center gap-4">
+                <Link
+                  href="/signup"
+                  className="inline-flex min-h-12 items-center justify-center rounded-full bg-studio-action px-6 text-base font-bold text-white shadow-[0_14px_30px_-18px_rgba(8,118,207,0.95)] transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-studio-action-hover"
+                >
+                  Track your market
+                </Link>
+                <a
+                  href="#evidence-workflow"
+                  className="inline-flex min-h-12 items-center gap-2 px-2 text-sm font-bold text-studio-ink underline decoration-studio-action/40 underline-offset-4 hover:decoration-studio-action"
+                >
+                  Follow the evidence
+                  <DirectionArrow />
+                </a>
+              </div>
+              <p className="mt-5 text-xs leading-relaxed text-studio-muted">
+                Built for competitive-intelligence and strategy teams. No invented answers;
+                source citations stay in view.
+              </p>
             </div>
-            <h3 className="mb-2 font-sans text-lg font-bold text-slate-900">Continuous Discovery</h3>
-            <p className="font-sans text-sm leading-relaxed text-slate-600">
-              Signal automatically finds and tracks competitors across pricing pages, job boards, product changelogs, and community discussions.
-            </p>
-          </div>
 
-          <div className="rounded-2xl bg-white p-8 shadow-sm">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-rose-100">
-              <svg className="h-6 w-6 text-rose-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
+            <div className="relative lg:w-[min(62rem,72vw)] lg:translate-x-4 xl:translate-x-10">
+              <div className="absolute -top-8 -left-7 hidden h-24 w-24 rounded-full border border-studio-action/25 lg:block" />
+              <SignalProductStage />
+              <p className="mt-3 px-3 text-right text-[0.68rem] font-medium text-studio-muted">
+                Illustrative product view using Signal&apos;s implemented workflow
+              </p>
             </div>
-            <h3 className="mb-2 font-sans text-lg font-bold text-slate-900">Real-time Intelligence</h3>
-            <p className="font-sans text-sm leading-relaxed text-slate-600">
-              Get immediate alerts when competitors ship features, change pricing, or scale their teams—not days later from newsletters.
-            </p>
           </div>
+        </section>
 
-          <div className="rounded-2xl bg-white p-8 shadow-sm">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100">
-              <svg className="h-6 w-6 text-emerald-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
+        <section id="workflow" className="scroll-mt-8 bg-studio-paper py-24 sm:py-32">
+          <div className="mx-auto max-w-344 px-5 sm:px-8 lg:px-12">
+            <div className="grid gap-10 lg:grid-cols-[0.72fr_1.28fr] lg:gap-20">
+              <h2 className="max-w-xl font-display text-4xl leading-[1.02] font-bold tracking-[-0.04em] sm:text-5xl">
+                Evidence moves forward without losing its trail.
+              </h2>
+              <p className="max-w-2xl text-lg leading-relaxed text-studio-muted lg:pt-2">
+                Most monitoring tools leave the analyst to connect tabs, feeds, and summaries.
+                Signal preserves the relationship between what changed, where it came from,
+                and what the movement may mean.
+              </p>
             </div>
-            <h3 className="mb-2 font-sans text-lg font-bold text-slate-900">Strategic Analysis</h3>
-            <p className="font-sans text-sm leading-relaxed text-slate-600">
-              Chat with your intelligence to understand patterns, compare strategies, and get recommendations grounded in actual competitive movements.
-            </p>
-          </div>
-        </div>
-      </div>
 
-      {/* CTA */}
-      <div className="mx-auto max-w-4xl px-8 py-20 text-center">
-        <div className="rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 px-12 py-16 shadow-xl">
-          <h2 className="font-serif text-3xl font-semibold text-white md:text-4xl">
-            Start tracking your competitive landscape today
-          </h2>
-          <p className="mx-auto mt-4 max-w-xl font-sans text-base text-slate-300">
-            Join teams that stay ahead by knowing what&apos;s happening in real-time.
+            <div
+              id="evidence-workflow"
+              className="mt-16 border-y border-studio-line lg:grid lg:grid-cols-[0.82fr_1.2fr_1fr_0.92fr]"
+            >
+              {workflow.map((step, index) => (
+                <article
+                  key={step.label}
+                  className={`relative py-8 lg:min-h-88 lg:px-7 lg:py-9 ${
+                    index !== workflow.length - 1
+                      ? "border-b border-studio-line lg:border-r lg:border-b-0"
+                      : ""
+                  } ${index === 1 ? "lg:pt-20" : ""} ${index === 2 ? "lg:pt-12" : ""}`}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="text-xs font-bold tracking-[0.12em] text-studio-action uppercase">
+                      {step.label}
+                    </p>
+                    {index !== workflow.length - 1 && (
+                      <span className="text-studio-action lg:absolute lg:top-8 lg:-right-5 lg:z-10 lg:bg-studio-paper lg:px-2">
+                        <DirectionArrow />
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="mt-5 max-w-sm font-display text-2xl leading-tight font-bold tracking-[-0.03em]">
+                    {step.title}
+                  </h3>
+                  <p className="mt-4 max-w-sm text-sm leading-relaxed text-studio-muted">
+                    {step.body}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="product" className="scroll-mt-8 bg-studio-ink py-24 text-white sm:py-32">
+          <div className="mx-auto max-w-344 px-5 sm:px-8 lg:px-12">
+            <div className="grid items-start gap-14 lg:grid-cols-[0.9fr_1.1fr] lg:gap-24">
+              <div className="lg:sticky lg:top-12">
+                <h2 className="max-w-xl font-display text-4xl leading-[1.02] font-bold tracking-[-0.04em] sm:text-6xl">
+                  Keep watch without living in the feed.
+                </h2>
+                <p className="mt-6 max-w-xl text-lg leading-relaxed text-studio-sky-deep">
+                  Signal monitors product, pricing, hiring, community, and company sources
+                  continuously. Discovery and alerts help analysts decide what belongs in
+                  their tracked landscape.
+                </p>
+              </div>
+
+              <div className="overflow-hidden rounded-4xl border border-studio-muted bg-[#102b43]">
+                <div className="flex items-center justify-between border-b border-studio-muted px-5 py-4 sm:px-7">
+                  <div>
+                    <p className="text-sm font-bold">Movement queue</p>
+                    <p className="mt-1 text-xs text-studio-sky-deep">
+                      Review changes by competitor and source
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-studio-action px-3 py-1.5 text-xs font-bold">
+                    Monitoring
+                  </span>
+                </div>
+                <div className="divide-y divide-studio-muted">
+                  {[
+                    ["Pricing", "Plan packaging changed", "Evidence captured"],
+                    ["Product", "New admin controls released", "Changelog linked"],
+                    ["Hiring", "Enterprise roles increased", "Jobs source linked"],
+                    ["Discovery", "Adjacent competitor found", "Awaiting confirmation"],
+                  ].map(([source, movement, state], index) => (
+                    <div
+                      key={movement}
+                      className={`grid gap-3 px-5 py-6 sm:grid-cols-[6rem_1fr_auto] sm:items-center sm:px-7 ${
+                        index === 1 ? "bg-studio-action/15" : ""
+                      }`}
+                    >
+                      <p className="text-xs font-bold tracking-[0.08em] text-studio-sky-deep uppercase">
+                        {source}
+                      </p>
+                      <p className="font-semibold text-white">{movement}</p>
+                      <p className="text-xs text-studio-sky-deep">{state}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-studio-sky-soft py-24 sm:py-32">
+          <div className="mx-auto grid max-w-344 items-center gap-16 px-5 sm:px-8 lg:grid-cols-[1.12fr_0.88fr] lg:px-12">
+            <div className="relative min-h-128 overflow-hidden rounded-[2.2rem] border border-studio-line bg-studio-paper p-6 shadow-[0_26px_70px_-42px_rgba(10,32,51,0.45)] sm:p-9">
+              <div className="flex items-start justify-between gap-6 border-b border-studio-line pb-6">
+                <div>
+                  <p className="text-xs font-bold text-studio-action">Strategic interpretation</p>
+                  <h3 className="mt-2 max-w-lg text-xl font-bold tracking-tight">
+                    A packaging change with enterprise intent
+                  </h3>
+                </div>
+                <div className="text-right">
+                  <p className="text-[0.65rem] font-bold text-studio-muted uppercase">
+                    Score
+                  </p>
+                  <p className="mt-1 text-3xl font-bold tabular-nums">82</p>
+                </div>
+              </div>
+              <div className="grid gap-8 pt-7 sm:grid-cols-[1fr_0.72fr]">
+                <div>
+                  <p className="text-sm leading-relaxed text-studio-ink">
+                    Related evidence indicates the competitor is increasing separation
+                    between self-serve and enterprise plans, with commercial hiring moving in
+                    the same direction.
+                  </p>
+                  <div className="mt-8 space-y-5">
+                    {["Pricing evidence", "Release context", "Hiring trajectory"].map(
+                      (item, index) => (
+                        <div key={item} className="flex items-center gap-3">
+                          <span className="grid h-7 w-7 place-items-center rounded-full bg-studio-action text-xs font-bold text-white">
+                            {index + 1}
+                          </span>
+                          <span className="text-sm font-semibold">{item}</span>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                </div>
+                <div className="border-t border-studio-line pt-6 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-7">
+                  <p className="text-xs font-bold text-studio-muted uppercase">
+                    Analyst control
+                  </p>
+                  <p className="mt-3 text-sm leading-relaxed text-studio-muted">
+                    Open every source, adjust company context, review discovered entities,
+                    and decide which movement should become an alert.
+                  </p>
+                </div>
+              </div>
+              <div className="absolute right-8 bottom-8 left-8 h-px bg-studio-line">
+                <span className="absolute -top-1.5 left-[68%] h-3 w-3 rounded-full bg-studio-action shadow-[0_0_0_5px_#d5edff]" />
+              </div>
+            </div>
+
+            <div>
+              <h2 className="max-w-xl font-display text-4xl leading-[1.02] font-bold tracking-[-0.04em] sm:text-5xl">
+                Get the interpretation. Keep the judgment.
+              </h2>
+              <p className="mt-6 max-w-xl text-lg leading-relaxed text-studio-muted">
+                Signal groups relevant evidence, explains the pattern, and scores movement
+                so analysts can focus their attention. The conclusion never replaces the
+                sources or the team&apos;s own market context.
+              </p>
+              <p className="mt-8 max-w-lg border-t border-studio-line pt-6 text-sm leading-relaxed text-studio-ink">
+                Briefings, score board, alerts, and company context stay connected to the
+                same research workflow.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="research" className="scroll-mt-8 bg-studio-paper py-24 sm:py-32">
+          <div className="mx-auto max-w-344 px-5 sm:px-8 lg:px-12">
+            <div className="grid gap-12 lg:grid-cols-[0.72fr_1.28fr] lg:gap-24">
+              <div>
+                <h2 className="max-w-lg font-display text-4xl leading-[1.02] font-bold tracking-[-0.04em] sm:text-5xl">
+                  Ask the next question without starting over.
+                </h2>
+                <p className="mt-6 max-w-lg text-lg leading-relaxed text-studio-muted">
+                  Persistent chat keeps the investigation tied to company context and the
+                  evidence already collected. Answers cite their source trail so the analyst
+                  can verify the reasoning.
+                </p>
+              </div>
+              <div className="relative overflow-hidden rounded-4xl bg-studio-sky p-5 sm:p-8">
+                <div className="ml-auto max-w-[70%] rounded-[1.3rem_1.3rem_0.35rem_1.3rem] bg-studio-ink px-5 py-4 text-sm leading-relaxed text-white">
+                  Is this one pricing experiment, or part of a broader enterprise move?
+                </div>
+                <div className="mt-7 max-w-[88%] border-l border-studio-action bg-studio-paper px-5 py-5 sm:px-7">
+                  <p className="text-sm leading-relaxed text-studio-ink">
+                    The evidence supports a broader move. Packaging changed alongside the
+                    plan price <strong className="text-studio-action">[1][2]</strong>, and
+                    enterprise account hiring increased in the same review window{" "}
+                    <strong className="text-studio-action">[3]</strong>. I would keep watching
+                    sales-led releases before treating the shift as complete.
+                  </p>
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    {["[1] Pricing", "[2] Changelog", "[3] Jobs"].map((source) => (
+                      <span
+                        key={source}
+                        className="rounded-full border border-studio-line px-3 py-1.5 text-xs font-bold text-studio-muted"
+                      >
+                        {source}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <p className="mt-5 text-right text-xs font-semibold text-studio-muted">
+                  Example cited response
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-studio-sky px-5 py-20 sm:px-8 sm:py-28">
+          <div className="mx-auto max-w-296 rounded-[2.5rem] bg-studio-ink px-6 py-14 text-center text-white shadow-[0_28px_60px_-36px_rgba(10,32,51,0.65)] sm:px-12 sm:py-20">
+            <h2 className="mx-auto max-w-3xl text-balance font-display text-4xl leading-[1.02] font-bold tracking-[-0.04em] sm:text-6xl">
+              Start with the market you need to understand.
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-studio-sky-deep sm:text-lg">
+              Create a Signal workspace, add your company context, and begin tracking the
+              competitors and sources that matter to your team.
+            </p>
+            <Link
+              href="/signup"
+              className="mt-9 inline-flex min-h-12 items-center justify-center rounded-full bg-studio-paper px-7 font-bold text-studio-ink transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-studio-action-soft"
+            >
+              Create your workspace
+            </Link>
+          </div>
+        </section>
+      </main>
+
+      <footer className="border-t border-studio-line bg-studio-paper">
+        <div className="mx-auto flex max-w-344 flex-col gap-5 px-5 py-8 sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-12">
+          <SignalMark compact />
+          <p className="text-xs leading-relaxed text-studio-muted">
+            Signal turns competitor evidence into early warnings and research-backed answers.
           </p>
-          <a
-            href="/signup"
-            className="mt-8 inline-block rounded-lg bg-white px-8 py-3 font-sans text-base font-semibold text-slate-900 transition-colors hover:bg-slate-100"
-          >
-            Get started
-          </a>
-        </div>
-      </div>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-8 py-8">
-          <p className="text-center font-sans text-sm text-slate-500">
-            © {new Date().getFullYear()} Signal. All rights reserved.
-          </p>
+          <div className="flex items-center gap-5 text-xs font-bold">
+            <Link href="/login" className="hover:text-studio-action">
+              Sign in
+            </Link>
+            <Link href="/signup" className="hover:text-studio-action">
+              Start tracking
+            </Link>
+          </div>
         </div>
       </footer>
     </div>
