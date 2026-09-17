@@ -23,6 +23,7 @@ function competitor(
     pricing_url: `https://${domain}/pricing`,
     changelog_rss: `https://${domain}/changelog.rss`,
     is_active: true,
+    is_own_company: false,
     discovery_status: "complete",
     discovered_at: oldest,
     created_at: oldest,

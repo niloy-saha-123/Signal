@@ -1,8 +1,9 @@
 "use client";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CompanyProfile, Competitor, CompanyDocument } from "@/lib/api";
-import { saveCompanyProfile, uploadCompanyDocument } from "@/lib/api";
+import { saveCompanyProfile, uploadCompanyDocument, getSignalGoal, saveSignalGoal } from "@/lib/api";
 import { validateDocument, formatBytes, ACCEPTED_DOC_EXTENSIONS } from "@/lib/attachments";
 
 interface PricingTier {
@@ -57,6 +58,35 @@ export function CompanyClient({
   const [message, setMessage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const [goal, setGoal] = useState("");
+  const [goalLoading, setGoalLoading] = useState(true);
+  const [goalSaving, setGoalSaving] = useState(false);
+  const [goalMessage, setGoalMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    getSignalGoal()
+      .then((result) => {
+        if (result.goal) setGoal(result.goal);
+      })
+      .catch(() => {})
+      .finally(() => setGoalLoading(false));
+  }, []);
+
+  async function handleSaveGoal(event: FormEvent) {
+    event.preventDefault();
+    if (!goal.trim()) return;
+    setGoalSaving(true);
+    setGoalMessage(null);
+    try {
+      await saveSignalGoal(goal.trim());
+      setGoalMessage("Signal goal saved.");
+    } catch {
+      setGoalMessage("Couldn't save the goal. Sign in and try again.");
+    } finally {
+      setGoalSaving(false);
+    }
+  }
 
   function togglePrimary(id: string) {
     setPrimaryIds((current) =>
@@ -119,14 +149,51 @@ export function CompanyClient({
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
-          Company
-        </h1>
-        <p className="text-sm text-studio-muted">
-          The context Signal uses to decide what matters to you — plus the documents it learned from.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+            Company
+          </h1>
+          <p className="text-sm text-studio-muted">
+            The context Signal uses to decide what matters to you — plus the documents it learned from.
+          </p>
+        </div>
+        <Link
+          href="/company/compare"
+          className="inline-flex min-h-11 items-center rounded-full border border-studio-line bg-studio-paper px-5 text-sm font-bold text-studio-ink transition-colors hover:bg-studio-sky-soft"
+        >
+          Us vs. them
+        </Link>
       </div>
+
+      {/* Signal goal */}
+      <form
+        onSubmit={handleSaveGoal}
+        className="flex max-w-2xl flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-8"
+      >
+        <h2 className="text-sm font-bold text-studio-ink">Signal goal</h2>
+        <p className="text-xs leading-relaxed text-studio-muted">
+          What are you trying to do against your competitors? Signal judges every signal against
+          this. &ldquo;Defend the enterprise tier&rdquo; reads very differently from
+          &ldquo;catch up to Acme.&rdquo;
+        </p>
+        <textarea
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          rows={2}
+          disabled={goalLoading}
+          placeholder="e.g. Catch up to Acme in the mid-market"
+          className="rounded-2xl bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky disabled:opacity-60"
+        />
+        {goalMessage && <p className="text-sm text-studio-muted">{goalMessage}</p>}
+        <button
+          type="submit"
+          disabled={goalSaving || goalLoading}
+          className="self-start rounded-full bg-studio-ink px-6 py-3 text-sm font-bold text-white hover:bg-[#071625] disabled:opacity-50"
+        >
+          Save goal
+        </button>
+      </form>
 
       {/* Profile */}
       <form

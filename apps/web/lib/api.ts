@@ -101,6 +101,7 @@ export interface Competitor {
   pricing_url: string | null;
   changelog_rss: string | null;
   is_active: boolean;
+  is_own_company: boolean;
   discovery_status: DiscoveryStatus;
   discovered_at: string | null;
   created_at: string;
@@ -459,6 +460,24 @@ export interface DashboardSummary {
 
 export async function getDashboardSummary(token?: string) {
   return request<DashboardSummary>("/api/dashboard/summary", undefined, token);
+}
+
+// ── Signal goal (long-term memory) ───────────────────────────────────────────
+
+export interface SignalGoal {
+  goal: string | null;
+  confidence: number | null;
+}
+
+export function getSignalGoal(token?: string): Promise<SignalGoal> {
+  return request<SignalGoal>("/api/company-profile/signal-goal", undefined, token);
+}
+
+export async function saveSignalGoal(goal: string): Promise<SignalGoal> {
+  return request<SignalGoal>("/api/company-profile/signal-goal", {
+    method: "PUT",
+    body: JSON.stringify({ goal }),
+  });
 }
 
 // ── Workspace (account / profile) ────────────────────────────────────────────

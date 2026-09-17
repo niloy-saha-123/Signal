@@ -22,6 +22,7 @@ const competitors: Competitor[] = [
     pricing_url: null,
     changelog_rss: null,
     is_active: true,
+  is_own_company: false,
     discovery_status: "complete",
     discovered_at: "2026-09-14T00:00:00.000Z",
     created_at: "2026-09-14T00:00:00.000Z",
