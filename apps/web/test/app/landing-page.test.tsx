@@ -29,4 +29,15 @@ describe("LandingPage", () => {
     fireEvent.click(workflowLink);
     expect(details.open).toBe(false);
   });
+
+  it("lets product movement and interpretation headings lead without kickers", () => {
+    render(<LandingPage />);
+
+    expect(screen.queryByText("Movement detected")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        name: "A packaging change signals enterprise intent",
+      }),
+    ).toBeInTheDocument();
+  });
 });

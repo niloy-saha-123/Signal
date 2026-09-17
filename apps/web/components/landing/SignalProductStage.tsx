@@ -69,10 +69,7 @@ export function SignalProductStage() {
         <div className="border-b border-studio-line/80 p-4 sm:p-6 lg:border-r lg:border-b-0">
           <div className="flex items-start justify-between gap-5">
             <div>
-              <p className="text-[0.68rem] font-bold tracking-[0.12em] text-studio-action uppercase">
-                Movement detected
-              </p>
-              <h2 className="mt-2 max-w-lg font-display text-xl leading-tight font-bold tracking-[-0.035em] text-studio-ink sm:text-2xl">
+              <h2 className="max-w-lg font-display text-xl leading-tight font-bold tracking-[-0.035em] text-studio-ink sm:text-2xl">
                 Northstar raised its Team plan and repositioned enterprise access
               </h2>
             </div>

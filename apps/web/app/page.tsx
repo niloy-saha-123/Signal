@@ -72,13 +72,13 @@ export default function LandingPage() {
           <div className="flex items-center gap-1.5 sm:gap-3">
             <Link
               href="/login"
-              className="hidden rounded-full px-3 py-2.5 text-sm font-bold text-studio-ink transition-colors hover:bg-studio-sky-soft sm:inline-flex sm:px-4"
+              className="hidden min-h-11 items-center rounded-full px-3 text-sm font-bold text-studio-ink transition-colors hover:bg-studio-sky-soft sm:inline-flex sm:px-4"
             >
               Sign in
             </Link>
             <Link
               href="/signup"
-              className="rounded-full bg-studio-ink px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-studio-action sm:px-5"
+              className="inline-flex min-h-11 items-center rounded-full bg-studio-ink px-4 text-sm font-bold text-white transition-colors hover:bg-studio-action sm:px-5"
             >
               Start tracking
             </Link>
@@ -88,16 +88,16 @@ export default function LandingPage() {
 
       <main>
         <section className="relative bg-studio-sky">
-          <div className="mx-auto grid min-h-[calc(100svh-4.5rem)] max-w-368 items-center gap-12 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[0.72fr_1.28fr] lg:gap-8 lg:px-12 lg:py-16">
-            <div className="relative z-10 max-w-156">
-              <h1 className="text-balance font-display text-[clamp(3.25rem,6.3vw,6rem)] leading-[0.94] font-extrabold tracking-[-0.04em] text-studio-ink">
+          <div className="mx-auto grid min-h-[calc(100svh-4.5rem)] max-w-368 items-center gap-8 px-5 pt-10 pb-0 sm:gap-10 sm:px-8 sm:pt-14 lg:grid-cols-[0.9fr_1.1fr] lg:gap-7 lg:px-12 lg:py-12">
+            <div className="relative z-10 max-w-2xl">
+              <h1 className="text-balance font-display text-[clamp(3rem,5.35vw,5rem)] leading-[0.94] font-extrabold tracking-[-0.04em] text-studio-ink">
                 See the competitor move before it becomes the story.
               </h1>
-              <p className="mt-7 max-w-xl text-lg leading-relaxed text-studio-muted sm:text-xl">
-                Signal continuously connects market changes to their sources, explains why
-                they matter, and brings the movements worth acting on into one calm workspace.
+              <p className="mt-5 max-w-xl text-lg leading-relaxed text-studio-muted sm:mt-6 sm:text-xl">
+                Signal connects market changes to their sources, explains why they matter,
+                and brings movements worth acting on into one calm workspace.
               </p>
-              <div className="mt-9 flex flex-wrap items-center gap-4">
+              <div className="mt-6 flex flex-wrap items-center gap-4 sm:mt-8">
                 <Link
                   href="/signup"
                   className="inline-flex min-h-12 items-center justify-center rounded-full bg-studio-action px-6 text-base font-bold text-white shadow-[0_14px_30px_-18px_rgba(8,118,207,0.95)] transition-[background-color,transform] hover:-translate-y-0.5 hover:bg-studio-action-hover"
@@ -106,24 +106,26 @@ export default function LandingPage() {
                 </Link>
                 <a
                   href="#evidence-workflow"
-                  className="inline-flex min-h-12 items-center gap-2 px-2 text-sm font-bold text-studio-ink underline decoration-studio-action/40 underline-offset-4 hover:decoration-studio-action"
+                  className="hidden min-h-12 items-center gap-2 px-2 text-sm font-bold text-studio-ink underline decoration-studio-action/40 underline-offset-4 hover:decoration-studio-action sm:inline-flex"
                 >
                   Follow the evidence
                   <DirectionArrow />
                 </a>
               </div>
-              <p className="mt-5 text-xs leading-relaxed text-studio-muted">
+              <p className="mt-4 hidden text-xs leading-relaxed text-studio-muted lg:block">
                 Built for competitive-intelligence and strategy teams. No invented answers;
                 source citations stay in view.
               </p>
             </div>
 
-            <div className="relative lg:w-[min(62rem,72vw)] lg:translate-x-4 xl:translate-x-10">
-              <div className="absolute -top-8 -left-7 hidden h-24 w-24 rounded-full border border-studio-action/25 lg:block" />
-              <SignalProductStage />
-              <p className="mt-3 px-3 text-right text-[0.68rem] font-medium text-studio-muted">
-                Illustrative product view using Signal&apos;s implemented workflow
-              </p>
+            <div className="min-w-0">
+              <div className="relative lg:w-[min(61rem,67vw)] lg:translate-x-2 xl:translate-x-8">
+                <div className="absolute -top-8 -left-7 hidden h-24 w-24 rounded-full border border-studio-action/25 lg:block" />
+                <SignalProductStage />
+                <p className="mt-3 hidden px-3 text-right text-[0.68rem] font-medium text-studio-muted sm:block">
+                  Illustrative product view using Signal&apos;s implemented workflow
+                </p>
+              </div>
             </div>
           </div>
         </section>
@@ -233,9 +235,8 @@ export default function LandingPage() {
             <div className="relative min-h-128 overflow-hidden rounded-[2.2rem] border border-studio-line bg-studio-paper p-6 shadow-[0_26px_70px_-42px_rgba(10,32,51,0.45)] sm:p-9">
               <div className="flex items-start justify-between gap-6 border-b border-studio-line pb-6">
                 <div>
-                  <p className="text-xs font-bold text-studio-action">Strategic interpretation</p>
-                  <h3 className="mt-2 max-w-lg text-xl font-bold tracking-tight">
-                    A packaging change with enterprise intent
+                  <h3 className="max-w-lg text-xl font-bold tracking-tight">
+                    A packaging change signals enterprise intent
                   </h3>
                 </div>
                 <div className="text-right">
@@ -367,10 +368,10 @@ export default function LandingPage() {
             Signal turns competitor evidence into early warnings and research-backed answers.
           </p>
           <div className="flex items-center gap-5 text-xs font-bold">
-            <Link href="/login" className="hover:text-studio-action">
+            <Link href="/login" className="inline-flex min-h-11 items-center hover:text-studio-action">
               Sign in
             </Link>
-            <Link href="/signup" className="hover:text-studio-action">
+            <Link href="/signup" className="inline-flex min-h-11 items-center hover:text-studio-action">
               Start tracking
             </Link>
           </div>
