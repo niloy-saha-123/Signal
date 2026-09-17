@@ -453,6 +453,13 @@ let checkpointer: PostgresSaver | undefined;
 
 export function getChatCheckpointer(): PostgresSaver {
   if (!checkpointer) {
+    // TEMP DIAGNOSTIC (remove once the CI-only ECONNREFUSED:5432 root cause is
+    // confirmed) — proves what DATABASE_URL actually was at construction time,
+    // rather than what the test file assumed it had already set.
+    console.error(
+      "[DIAG chat-graph] DATABASE_URL at checkpointer construction:",
+      JSON.stringify(process.env.DATABASE_URL)
+    );
     checkpointer = PostgresSaver.fromConnString(process.env.DATABASE_URL!);
   }
   return checkpointer;
