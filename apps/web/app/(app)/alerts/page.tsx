@@ -1,8 +1,8 @@
 // apps/web/app/alerts/page.tsx
 // Full alert history — single fetch, no pagination UI (simplification: add real pagination
 // if usage ever needs more than 100).
-import { listAlerts, listCompetitors } from "../../lib/api";
-import { getServerAccessToken } from "../../lib/supabase-server";
+import { listAlerts, listCompetitors } from "@/lib/api";
+import { getServerAccessToken } from "@/lib/supabase-server";
 
 export default async function Page() {
   const token = await getServerAccessToken();

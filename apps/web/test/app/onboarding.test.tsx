@@ -21,7 +21,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock, refresh: refreshMock }),
 }));
 
-import { OnboardingForm } from "../../app/onboarding/onboarding-form";
+import { OnboardingForm } from "../../app/(auth)/onboarding/onboarding-form";
 
 const BASE = "http://localhost:3000";
 

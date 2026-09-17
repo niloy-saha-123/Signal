@@ -3,7 +3,7 @@
 // this page owns it. Filter state lives in the URL for shareability/bookmarking.
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { Competitor } from "../lib/api";
+import type { Competitor } from "@/lib/api";
 
 const SOURCES = ["reddit", "hn", "jobs", "changelog", "pricing"] as const;
 

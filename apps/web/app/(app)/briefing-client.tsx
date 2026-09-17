@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import type { Competitor } from "../lib/api";
+import type { Competitor } from "@/lib/api";
 
 type Movement = {
   id: string;

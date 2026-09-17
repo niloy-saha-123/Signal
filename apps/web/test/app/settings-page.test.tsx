@@ -14,7 +14,7 @@ vi.mock("../../lib/api", () => ({
   listCompetitors: listCompetitorsMock,
 }));
 
-import Page from "../../app/settings/page";
+import Page from "../../app/(app)/settings/page";
 
 const competitors: Competitor[] = [
   {

@@ -21,7 +21,7 @@ vi.mock("../../components/DiscoveryStatus", () => ({
   ),
 }));
 
-import { HomeClient } from "../../app/home-client";
+import { HomeClient } from "../../app/(app)/home-client";
 
 const created: Competitor = {
   id: "new-id",

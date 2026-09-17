@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Board } from "../../app/board-client";
+import { Board } from "../../app/(app)/board-client";
 
 const cards = [{ id: "comp-1", name: "Acme", score: 72, x: 0, y: 0 }];
 

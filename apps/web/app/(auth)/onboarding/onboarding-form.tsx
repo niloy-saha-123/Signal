@@ -4,7 +4,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { getSupabaseBrowserClient } from "../../lib/supabase-browser";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 

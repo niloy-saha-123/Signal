@@ -24,7 +24,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => ({ get: searchParamsMock }),
 }));
 
-import { LoginForm } from "../../app/login/login-form";
+import { LoginForm } from "../../app/(auth)/login/login-form";
 
 describe("LoginForm", () => {
   beforeEach(() => {

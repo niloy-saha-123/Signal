@@ -5,7 +5,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { getSupabaseBrowserClient } from "../../lib/supabase-browser";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 export function LoginForm() {
   const router = useRouter();

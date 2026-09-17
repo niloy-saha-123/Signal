@@ -4,7 +4,7 @@
 // endpoint exists for this yet.
 "use client";
 import { useRef, useState, type DragEvent } from "react";
-import { SignalScoreCard } from "../components/SignalScoreCard";
+import { SignalScoreCard } from "@/components/SignalScoreCard";
 
 export interface BoardCardState {
   id: string;

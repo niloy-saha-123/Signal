@@ -5,8 +5,8 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { createCompetitor } from "../lib/api";
-import { DiscoveryStatus } from "../components/DiscoveryStatus";
+import { createCompetitor } from "@/lib/api";
+import { DiscoveryStatus } from "@/components/DiscoveryStatus";
 
 export function HomeClient() {
   const router = useRouter();

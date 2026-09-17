@@ -1,8 +1,8 @@
 // apps/web/app/board/page.tsx
 // Freeform board — exploratory first pass (see this plan's Architecture note). Only shows
 // competitors with a computed score; arranges them in an initial grid.
-import { ApiError, getCompetitorScore, listCompetitors } from "../../lib/api";
-import { getServerAccessToken } from "../../lib/supabase-server";
+import { ApiError, getCompetitorScore, listCompetitors } from "@/lib/api";
+import { getServerAccessToken } from "@/lib/supabase-server";
 import { Board, type BoardCardState } from "../board-client";
 
 const COLUMNS = 3;

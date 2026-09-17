@@ -10,11 +10,11 @@ import {
   getCompetitorScore,
   getCompetitorScoreHistory,
   getCompetitorTrend,
-} from "../../../lib/api";
-import { getServerAccessToken } from "../../../lib/supabase-server";
-import { SignalScoreCard } from "../../../components/SignalScoreCard";
-import { TrendChart } from "../../../components/TrendChart";
-import { HiringChart } from "../../../components/HiringChart";
+} from "@/lib/api";
+import { getServerAccessToken } from "@/lib/supabase-server";
+import { SignalScoreCard } from "@/components/SignalScoreCard";
+import { TrendChart } from "@/components/TrendChart";
+import { HiringChart } from "@/components/HiringChart";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

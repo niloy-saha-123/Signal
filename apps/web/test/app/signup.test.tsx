@@ -25,7 +25,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => ({ get: searchParamsMock }),
 }));
 
-import { SignupForm } from "../../app/signup/signup-form";
+import { SignupForm } from "../../app/(auth)/signup/signup-form";
 
 describe("SignupForm", () => {
   beforeEach(() => {

@@ -44,7 +44,7 @@ vi.mock("../../components/HiringChart", () => ({
   ),
 }));
 
-import Page from "../../app/radar/[id]/page";
+import Page from "../../app/(app)/radar/[id]/page";
 
 const competitor: Competitor = {
   id: "comp-1",

@@ -9,7 +9,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams("source=reddit"),
 }));
 
-import { IntelFilters } from "../../app/intel-filters";
+import { IntelFilters } from "../../app/(app)/intel-filters";
 
 const competitors: Competitor[] = [
   {

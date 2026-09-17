@@ -1,7 +1,7 @@
 // apps/web/app/discovery/page.tsx
 // Discovery — New competitive movements to review (track or dismiss)
-import { getServerAccessToken } from "../../lib/supabase-server";
-import { listAlerts, listCompetitors } from "../../lib/api";
+import { getServerAccessToken } from "@/lib/supabase-server";
+import { listAlerts, listCompetitors } from "@/lib/api";
 import { DiscoveryClient } from "./discovery-client";
 
 export default async function DiscoveryPage() {
