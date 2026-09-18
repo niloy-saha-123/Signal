@@ -98,6 +98,11 @@ export const PIPELINE_RECOVERY_SCHEDULER_ID = "signal-pipeline-recovery-v1";
 export const OWN_COMPANY_ANALYSIS_SWEEP_CRON = "0 0 * * 1";
 export const OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID = "signal:own-company-analysis-sweep:v1";
 
+// Daily competitor analysis sweep. Every active competitor across all workspaces
+// is scored once a day, 00:00 UTC.
+export const DAILY_ANALYSIS_SWEEP_CRON = "0 0 * * *";
+export const DAILY_ANALYSIS_SWEEP_SCHEDULER_ID = "signal:daily-analysis-sweep:v1";
+
 // Daily pending-confirmation expiry sweep (auto-deny confirmations older than
 // the 7-day TTL). Daily is enough — the TTL is in days, sub-day precision is not
 // load-bearing.
@@ -114,6 +119,7 @@ export async function registerQueueSchedules(
     | (typeof COLLECTOR_QUEUE_NAMES)[number]
     | "pipeline-recovery"
     | "own-company-analysis-sweep"
+    | "daily-analysis-sweep"
     | "pending-confirmation-expiry"
   > = queues
 ): Promise<void> {
@@ -142,6 +148,14 @@ export async function registerQueueSchedules(
     OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
     { pattern: OWN_COMPANY_ANALYSIS_SWEEP_CRON },
     { name: "own-company-analysis-sweep", data: {} }
+  );
+  // Daily competitor analysis sweep — a coordinator queue whose processor
+  // lists every active competitor and enqueues one normal `analysis` job per
+  // competitor (see registry.ts's dailyAnalysisSweepProcessor).
+  await queueMap["daily-analysis-sweep"].upsertJobScheduler(
+    DAILY_ANALYSIS_SWEEP_SCHEDULER_ID,
+    { pattern: DAILY_ANALYSIS_SWEEP_CRON },
+    { name: "daily-analysis-sweep", data: {} }
   );
   // Daily sweep that auto-denies chat confirmations left unresolved past the
   // TTL. The repeat job carries no data; the processor iterates workspaces and

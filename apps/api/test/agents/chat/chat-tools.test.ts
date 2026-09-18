@@ -1,8 +1,8 @@
 // Tool registry tests — per-tool schema validation, correct delegation to the
 // underlying query/route logic, and the mutating flag. All deps are fakes so no
 // Postgres/Redis/registry is touched.
-import { describe, expect, it, vi } from "vitest";
-import { buildChatTools, describeMutation, type ChatTool, type ChatToolDeps } from "@/agents/chat/tools";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildChatTools, chatMutatingToolsEnabled, describeMutation, type ChatTool, type ChatToolDeps } from "@/agents/chat/tools";
 
 const WORKSPACE_ID = "00000000-0000-4000-8000-000000000000";
 const COMPETITOR_ID = "11111111-1111-4111-8111-111111111111";
@@ -163,6 +163,47 @@ describe("agents/chat/tools — mutating tools", () => {
       run_id: "run-1",
       has_pricing_diff: true,
     });
+  });
+});
+
+describe("agents/chat/tools — ENABLE_CHAT_MUTATING_TOOLS flag", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns 9 tools (4 mutating) by default with no env set", () => {
+    const tools = buildChatTools(WORKSPACE_ID, fakeDeps());
+    expect(tools).toHaveLength(9);
+    expect(tools.filter((t) => t.mutating).map((t) => t.name)).toEqual([
+      "create_competitor",
+      "trigger_competitor_analysis",
+      "update_company_goals",
+      "trigger_discovery_search",
+    ]);
+  });
+
+  it("returns only the 5 read tools when ENABLE_CHAT_MUTATING_TOOLS is false", () => {
+    vi.stubEnv("ENABLE_CHAT_MUTATING_TOOLS", "false");
+    const tools = buildChatTools(WORKSPACE_ID, fakeDeps());
+    expect(tools.map((t) => t.name)).toEqual([
+      "list_competitors",
+      "get_competitor_score",
+      "get_competitor_trend",
+      "list_company_goals",
+      "fetch_url",
+    ]);
+  });
+
+  it("chatMutatingToolsEnabled is true by default and false only for exactly 'false'", () => {
+    expect(chatMutatingToolsEnabled()).toBe(true);
+    vi.stubEnv("ENABLE_CHAT_MUTATING_TOOLS", "false");
+    expect(chatMutatingToolsEnabled()).toBe(false);
+    vi.stubEnv("ENABLE_CHAT_MUTATING_TOOLS", "False");
+    expect(chatMutatingToolsEnabled()).toBe(true);
+    vi.stubEnv("ENABLE_CHAT_MUTATING_TOOLS", "0");
+    expect(chatMutatingToolsEnabled()).toBe(true);
+    vi.stubEnv("ENABLE_CHAT_MUTATING_TOOLS", "");
+    expect(chatMutatingToolsEnabled()).toBe(true);
   });
 });
 

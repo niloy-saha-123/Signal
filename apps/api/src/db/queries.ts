@@ -600,6 +600,14 @@ export async function listCompetitors(): Promise<Competitor[]> {
   return db.select().from(competitorsTable).orderBy(desc(competitorsTable.created_at));
 }
 
+export async function listActiveCompetitors(): Promise<Competitor[]> {
+  return db
+    .select()
+    .from(competitorsTable)
+    .where(eq(competitorsTable.is_active, true))
+    .orderBy(desc(competitorsTable.created_at));
+}
+
 export async function updateDiscoveryStatus(id: string, status: DiscoveryStatus): Promise<void> {
   if (status === "failed") {
     throw new Error(

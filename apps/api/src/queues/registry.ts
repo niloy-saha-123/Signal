@@ -42,6 +42,7 @@ import {
   finalizeDiscovery,
   getCompetitorById,
   getRecentPricingDiffs,
+  listActiveCompetitors,
   listCompetitorsForWorkspace,
   listWorkspaces,
   getOwnCompanyCompetitorForWorkspace,
@@ -72,6 +73,7 @@ export type QueueName =
   | "analysis"
   | "discovery-search"
   | "own-company-analysis-sweep"
+  | "daily-analysis-sweep"
   | "pending-confirmation-expiry";
 
 export interface QueueConfig {
@@ -194,6 +196,13 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // a manual re-trigger) would re-enqueue already-succeeded workspaces and
   // double-bill their LLM runs; a per-week dedup key is the upgrade path.
   "own-company-analysis-sweep": { concurrency: 1, attempts: 1 },
+  // Daily scheduler-driven fan-out: lists every active competitor across all
+  // workspaces and enqueues one normal `analysis` job per competitor. One sweep
+  // at a time; no retry (a missed sweep is corrected by the next day's tick).
+  // ponytail: attempts:1 is the idempotency ceiling — a future attempts > 1 (or
+  // a manual re-trigger) would re-enqueue already-succeeded competitors and
+  // double-bill their LLM runs; a per-day dedup key is the upgrade path.
+  "daily-analysis-sweep": { concurrency: 1, attempts: 1 },
   // Scheduled sweep that auto-denies chat confirmations older than the TTL.
   // One at a time; no retry (a missed tick is corrected by the next one, and a
   // double-run would just re-check the same threads idempotently).
@@ -480,6 +489,47 @@ async function ownCompanyAnalysisSweepProcessor(_job: Job): Promise<void> {
   }
 }
 
+// Daily coordinator for the competitor analysis sweep. Mirrors the weekly
+// own-company sweep's fan-out but iterates every active competitor (not just
+// each workspace's own-company row) so competitors across all workspaces get
+// scored daily. Enqueues one normal `analysis` job per competitor; the analysis
+// work itself reuses the existing analysis queue/graph — nothing new there.
+async function dailyAnalysisSweepProcessor(_job: Job): Promise<void> {
+  const competitors = await listActiveCompetitors();
+
+  let failed = 0;
+
+  for (const competitor of competitors) {
+    let runId: string | undefined;
+    try {
+      const run = await createAgentRun({
+        competitor_id: competitor.id,
+        trigger: "scheduled",
+      });
+      runId = run.id;
+      const hasPricingDiff = (await getRecentPricingDiffs(competitor.id, 7)).length > 0;
+      await queues.analysis.add("analysis", {
+        competitor_id: competitor.id,
+        workspace_id: competitor.workspace_id,
+        run_id: run.id,
+        has_pricing_diff: hasPricingDiff,
+      });
+    } catch (error) {
+      failed += 1;
+      if (runId) await failRunIfRunning(runId).catch(() => undefined);
+      logger.error("Failed to enqueue daily analysis", {
+        competitor_id: competitor.id,
+        run_id: runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (failed > 0) {
+    throw new Error(`daily-analysis-sweep: failed to enqueue ${failed} analyses`);
+  }
+}
+
 // Constructs the live BullMQ Workers for competitor-discovery and
 // company-profile-update. Must only be called from the standalone worker
 // process — never from Express, which imports this module (for `queues`,
@@ -489,6 +539,7 @@ export function initWorkers(): {
   competitorDiscoveryWorker: Worker;
   companyProfileUpdateWorker: Worker;
   ownCompanyAnalysisSweepWorker: Worker;
+  dailyAnalysisSweepWorker: Worker;
 } {
   const competitorDiscoveryWorker = registerWorker(
     "competitor-discovery",
@@ -535,7 +586,17 @@ export function initWorkers(): {
     ownCompanyAnalysisSweepProcessor
   );
 
-  return { competitorDiscoveryWorker, companyProfileUpdateWorker, ownCompanyAnalysisSweepWorker };
+  const dailyAnalysisSweepWorker = registerWorker(
+    "daily-analysis-sweep",
+    dailyAnalysisSweepProcessor
+  );
+
+  return {
+    competitorDiscoveryWorker,
+    companyProfileUpdateWorker,
+    ownCompanyAnalysisSweepWorker,
+    dailyAnalysisSweepWorker,
+  };
 }
 
 // Inline payload shape (not imported from discovery-worker.ts) so the registry
