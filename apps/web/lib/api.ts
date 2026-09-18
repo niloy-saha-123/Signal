@@ -480,6 +480,50 @@ export async function saveSignalGoal(goal: string): Promise<SignalGoal> {
   });
 }
 
+// ── Company goals (apps/api/src/api/company-goals.ts) ────────────────────────
+
+export interface CompanyGoal {
+  id: string;
+  workspace_id: string;
+  content: string;
+  created_by: "user" | "agent";
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export function listCompanyGoals(token?: string): Promise<CompanyGoal[]> {
+  return request<CompanyGoal[]>("/api/company-goals", undefined, token);
+}
+
+export function createCompanyGoal(content: string): Promise<CompanyGoal> {
+  return request<CompanyGoal>("/api/company-goals", {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function updateCompanyGoal(
+  id: string,
+  changes: { content?: string; status?: "active" | "archived" }
+): Promise<CompanyGoal> {
+  return request<CompanyGoal>(`/api/company-goals/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+  });
+}
+
+export async function deleteCompanyGoal(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/company-goals/${id}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
+}
+
 // ── Workspace (account / profile) ────────────────────────────────────────────
 
 export interface Workspace {

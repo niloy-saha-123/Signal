@@ -5,6 +5,7 @@ import { ApiError, getCompetitorScore, listCompetitors } from "@/lib/api";
 import { previewBoardCards } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 import { Board, type BoardCardState } from "../board-client";
+import { GoalsList } from "@/components/GoalsList";
 
 const COLUMNS = 3;
 const CARD_WIDTH = 240;
@@ -50,6 +51,7 @@ export default async function Page() {
           Drag cards to arrange your own view. Competitors without a score aren&apos;t shown here.
         </p>
       </div>
+      <GoalsList />
       <Board initialCards={cards} />
     </div>
   );

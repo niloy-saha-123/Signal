@@ -31,6 +31,8 @@ function makeDeps(over: Partial<ChatThreadsRouterDeps> = {}): ChatThreadsRouterD
       reason: "none",
       suggested_query: "try again",
     })),
+    resumeChat: vi.fn() as any,
+    listPendingConfirmations: vi.fn(async () => []),
     ...over,
   };
 }
@@ -214,6 +216,88 @@ describe("POST /api/chat-threads/:id/regenerate", () => {
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "unknown_thread" });
     expect(deps.regenerate).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/chat-threads/:id/resume", () => {
+  function events(from: unknown[]) {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const e of from) yield e;
+      },
+    };
+  }
+
+  it("streams the resumed events over SSE with the decision", async () => {
+    const deps = makeDeps({
+      resumeChat: vi.fn(() =>
+        events([
+          { kind: "token", text: "Created " },
+          { kind: "result", result: { refused: false, answer: "Created competitor", citations: [] } },
+        ])
+      ) as any,
+    });
+    const res = await request(buildApp(deps))
+      .post(`/${THREAD_ID}/resume`)
+      .send({ decision: "approve" });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    expect(res.text).toContain("event: token");
+    expect(res.text).toContain("event: result");
+    expect(res.text).toContain("event: done");
+    expect(deps.resumeChat).toHaveBeenCalledWith(THREAD_ID, "approve", expect.any(Object));
+  });
+
+  it("streams confirm_required when the resumed turn pauses again", async () => {
+    const deps = makeDeps({
+      resumeChat: vi.fn(() =>
+        events([
+          { kind: "confirm_required", mutation: { tool_name: "update_company_goals", description: "Add goal?", arguments: {} } },
+        ])
+      ) as any,
+    });
+    const res = await request(buildApp(deps))
+      .post(`/${THREAD_ID}/resume`)
+      .send({ decision: "approve" });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("event: confirm_required");
+    expect(res.text).toContain("update_company_goals");
+  });
+
+  it("400s on an invalid decision without resuming", async () => {
+    const deps = makeDeps();
+    const res = await request(buildApp(deps)).post(`/${THREAD_ID}/resume`).send({ decision: "maybe" });
+
+    expect(res.status).toBe(400);
+    expect(deps.resumeChat).not.toHaveBeenCalled();
+  });
+
+  it("404s on a foreign-workspace thread without resuming", async () => {
+    const deps = makeDeps({ getChatThreadForWorkspace: vi.fn(async () => undefined) });
+    const res = await request(buildApp(deps))
+      .post(`/${THREAD_ID}/resume`)
+      .send({ decision: "approve" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "unknown_thread" });
+    expect(deps.resumeChat).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/chat-threads/pending-confirmations", () => {
+  it("lists threads paused at a confirm gate for the caller's workspace", async () => {
+    const deps = makeDeps({
+      listPendingConfirmations: vi.fn(async () => [
+        { thread_id: THREAD_ID, mutations: [{ tool_name: "create_competitor", description: "Create competitor?", arguments: {} }], created_at: "2026-09-17T00:00:00Z" },
+      ]),
+    });
+    const res = await request(buildApp(deps)).get("/pending-confirmations");
+
+    expect(res.status).toBe(200);
+    expect(res.body.pending).toHaveLength(1);
+    expect(deps.listPendingConfirmations).toHaveBeenCalledWith(WORKSPACE_ID);
   });
 });
 

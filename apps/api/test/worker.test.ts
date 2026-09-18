@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     initRecovery: makeInit(),
     initAnalysis: makeInit(),
     initDiscovery: makeInit(),
+    initConfirmationExpiry: makeInit(),
     registerSchedules: vi.fn().mockResolvedValue(undefined),
     closeQueue: vi.fn().mockResolvedValue(undefined),
     closeRedis: vi.fn().mockResolvedValue(undefined),
@@ -46,6 +47,9 @@ vi.mock("@/agents/analysis/analysis-worker", () => ({ initAnalysisWorker: mocks.
 vi.mock("@/agents/discovery-search/discovery-worker", () => ({
   initDiscoveryWorker: mocks.initDiscovery,
 }));
+vi.mock("@/queues/confirmation-expiry-worker", () => ({
+  initConfirmationExpiryWorker: mocks.initConfirmationExpiry,
+}));
 vi.mock("@/lib/redis-client", () => ({ closeRedisConnections: mocks.closeRedis }));
 vi.mock("@/db/client", () => ({ closeDatabase: mocks.closeDb }));
 vi.mock("@/lib/logger", () => ({
@@ -70,7 +74,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 14 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 15 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -87,10 +91,11 @@ describe("standalone worker runtime", () => {
     expect(mocks.initRecovery).toHaveBeenCalledTimes(1);
     expect(mocks.initAnalysis).toHaveBeenCalledTimes(1);
     expect(mocks.initDiscovery).toHaveBeenCalledTimes(1);
+    expect(mocks.initConfirmationExpiry).toHaveBeenCalledTimes(1);
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(14);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(15);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);

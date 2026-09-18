@@ -85,6 +85,13 @@
       "when": 1789612948541,
       "tag": "0011_abnormal_true_believers",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789681599471,
+      "tag": "0012_worthless_the_hunter",
+      "breakpoints": true
     }
   ]
 }

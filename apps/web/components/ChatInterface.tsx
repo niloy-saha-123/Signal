@@ -2,12 +2,13 @@
 // Streams via lib/chat-stream.ts (live `token` draft corrected by the final `result`).
 // A refusal (ChatAgentResult.refused === true) is a normal, successful result.
 // Input is disabled while a response is streaming, so a second send can't race the
-// first. Document uploads are validated client-side (type + 10 MB) and stored via
-// /api/company-documents (the workspace knowledge path).
+// first. Per-turn attachments (docs + raster images) are validated client-side and
+// sent with the chat request — they are not auto-persisted to the knowledge base.
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { ChatAgentResult } from "@signal/shared";
 import { SOURCE_COLORS } from "../lib/chart-colors";
-import { streamChatResult } from "../lib/chat-stream";
+import { resumeChatThread, streamChatResult, type ChatMutationRequest } from "../lib/chat-stream";
 import { ThreadList } from "./ThreadList";
 import {
   createChatThread,
@@ -16,10 +17,15 @@ import {
   listChatThreads,
   listChatThreadCheckpoints,
   regenerateChatThread,
-  uploadCompanyDocument,
   type ChatThreadSummary,
 } from "../lib/api";
-import { validateDocument, formatBytes, ACCEPTED_DOC_EXTENSIONS } from "../lib/attachments";
+import {
+  validateChatAttachment,
+  formatBytes,
+  ACCEPTED_CHAT_EXTENSIONS,
+  MAX_CHAT_DOCS,
+  MAX_CHAT_IMAGES,
+} from "../lib/attachments";
 
 export interface ChatInterfaceProps {
   competitorIds: string[];
@@ -32,7 +38,7 @@ interface Attachment {
   id: string;
   name: string;
   size: number;
-  status: "uploading" | "ok" | "error";
+  file: File;
 }
 
 interface Citation {
@@ -52,6 +58,12 @@ interface ChatMessage {
   error?: string | null;
   pending?: boolean;
   regenerateIndex?: number;
+  confirmation?: {
+    tool_name: string;
+    description: string;
+    arguments: Record<string, unknown>;
+    status: "pending" | "approved" | "denied";
+  } | null;
 }
 
 export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfaceProps) {
@@ -79,31 +91,38 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
     fileInputRef.current?.click();
   }
 
-  async function handleFiles(files: FileList | null) {
+  function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setAttachError(null);
-    for (const file of Array.from(files)) {
-      const invalid = validateDocument(file);
-      if (invalid) {
-        setAttachError(invalid);
-        continue;
+    const incoming = Array.from(files);
+    setAttachments((current) => {
+      let docs = current.filter((a) => !/\.(png|jpe?g|webp|gif)$/i.test(a.name)).length;
+      let images = current.filter((a) => /\.(png|jpe?g|webp|gif)$/i.test(a.name)).length;
+      const next = [...current];
+      for (const file of incoming) {
+        const invalid = validateChatAttachment(file);
+        if (invalid) {
+          setAttachError(invalid);
+          continue;
+        }
+        const isImage = /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+        if (isImage) {
+          if (images >= MAX_CHAT_IMAGES) {
+            setAttachError(`At most ${MAX_CHAT_IMAGES} images per message.`);
+            continue;
+          }
+          images += 1;
+        } else {
+          if (docs >= MAX_CHAT_DOCS) {
+            setAttachError(`At most ${MAX_CHAT_DOCS} documents per message.`);
+            continue;
+          }
+          docs += 1;
+        }
+        next.push({ id: crypto.randomUUID(), name: file.name, size: file.size, file });
       }
-      const id = crypto.randomUUID();
-      setAttachments((current) => [
-        ...current,
-        { id, name: file.name, size: file.size, status: "uploading" },
-      ]);
-      try {
-        await uploadCompanyDocument(file);
-        setAttachments((current) =>
-          current.map((a) => (a.id === id ? { ...a, status: "ok" } : a))
-        );
-      } catch {
-        setAttachments((current) =>
-          current.map((a) => (a.id === id ? { ...a, status: "error" } : a))
-        );
-      }
-    }
+      return next;
+    });
   }
 
   async function loadThread(id: string) {
@@ -160,19 +179,54 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
     }
   }
 
+  function patchMessage(id: string, patch: Partial<ChatMessage>) {
+    setMessages((current) => current.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
+
+  function applyResult(id: string, result: ChatAgentResult) {
+    patchMessage(id, {
+      pending: false,
+      text: result.refused ? "" : result.answer,
+      refused: result.refused ? { reason: result.reason, suggestedQuery: result.suggested_query } : null,
+      citations: result.refused ? undefined : result.citations,
+    });
+  }
+
+  async function handleConfirm(message: ChatMessage, decision: "approve" | "deny") {
+    const threadId = activeThreadId;
+    if (!threadId || !message.confirmation || message.confirmation.status !== "pending") return;
+    patchMessage(message.id, {
+      confirmation: { ...message.confirmation, status: decision === "approve" ? "approved" : "denied" },
+      pending: true,
+    });
+    setSubmitting(true);
+    try {
+      await resumeChatThread(
+        threadId,
+        decision,
+        (result) => applyResult(message.id, result),
+        (error) => patchMessage(message.id, { pending: false, error }),
+        {
+          onToken: (text) => patchMessage(message.id, { text: message.text + text }),
+          onConfirmRequired: (mutation) =>
+            patchMessage(message.id, {
+              pending: false,
+              confirmation: { ...mutation, status: "pending" },
+            }),
+        }
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = query.trim();
-    const uploadFailed = attachments.some((a) => a.status === "error");
-    const uploadPending = attachments.some((a) => a.status === "uploading");
     if (submitting || (!trimmed && attachments.length === 0)) return;
-    if (uploadFailed) {
-      setAttachError("One or more attachments failed to upload — remove them to continue.");
-      return;
-    }
-    if (uploadPending) return;
 
     const attachmentNames = attachments.map((a) => a.name);
+    const filesToSend = attachments.map((a) => a.file);
     setQuery("");
     setAttachments([]);
     setAttachError(null);
@@ -243,11 +297,21 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
         },
         {
           threadId,
+          attachments: filesToSend.length > 0 ? filesToSend : undefined,
           onToken: (text) => {
             setMessages((current) =>
               current.map((m) =>
                 m.id === assistantMsgId
                   ? { ...m, text: m.text + text }
+                  : m
+              )
+            );
+          },
+          onConfirmRequired: (mutation: ChatMutationRequest) => {
+            setMessages((current) =>
+              current.map((m) =>
+                m.id === assistantMsgId
+                  ? { ...m, pending: false, confirmation: { ...mutation, status: "pending" } }
                   : m
               )
             );
@@ -359,6 +423,41 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                           )}
                         </>
                       )}
+                      {message.confirmation && (
+                        <div
+                          data-testid="confirm-card"
+                          className="mt-2 rounded-xl border border-studio-line bg-white p-3 shadow-sm"
+                        >
+                          <p className="text-xs font-medium text-studio-muted">
+                            Signal wants to run this action
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-studio-ink">
+                            {message.confirmation.description}
+                          </p>
+                          {message.confirmation.status === "pending" ? (
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleConfirm(message, "approve")}
+                                className="rounded-lg bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleConfirm(message, "deny")}
+                                className="rounded-lg border border-studio-line bg-studio-paper px-3 py-1.5 text-xs font-semibold text-studio-muted hover:text-studio-ink"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-xs text-studio-muted">
+                              {message.confirmation.status === "approved" ? "Action approved." : "Action cancelled."}
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                     {message.regenerateIndex !== undefined && (
                       <button
@@ -391,9 +490,6 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                   className="inline-flex items-center gap-1.5 rounded-full border border-studio-line bg-studio-sky-soft px-3 py-1 text-xs text-studio-muted"
                 >
                   {a.name} · {formatBytes(a.size)}
-                  <span className={a.status === "ok" ? "text-emerald-600" : a.status === "error" ? "text-red-600" : "text-studio-muted"}>
-                    {a.status === "ok" ? "✓" : a.status === "error" ? "✕" : "…"}
-                  </span>
                   <button
                     type="button"
                     onClick={() => setAttachments((current) => current.filter((x) => x.id !== a.id))}
@@ -411,7 +507,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               ref={fileInputRef}
               type="file"
               multiple
-              accept={ACCEPTED_DOC_EXTENSIONS.join(",")}
+              accept={ACCEPTED_CHAT_EXTENSIONS.join(",")}
               className="hidden"
               onChange={(e) => {
                 handleFiles(e.target.files);
@@ -422,7 +518,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               type="button"
               onClick={openFilePicker}
               disabled={submitting}
-              title="Attach a document (PDF, TXT, MD, DOC, DOCX, CSV, JSON, RTF — max 10 MB)"
+              title="Attach a document or image for this message only (not saved to company knowledge)"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink disabled:opacity-30"
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

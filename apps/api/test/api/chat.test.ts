@@ -314,6 +314,24 @@ describe("POST /api/chat", () => {
     expect(deps.createAgentRun).not.toHaveBeenCalled();
   });
 
+  it("emits a confirm_required frame when the turn pauses at a mutation gate", async () => {
+    const deps = makeDeps({
+      streamChat: vi.fn(async function* () {
+        yield {
+          kind: "confirm_required",
+          mutation: { tool_name: "create_competitor", description: "Create competitor Acme?", arguments: { name: "Acme", domain: "acme.com" } },
+        } as const;
+      }) as any,
+    });
+    const res = await call(buildApp(deps).app, { query: "add Acme", competitor_ids: [C1] });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("event: confirm_required");
+    expect(res.text).toContain("create_competitor");
+    expect(res.text).not.toContain("event: result");
+    expect(deps.completeAgentRun).toHaveBeenCalledWith(RUN_ID, "completed");
+  });
+
   it("operational failure: run failed + generic error event with the message redacted", async () => {
     const deps = makeDeps({
       streamChat: vi.fn(async function* () {
@@ -434,5 +452,61 @@ describe("POST /api/chat", () => {
     expect(res.text).toContain("event: result");
     expect(res.text).toContain("event: done");
     expect(deps.completeAgentRun).toHaveBeenCalledOnce();
+  });
+
+  it("accepts multipart attachments and forwards them on streamChat.turn without creating a company document", async () => {
+    const deps = makeDeps();
+    const { app } = buildApp(deps);
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const form = new FormData();
+      form.set("query", "summarize this");
+      form.set("competitor_ids", JSON.stringify([C1]));
+      form.set("thread_id", THREAD_ID);
+      form.append(
+        "attachments",
+        new Blob(["Q3 goal: expand SMB"], { type: "text/plain" }),
+        "notes.txt"
+      );
+      const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+        method: "POST",
+        body: form,
+      });
+      expect(res.status).toBe(200);
+      const turn = streamInput(deps).turn;
+      expect(turn.documents).toEqual([{ filename: "notes.txt", text: "Q3 goal: expand SMB" }]);
+      expect(turn.images).toEqual([]);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("rejects SVG attachments with JSON 400 before SSE opens", async () => {
+    const deps = makeDeps();
+    const { app } = buildApp(deps);
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const form = new FormData();
+      form.set("query", "look at this");
+      form.set("competitor_ids", JSON.stringify([C1]));
+      form.append(
+        "attachments",
+        new Blob(["<svg xmlns='http://www.w3.org/2000/svg'></svg>"], { type: "image/svg+xml" }),
+        "evil.svg"
+      );
+      const res = await fetch(`http://127.0.0.1:${port}/api/chat`, {
+        method: "POST",
+        body: form,
+      });
+      expect(res.status).toBe(400);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(JSON.parse(await res.text()).message).toMatch(/SVG/i);
+      expect(deps.streamChat).not.toHaveBeenCalled();
+      expect(deps.createAgentRun).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });

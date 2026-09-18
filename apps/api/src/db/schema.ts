@@ -747,3 +747,33 @@ export const chatThreadsTable = pgTable(
   },
   (table) => [index("chat_threads_workspace_id_idx").on(table.workspace_id)]
 );
+
+// ── company_goals ────────────────────────────────────────────────────────
+// Company-level goals/plans the user (or the chat agent, once confirmed)
+// authors and edits. Distinct from company_profile.signal_goal, which is a
+// single per-company, agent-inferred threat classification living in the
+// LangGraph store — this is a list of free-form goal/plan statements.
+// `content` is plain text on purpose: structure (due dates, owners, priority)
+// is deliberately deferred until real usage shows it's needed (YAGNI).
+// `created_by` is provenance only, not a pending/approved state — every row is
+// "confirmed" by the time it exists; this just records whether a human typed
+// it or the chat agent proposed it and the user approved.
+export const companyGoalsTable = pgTable(
+  "company_goals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    created_by: text("created_by").notNull(),
+    status: text("status").notNull().default("active"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("company_goals_created_by_check", sql`${table.created_by} IN ('user', 'agent')`),
+    check("company_goals_status_check", sql`${table.status} IN ('active', 'archived')`),
+    index("company_goals_workspace_id_idx").on(table.workspace_id),
+  ]
+);

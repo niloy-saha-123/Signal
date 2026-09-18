@@ -12,6 +12,7 @@
 // state's citation_result.
 import { HumanMessage } from "@langchain/core/messages";
 import type { AIMessageChunk } from "@langchain/core/messages";
+import { Command } from "@langchain/langgraph";
 import type { ChatAgentResult } from "@signal/shared";
 import {
   getChatGraph,
@@ -19,8 +20,10 @@ import {
   setupChatCheckpointer,
   CHAT_RECURSION_LIMIT,
   GENERATE_NODE_NAME,
+  pendingMutations,
 } from "./chat-graph";
-import type { ChatAgentInput } from "./chat-graph";
+import type { ChatAgentInput, ChatMutationRequest } from "./chat-graph";
+import { clearChatTurnInput, setChatTurnInput, type ChatTurnInput } from "./turn-input";
 
 export type { ChatAgentInput } from "./chat-graph";
 
@@ -86,10 +89,20 @@ export async function runChatAgent(
 
 export type ChatStreamEvent =
   | { kind: "token"; text: string }
-  | { kind: "result"; result: ChatAgentResult };
+  | { kind: "result"; result: ChatAgentResult }
+  | { kind: "confirm_required"; mutation: ChatMutationRequest };
 
 export interface StreamChatInput extends ChatAgentInput {
   thread_id: string;
+  turn?: ChatTurnInput;
+}
+
+function humanTextForTurn(query: string, turn: ChatTurnInput): string {
+  const tags = [
+    ...turn.documents.map((doc) => `[attached document: ${doc.filename}]`),
+    ...turn.images.map((img) => `[attached image: ${img.filename}]`),
+  ];
+  return tags.length === 0 ? query : `${query}\n\n${tags.join("\n")}`;
 }
 
 // Mirrors chat-graph.ts's textFromContent over a single streamed chunk: text
@@ -112,51 +125,16 @@ function chunkText(chunk: AIMessageChunk): string {
     .join("");
 }
 
-export async function* streamChat(
-  input: StreamChatInput,
-  opts: { signal?: AbortSignal } = {}
+// Shared emit loop over a graph stream: forwards generate-node tokens, captures
+// the final citation_result, and — when the stream ends without one — reads the
+// checkpoint for a pending confirm-gate interrupt (the graph paused at a
+// mutating tool call) and surfaces it as confirm_required.
+async function* emitGraphStream(
+  stream: AsyncIterable<unknown>,
+  threadId: string,
+  signal: AbortSignal
 ): AsyncGenerator<ChatStreamEvent> {
-  const parsed = ChatAgentInputSchema.parse({
-    query: input.query,
-    competitor_ids: input.competitor_ids,
-    workspace_id: input.workspace_id,
-    run_id: input.run_id,
-  });
-  const signal = opts.signal
-    ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
-    : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
-  signal.throwIfAborted();
-
-  await setupChatCheckpointer();
-  signal.throwIfAborted();
-
-  // streamMode "messages" is a callback-based capture (StreamMessagesHandler with
-  // lc_prefer_streaming) of every chat model that streams inside a node — so the
-  // compaction model's summary tokens appear here too. The node name is the first
-  // checkpoint-namespace segment ("generate:<taskId>"); filter to it so only the
-  // answer draft is forwarded to the client, never the internal summary.
-  const stream = await getChatGraph().stream(
-    {
-      messages: [new HumanMessage(parsed.query)],
-      workspace_id: parsed.workspace_id,
-      competitor_ids: parsed.competitor_ids,
-      run_id: parsed.run_id,
-      // summary intentionally omitted — passing summary: "" would wipe the
-      // checkpointed rolling summary (Task 3 invariant).
-    },
-    {
-      configurable: { thread_id: input.thread_id },
-      signal,
-      recursionLimit: CHAT_RECURSION_LIMIT,
-      streamMode: ["messages", "values"],
-    }
-  );
-
   let result: ChatAgentResult | undefined;
-  // ponytail: the 60s timeout bounds the model/retrieval calls via node-level
-  // signal?.throwIfAborted(); unlike runChatAgent's boundedBySignal race it does
-  // not force-abort a dependency that ignores its signal and hangs. Add a per-chunk
-  // race here if a hung non-abortable dependency is ever observed in production.
   for await (const chunk of stream) {
     signal.throwIfAborted();
     const [ns, mode, payload] = chunk as unknown as [string[], string, unknown];
@@ -172,8 +150,93 @@ export async function* streamChat(
     }
   }
 
-  if (!result) {
-    throw new Error("chat-agent: stream finished without a citation_result");
+  if (result) {
+    yield { kind: "result", result };
+    return;
   }
-  yield { kind: "result", result };
+
+  const mutations = pendingMutations(
+    await getChatGraph().getState({ configurable: { thread_id: threadId } })
+  );
+  if (mutations.length > 0) {
+    for (const mutation of mutations) yield { kind: "confirm_required", mutation };
+    return;
+  }
+  throw new Error("chat-agent: stream finished without a citation_result");
+}
+
+export async function* streamChat(
+  input: StreamChatInput,
+  opts: { signal?: AbortSignal } = {}
+): AsyncGenerator<ChatStreamEvent> {
+  const parsed = ChatAgentInputSchema.parse({
+    query: input.query,
+    competitor_ids: input.competitor_ids,
+    workspace_id: input.workspace_id,
+    run_id: input.run_id,
+  });
+  const turn = input.turn ?? { documents: [], images: [] };
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
+    : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
+  signal.throwIfAborted();
+
+  await setupChatCheckpointer();
+  signal.throwIfAborted();
+
+  setChatTurnInput(parsed.run_id, turn);
+  try {
+    // streamMode "messages" is a callback-based capture (StreamMessagesHandler with
+    // lc_prefer_streaming) of every chat model that streams inside a node — so the
+    // compaction model's summary tokens appear here too. The node name is the first
+    // checkpoint-namespace segment ("generate:<taskId>"); filter to it so only the
+    // answer draft is forwarded to the client, never the internal summary.
+    const stream = await getChatGraph().stream(
+      {
+        messages: [new HumanMessage(humanTextForTurn(parsed.query, turn))],
+        workspace_id: parsed.workspace_id,
+        competitor_ids: parsed.competitor_ids,
+        run_id: parsed.run_id,
+        // summary intentionally omitted — passing summary: "" would wipe the
+        // checkpointed rolling summary (Task 3 invariant).
+      },
+      {
+        configurable: { thread_id: input.thread_id },
+        signal,
+        recursionLimit: CHAT_RECURSION_LIMIT,
+        streamMode: ["messages", "values"],
+      }
+    );
+
+    yield* emitGraphStream(stream, input.thread_id, signal);
+  } finally {
+    clearChatTurnInput(parsed.run_id);
+  }
+}
+
+// Resumes a thread paused at a confirm gate, then streams whatever happens next:
+// the tool executing, the model's follow-up response, or another confirm_required
+// if the model proposes a second mutating action. Same shape as POST /chat's
+// discoverable resume endpoint in discovery.ts, adapted to an SSE stream.
+export async function* resumeChat(
+  threadId: string,
+  decision: "approve" | "deny",
+  opts: { signal?: AbortSignal } = {}
+): AsyncGenerator<ChatStreamEvent> {
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
+    : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
+  signal.throwIfAborted();
+
+  await setupChatCheckpointer();
+  signal.throwIfAborted();
+
+  const stream = await getChatGraph().stream(new Command({ resume: decision }), {
+    configurable: { thread_id: threadId },
+    signal,
+    recursionLimit: CHAT_RECURSION_LIMIT,
+    streamMode: ["messages", "values"],
+  });
+
+  yield* emitGraphStream(stream, threadId, signal);
 }

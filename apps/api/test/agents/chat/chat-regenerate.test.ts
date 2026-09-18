@@ -73,13 +73,18 @@ vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 // chat-threads.ts imports ../db/queries (→ db/client → a real pg pool); this
 // test only exercises the checkpointer-backed time-travel helpers, so stub the
 // query functions it references to avoid opening a pool against the ambient
-// DATABASE_URL.
-vi.mock("@/db/queries", () => ({
-  createChatThread: vi.fn(),
-  listChatThreadsForWorkspace: vi.fn(),
-  getChatThreadForWorkspace: vi.fn(),
-  deleteChatThreadForWorkspace: vi.fn(),
-}));
+// DATABASE_URL. Spread the real exports (tools.ts's defaultChatToolDeps binds
+// the breadth of queries at module load) and override just the chat-thread ones.
+vi.mock("@/db/queries", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/db/queries")>();
+  return {
+    ...actual,
+    createChatThread: vi.fn(),
+    listChatThreadsForWorkspace: vi.fn(),
+    getChatThreadForWorkspace: vi.fn(),
+    deleteChatThreadForWorkspace: vi.fn(),
+  };
+});
 
 import { getChatGraph, setupChatCheckpointer, CHAT_RECURSION_LIMIT } from "@/agents/chat/chat-graph";
 import { listCheckpointsDefault, regenerateDefault } from "@/api/chat-threads";

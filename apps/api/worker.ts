@@ -14,6 +14,7 @@ import { initDeduplicatorWorker } from "./src/pipeline/deduplicator";
 import { initPipelineRecoveryWorker } from "./src/pipeline/recovery";
 import { initAnalysisWorker } from "./src/agents/analysis/analysis-worker";
 import { initDiscoveryWorker } from "./src/agents/discovery-search/discovery-worker";
+import { initConfirmationExpiryWorker } from "./src/queues/confirmation-expiry-worker";
 import { closeRedisConnections } from "./src/lib/redis-client";
 import { closeDatabase } from "./src/db/client";
 import { logger } from "./src/lib/logger";
@@ -65,6 +66,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initPipelineRecoveryWorker,
         initAnalysisWorker,
         initDiscoveryWorker,
+        initConfirmationExpiryWorker,
       ]) {
         initialized.push(initialize());
       }

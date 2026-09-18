@@ -215,4 +215,27 @@ describe("streamChatResult", () => {
     const [message] = onError.mock.calls[0];
     expect(message).not.toContain("connection reset");
   });
+
+  it("POSTs multipart FormData when attachments are supplied", async () => {
+    const body = streamOf(": open\n\n", "event: done\ndata: {}\n\n");
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    await streamChatResult("What changed?", ["comp-1"], vi.fn(), vi.fn(), {
+      threadId: "thread-1",
+      attachments: [file],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${BASE}/api/chat`,
+      expect.objectContaining({ method: "POST" })
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+    const form = init.body as FormData;
+    expect(form.get("query")).toBe("What changed?");
+    expect(form.get("competitor_ids")).toBe(JSON.stringify(["comp-1"]));
+    expect(form.get("thread_id")).toBe("thread-1");
+    expect(form.get("attachments")).toBeInstanceOf(File);
+  });
 });

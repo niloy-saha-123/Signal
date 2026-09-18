@@ -10,6 +10,10 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import * as queries from "../db/queries";
 import { getChatCheckpointer, getChatGraph, setupChatCheckpointer } from "../agents/chat/chat-graph";
+import { resumeChat as resumeChatImpl } from "../agents/chat/chat-agent";
+import type { ChatStreamEvent } from "../agents/chat/chat-agent";
+import { listPendingConfirmationsForWorkspace } from "../agents/chat/confirmation-expiry";
+import type { PendingConfirmation } from "../agents/chat/confirmation-expiry";
 import type { ChatAgentResult } from "@signal/shared";
 import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler, requireUuidParam } from "./http";
@@ -40,6 +44,15 @@ export interface ChatThreadsRouterDeps {
   // generation. Default impls use the compiled chat graph's checkpointer API.
   listCheckpoints: (threadId: string) => Promise<CheckpointSummary[]>;
   regenerate: (threadId: string, checkpointId: string) => Promise<ChatAgentResult>;
+  // Resume a thread paused at a confirm gate (HITL mutation), streaming whatever
+  // happens next over SSE.
+  resumeChat: (
+    threadId: string,
+    decision: "approve" | "deny",
+    opts?: { signal?: AbortSignal }
+  ) => AsyncGenerator<ChatStreamEvent>;
+  // List threads in the workspace currently paused at a confirm gate.
+  listPendingConfirmations: (workspaceId: string) => Promise<PendingConfirmation[]>;
 }
 
 // The chat graph's getStateHistory yields snapshots newest-first; the picker
@@ -96,6 +109,8 @@ export const defaultChatThreadsRouterDeps: ChatThreadsRouterDeps = {
   checkpointer: getChatCheckpointer() as unknown as ChatThreadCheckpointer,
   listCheckpoints: listCheckpointsDefault,
   regenerate: regenerateDefault,
+  resumeChat: resumeChatImpl,
+  listPendingConfirmations: listPendingConfirmationsForWorkspace,
 };
 
 const CreateThreadBodySchema = z.object({
@@ -105,6 +120,10 @@ const CreateThreadBodySchema = z.object({
 const RegenerateBodySchema = z.object({
   checkpoint_id: z.string().min(1),
 }).strict();
+
+const ResumeBodySchema = z.object({ decision: z.enum(["approve", "deny"]) }).strict();
+
+const HEARTBEAT_MS = 15_000;
 
 // Checkpoint messages are BaseMessage instances carrying langchain internals
 // (lc_*, response_metadata, usage_metadata) that don't survive JSON and don't
@@ -147,6 +166,14 @@ export function createChatThreadsRouter(
     wrap(async (req, res) => {
       const threads = await deps.listChatThreadsForWorkspace(req.workspaceId!);
       res.status(200).json(threads);
+    })
+  );
+
+  router.get(
+    "/pending-confirmations",
+    wrap(async (req, res) => {
+      const pending = await deps.listPendingConfirmations(req.workspaceId!);
+      res.status(200).json({ pending });
     })
   );
 
@@ -200,6 +227,73 @@ export function createChatThreadsRouter(
       }
       const result = await deps.regenerate(id, parsed.data.checkpoint_id);
       res.status(200).json(result);
+    })
+  );
+
+  router.post(
+    "/:id/resume",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (!id) return;
+      const owned = await deps.getChatThreadForWorkspace(id, req.workspaceId!);
+      if (!owned) {
+        res.status(404).json({ error: "unknown_thread" });
+        return;
+      }
+      const parsed = ResumeBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.flushHeaders?.();
+      res.write(": open\n\n");
+
+      let clientGone = false;
+      const heartbeat = setInterval(() => {
+        if (!clientGone) res.write(": ping\n\n");
+      }, HEARTBEAT_MS);
+
+      const ac = new AbortController();
+      const onClose = () => {
+        clientGone = true;
+        ac.abort();
+      };
+      req.on("aborted", onClose);
+      res.on("close", onClose);
+
+      try {
+        for await (const evt of deps.resumeChat(id, parsed.data.decision, { signal: ac.signal })) {
+          if (clientGone) break;
+          if (evt.kind === "token") {
+            res.write(`event: token\ndata: ${JSON.stringify({ text: evt.text })}\n\n`);
+          } else if (evt.kind === "confirm_required") {
+            res.write(`event: confirm_required\ndata: ${JSON.stringify(evt.mutation)}\n\n`);
+          } else {
+            res.write(`event: result\ndata: ${JSON.stringify(evt.result)}\n\n`);
+          }
+        }
+        if (!clientGone) res.write("event: done\ndata: {}\n\n");
+      } catch (err) {
+        if (!clientGone && !ac.signal.aborted) {
+          logger.error("chat-threads: resume stream failed", {
+            thread_id: id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          res.write(`event: error\ndata: ${JSON.stringify({ error: "chat_failed" })}\n\n`);
+        }
+      } finally {
+        clearInterval(heartbeat);
+        req.removeListener("aborted", onClose);
+        res.removeListener("close", onClose);
+        if (!res.writableEnded) res.end();
+      }
     })
   );
 

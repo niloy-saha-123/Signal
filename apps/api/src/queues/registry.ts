@@ -71,7 +71,8 @@ export type QueueName =
   | "pipeline-recovery"
   | "analysis"
   | "discovery-search"
-  | "own-company-analysis-sweep";
+  | "own-company-analysis-sweep"
+  | "pending-confirmation-expiry";
 
 export interface QueueConfig {
   concurrency: number;
@@ -193,6 +194,10 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // a manual re-trigger) would re-enqueue already-succeeded workspaces and
   // double-bill their LLM runs; a per-week dedup key is the upgrade path.
   "own-company-analysis-sweep": { concurrency: 1, attempts: 1 },
+  // Scheduled sweep that auto-denies chat confirmations older than the TTL.
+  // One at a time; no retry (a missed tick is corrected by the next one, and a
+  // double-run would just re-check the same threads idempotently).
+  "pending-confirmation-expiry": { concurrency: 1, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
