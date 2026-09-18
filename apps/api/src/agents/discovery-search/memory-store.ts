@@ -64,3 +64,35 @@ export async function setSignalGoalMemory(
 ): Promise<void> {
   await getMemoryStore().put(["signal_goal"], workspaceId, value);
 }
+
+interface DismissedDomainsMemory {
+  entries: { domain: string; at: string }[];
+  [key: string]: unknown;
+}
+
+export async function recordDismissedCandidate(
+  workspaceId: string,
+  domain: string
+): Promise<void> {
+  const item = await getMemoryStore().get(["outcomes", workspaceId], "dismissed_domains");
+  const current = (item?.value as DismissedDomainsMemory | undefined)?.entries ?? [];
+  // ponytail: read-modify-write race — per-domain keys or a DB table if
+  // concurrent writers ever appear; dismissals are single-writer, human-paced.
+  await getMemoryStore().put(["outcomes", workspaceId], "dismissed_domains", {
+    entries: [...current, { domain, at: new Date().toISOString() }],
+  });
+}
+
+export async function listDismissedDomains(
+  workspaceId: string,
+  sinceDays = 30
+): Promise<string[]> {
+  const item = await getMemoryStore().get(["outcomes", workspaceId], "dismissed_domains");
+  const entries = (item?.value as DismissedDomainsMemory | undefined)?.entries;
+  if (!Array.isArray(entries)) return [];
+  const cutoff = Date.now() - sinceDays * 86_400_000;
+  const domains = entries
+    .filter((e) => e && typeof e.domain === "string" && Date.parse(e.at) >= cutoff)
+    .map((e) => e.domain);
+  return [...new Set(domains)];
+}

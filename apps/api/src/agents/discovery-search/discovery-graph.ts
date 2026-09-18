@@ -29,6 +29,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { getCompanyContext } from "../../lib/company-context";
 import { createTrackedEntityCandidate } from "../../db/queries";
+import { recordDismissedCandidate, listDismissedDomains } from "./memory-store";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { retrievalTool } from "../../retrieval/hybrid-retrieve-tool";
@@ -125,6 +126,7 @@ async function llmCallNode(
   config: LangGraphRunnableConfig
 ): Promise<Partial<typeof DiscoveryGraphState.State>> {
   const companyContext = await getCompanyContext(state.workspace_id);
+  const dismissed = await listDismissedDomains(state.workspace_id);
 
   const alias = await selectModel("claude-sonnet", true);
   const model = new ChatAnthropic({
@@ -132,7 +134,12 @@ async function llmCallNode(
     clientOptions: { timeout: LLM_TIMEOUT_MS },
   }).bindTools([webSearchTool, retrievalTool]);
 
-  const system = companyContext ? `${SYSTEM_PROMPT}\n\n${companyContext}` : SYSTEM_PROMPT;
+  let system = SYSTEM_PROMPT;
+  if (companyContext) system += `\n\n${companyContext}`;
+  if (dismissed.length > 0) {
+    system +=
+      `\n\nRecently dismissed competitor domains — do not re-propose them: ${dismissed.join(", ")}`;
+  }
 
   const response = (await withCircuitBreaker("discovery:llm", () =>
     model.invoke([["system", system], ...state.messages], { signal: config.signal })
@@ -168,6 +175,8 @@ async function confirmNode(
         source: "discovered",
         status: "candidate",
       });
+    } else if (decision === "dismiss") {
+      await recordDismissedCandidate(state.workspace_id, candidate.domain);
     }
   }
   return {};

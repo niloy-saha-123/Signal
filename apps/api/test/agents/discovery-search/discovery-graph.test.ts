@@ -32,6 +32,16 @@ vi.mock("@/db/queries", () => ({
   createTrackedEntityCandidate: createTrackedEntityCandidateMock,
 }));
 
+const { recordDismissedCandidateMock, listDismissedDomainsMock } = vi.hoisted(() => ({
+  recordDismissedCandidateMock: vi.fn(),
+  listDismissedDomainsMock: vi.fn(),
+}));
+
+vi.mock("@/agents/discovery-search/memory-store", () => ({
+  recordDismissedCandidate: recordDismissedCandidateMock,
+  listDismissedDomains: listDismissedDomainsMock,
+}));
+
 const { getCompanyContextMock } = vi.hoisted(() => ({
   getCompanyContextMock: vi.fn().mockResolvedValue(""),
 }));
@@ -147,6 +157,8 @@ describe("discovery-graph", () => {
     duckDuckGoInvokeMock.mockResolvedValue('[{"title":"Acme","link":"https://acme.com"}]');
     retrieveSignalsInvokeMock.mockResolvedValue("[]");
     createTrackedEntityCandidateMock.mockResolvedValue({ id: "te-1" });
+    recordDismissedCandidateMock.mockResolvedValue(undefined);
+    listDismissedDomainsMock.mockResolvedValue([]);
     interruptMock.mockReturnValue("dismiss");
   });
 
@@ -181,6 +193,7 @@ describe("discovery-graph", () => {
       source: "discovered",
       status: "candidate",
     });
+    expect(recordDismissedCandidateMock).not.toHaveBeenCalled();
   });
 
   it("confirmNode writes nothing for a dismissed candidate", async () => {
@@ -194,6 +207,19 @@ describe("discovery-graph", () => {
 
     expect(interruptMock).toHaveBeenCalledTimes(1);
     expect(createTrackedEntityCandidateMock).not.toHaveBeenCalled();
+    expect(recordDismissedCandidateMock).toHaveBeenCalledWith(WORKSPACE_ID, "acme.com");
+  });
+
+  dbIt("injects dismissed domains into the system prompt", async () => {
+    listDismissedDomainsMock.mockResolvedValue(["acme.com"]);
+    modelInvokeMock.mockResolvedValueOnce(aiFinal(CANDIDATES_JSON));
+
+    await invokeGraph(randomUUID());
+
+    const firstInvokeArgs = modelInvokeMock.mock.calls[0][0] as [string, string][];
+    const systemContent = firstInvokeArgs[0][1];
+    expect(systemContent).toContain("do not re-propose");
+    expect(systemContent).toContain("acme.com");
   });
 
   dbIt("round-trips through the ToolNode twice before reaching confirmNode", async () => {
