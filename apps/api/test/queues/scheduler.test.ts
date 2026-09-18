@@ -22,6 +22,7 @@ vi.mock("@/queues/registry", () => ({
     "pipeline-recovery": {},
     analysis: {},
     "own-company-analysis-sweep": {},
+    "daily-analysis-sweep": {},
     "pending-confirmation-expiry": {},
   },
   queues: {
@@ -32,6 +33,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
     "pipeline-recovery": { upsertJobScheduler: upsertJobSchedulerMock },
     "own-company-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
+    "daily-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
     "pending-confirmation-expiry": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
@@ -47,6 +49,8 @@ import {
   PIPELINE_RECOVERY_SCHEDULER_ID,
   OWN_COMPANY_ANALYSIS_SWEEP_CRON,
   OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
+  DAILY_ANALYSIS_SWEEP_CRON,
+  DAILY_ANALYSIS_SWEEP_SCHEDULER_ID,
   CONFIRMATION_EXPIRY_CRON,
   CONFIRMATION_EXPIRY_SCHEDULER_ID,
 } from "@/queues/scheduler";
@@ -172,7 +176,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(8);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(9);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
@@ -198,6 +202,21 @@ describe("queues/scheduler", () => {
       OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
       { pattern: OWN_COMPANY_ANALYSIS_SWEEP_CRON },
       { name: "own-company-analysis-sweep", data: {} }
+    );
+  });
+
+  it("registers the daily analysis sweep under a stable scheduler id with a midnight cron", async () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
+    upsertJobSchedulerMock.mockClear();
+
+    await registerQueueSchedules();
+
+    expect(DAILY_ANALYSIS_SWEEP_SCHEDULER_ID).toBe("signal:daily-analysis-sweep:v1");
+    expect(DAILY_ANALYSIS_SWEEP_CRON).toBe("0 0 * * *");
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      DAILY_ANALYSIS_SWEEP_SCHEDULER_ID,
+      { pattern: DAILY_ANALYSIS_SWEEP_CRON },
+      { name: "daily-analysis-sweep", data: {} }
     );
   });
 

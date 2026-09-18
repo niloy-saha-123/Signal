@@ -24,6 +24,7 @@ const {
   listWorkspacesMock,
   getOwnCompanyCompetitorForWorkspaceMock,
   createOwnCompanyCompetitorRowMock,
+  listActiveCompetitorsMock,
 } = vi.hoisted(() => ({
   getCompetitorByIdMock: vi.fn(),
   updateDiscoveryStatusMock: vi.fn(),
@@ -36,6 +37,7 @@ const {
   listWorkspacesMock: vi.fn(),
   getOwnCompanyCompetitorForWorkspaceMock: vi.fn(),
   createOwnCompanyCompetitorRowMock: vi.fn(),
+  listActiveCompetitorsMock: vi.fn(),
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
@@ -57,6 +59,7 @@ vi.mock("@/db/queries", () => ({
   listWorkspaces: listWorkspacesMock,
   getOwnCompanyCompetitorForWorkspace: getOwnCompanyCompetitorForWorkspaceMock,
   createOwnCompanyCompetitorRow: createOwnCompanyCompetitorRowMock,
+  listActiveCompetitors: listActiveCompetitorsMock,
 }));
 
 vi.mock("@/agents/discovery/competitor-discovery", () => ({
@@ -325,6 +328,13 @@ describe("queues/registry", () => {
     });
   });
 
+  it("configures daily-analysis-sweep per the stub: concurrency 1, no retry", () => {
+    expect(QUEUE_CONFIG["daily-analysis-sweep"]).toEqual({
+      concurrency: 1,
+      attempts: 1,
+    });
+  });
+
   it("configures pending-confirmation-expiry per the stub: concurrency 1, no retry", () => {
     expect(QUEUE_CONFIG["pending-confirmation-expiry"]).toEqual({
       concurrency: 1,
@@ -351,6 +361,7 @@ describe("queues/registry", () => {
     "company-profile-update",
     "discovery-search",
     "own-company-analysis-sweep",
+    "daily-analysis-sweep",
     "pending-confirmation-expiry",
     ...OTHER_QUEUES,
   ];
@@ -985,5 +996,96 @@ describe("own-company-analysis-sweep worker", () => {
       run_id: "run-c",
       has_pricing_diff: true,
     });
+  });
+});
+
+describe("daily-analysis-sweep worker", () => {
+  const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const COMP_A = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const COMP_B = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
+  function getRegisteredWorker() {
+    const call = workerCtorCalls.find((c) => c.name === "daily-analysis-sweep");
+    if (!call) throw new Error("daily-analysis-sweep worker was never registered");
+    return call;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    createAgentRunMock.mockResolvedValue({ id: "run-1" });
+    getRecentPricingDiffsMock.mockResolvedValue([{ id: "diff-1" }]);
+    failRunIfRunningMock.mockResolvedValue(undefined);
+    queueAddMock.mockResolvedValue(undefined);
+  });
+
+  it("registers a real Worker for daily-analysis-sweep via initWorkers()", () => {
+    const call = getRegisteredWorker();
+    expect(typeof call.processor).toBe("function");
+    expect((call.opts as { concurrency: number }).concurrency).toBe(1);
+  });
+
+  it("enqueues one analysis job per active competitor across workspaces", async () => {
+    listActiveCompetitorsMock.mockResolvedValue([
+      { id: COMP_A, workspace_id: WS_A, is_active: true },
+      { id: COMP_B, workspace_id: WS_B, is_active: true },
+    ]);
+    createAgentRunMock
+      .mockResolvedValueOnce({ id: "run-a" })
+      .mockResolvedValueOnce({ id: "run-b" });
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await expect(processor({ data: {} })).resolves.toBeUndefined();
+
+    expect(listActiveCompetitorsMock).toHaveBeenCalledTimes(1);
+    expect(createAgentRunMock).toHaveBeenCalledTimes(2);
+    expect(createAgentRunMock).toHaveBeenNthCalledWith(1, {
+      competitor_id: COMP_A,
+      trigger: "scheduled",
+    });
+    expect(createAgentRunMock).toHaveBeenNthCalledWith(2, {
+      competitor_id: COMP_B,
+      trigger: "scheduled",
+    });
+
+    expect(queueAddMock).toHaveBeenCalledTimes(2);
+    expect(queueAddMock).toHaveBeenNthCalledWith(1, "analysis", {
+      competitor_id: COMP_A,
+      workspace_id: WS_A,
+      run_id: "run-a",
+      has_pricing_diff: true,
+    });
+    expect(queueAddMock).toHaveBeenNthCalledWith(2, "analysis", {
+      competitor_id: COMP_B,
+      workspace_id: WS_B,
+      run_id: "run-b",
+      has_pricing_diff: true,
+    });
+  });
+
+  it("fails the run, keeps sweeping remaining competitors, then throws after an enqueue failure", async () => {
+    listActiveCompetitorsMock.mockResolvedValue([
+      { id: COMP_A, workspace_id: WS_A, is_active: true },
+      { id: COMP_B, workspace_id: WS_B, is_active: true },
+    ]);
+    createAgentRunMock
+      .mockResolvedValueOnce({ id: "run-a" })
+      .mockResolvedValueOnce({ id: "run-b" });
+    queueAddMock
+      .mockRejectedValueOnce(new Error("redis down"))
+      .mockResolvedValueOnce(undefined);
+    const processor = getRegisteredWorker().processor as (job: unknown) => Promise<void>;
+
+    await expect(processor({ data: {} })).rejects.toThrow(
+      "daily-analysis-sweep: failed to enqueue 1 analyses"
+    );
+
+    expect(failRunIfRunningMock).toHaveBeenCalledTimes(1);
+    expect(failRunIfRunningMock).toHaveBeenCalledWith("run-a");
+    expect(queueAddMock).toHaveBeenCalledTimes(2);
+    expect(loggerMock.error).toHaveBeenCalledWith(
+      expect.stringContaining("daily analysis"),
+      expect.objectContaining({ competitor_id: COMP_A, run_id: "run-a" })
+    );
   });
 });
