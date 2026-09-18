@@ -389,7 +389,7 @@ CIRCUIT_TIMEOUT_MS=1800000
 
 ## What's Coming
 
-- **Richer chat inputs, with guardrails.** Let the chat read a company/website link, look at an image, or take a document inline — each behind hard guards so pasted links can't reach the internal network, images/documents can't carry prompt-injection payloads, and no one can abuse the chat to amplify API spend. (Planned — see the Phase 8 plan.)
+- **End-to-end ship + daily analysis fan-out.** Automatically score every competitor on a daily schedule (today analysis is manual/on-demand), and finish the agentic runtime hardening — subgraphs, intent routing, reflection, outcome memory, and HITL invariant tests in CI. (Planned — see the Phase 7 plan.)
 - **Long-term memory.** Signal will remember the important facts about your company and your preferences across conversations, not just within a single thread.
 
 ---
