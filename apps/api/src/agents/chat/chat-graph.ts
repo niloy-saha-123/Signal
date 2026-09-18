@@ -28,6 +28,7 @@ import {
   END,
   START,
   StateGraph,
+  interrupt,
   messagesStateReducer,
   type BaseCheckpointSaver,
   type LangGraphRunnableConfig,
@@ -48,6 +49,8 @@ import { getActivePrompt } from "../../llm/prompt-registry";
 import { loadRootEnv } from "../../lib/env";
 import { withRetry } from "../../lib/retry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
+import { buildChatTools, describeMutation, MUTATING_TOOL_NAMES } from "./tools";
+import type { ChatTool } from "./tools";
 
 loadRootEnv();
 
@@ -141,6 +144,13 @@ const ChatGraphState = Annotation.Root({
   loopMessages: Annotation<BaseMessage[]>({
     reducer: (_prev, next) => next,
     default: () => [],
+  }),
+  // Set by confirmMutationNode from the interrupt() resume value; the conditional
+  // edge after it routes approve -> tools, deny -> generate. Not carried between
+  // turns (reset in compactNode).
+  mutationDecision: Annotation<"approve" | "deny" | undefined>({
+    reducer: (_prev, next) => next,
+    default: () => undefined,
   }),
 });
 
@@ -339,6 +349,7 @@ async function compactNode(
     loopMessages: [],
     evidence: [],
     draft: "",
+    mutationDecision: undefined,
   };
   if (!needsCompaction(state.messages)) return reset;
   const summary = await summarizeConversation(state, config);
@@ -351,39 +362,69 @@ async function runRetrieval(query: string, competitorIds: string[]): Promise<Rer
   return rerankChunks(query, candidates);
 }
 
-async function retrieveNode(
-  state: ChatGraphStateType
-): Promise<Partial<ChatGraphStateType>> {
+// Executes every tool call in the model's last message. retrieve_signals is
+// handled inline (evidence capture is bespoke so citationCheck can verify it);
+// every other tool is looked up in the workspace-scoped registry and invoked.
+async function toolsNode(state: ChatGraphStateType): Promise<Partial<ChatGraphStateType>> {
   const last = state.loopMessages[state.loopMessages.length - 1];
   if (!(last instanceof AIMessage) || !last.tool_calls?.length) return {};
 
   const toolMessages: ToolMessage[] = [];
   let evidence = state.evidence;
+  let registry: Map<string, ChatTool> | undefined;
 
   for (const call of last.tool_calls) {
-    if (call.name !== "retrieve_signals") continue;
-    const query = typeof call.args?.query === "string" ? call.args.query : "";
-    try {
-      const chunks = await withCircuitBreaker("chat:retrieve", () =>
-        runRetrieval(query, state.competitor_ids)
-      );
-      evidence = [...evidence, ...chunks];
-      const content =
-        chunks.length === 0
-          ? `EVIDENCE_${state.nonce}_START\n(no stored signals matched this query)\nEVIDENCE_${state.nonce}_END`
-          : formatEvidence(chunks, state.nonce);
-      toolMessages.push(
-        new ToolMessage({ content, tool_call_id: call.id ?? "", name: "retrieve_signals" })
-      );
-    } catch (err) {
-      // Failure semantics: a failed retrieval becomes a legible tool-error
-      // message the model can react to (refine, retry, or stop), never an
-      // exception that kills the turn.
+    if (call.name === "retrieve_signals") {
+      const query = typeof call.args?.query === "string" ? call.args.query : "";
+      try {
+        const chunks = await withCircuitBreaker("chat:retrieve", () =>
+          runRetrieval(query, state.competitor_ids)
+        );
+        evidence = [...evidence, ...chunks];
+        const content =
+          chunks.length === 0
+            ? `EVIDENCE_${state.nonce}_START\n(no stored signals matched this query)\nEVIDENCE_${state.nonce}_END`
+            : formatEvidence(chunks, state.nonce);
+        toolMessages.push(
+          new ToolMessage({ content, tool_call_id: call.id ?? "", name: "retrieve_signals" })
+        );
+      } catch (err) {
+        toolMessages.push(
+          new ToolMessage({
+            content: `retrieve_signals failed: ${err instanceof Error ? err.message : String(err)}`,
+            tool_call_id: call.id ?? "",
+            name: "retrieve_signals",
+            status: "error",
+          })
+        );
+      }
+      continue;
+    }
+
+    if (!registry) registry = new Map(buildChatTools(state.workspace_id).map((t) => [t.name, t]));
+    const def = registry.get(call.name);
+    if (!def) {
       toolMessages.push(
         new ToolMessage({
-          content: `retrieve_signals failed: ${err instanceof Error ? err.message : String(err)}`,
+          content: `unknown tool: ${call.name}`,
           tool_call_id: call.id ?? "",
-          name: "retrieve_signals",
+          name: call.name,
+          status: "error",
+        })
+      );
+      continue;
+    }
+    try {
+      const result = await def.tool.invoke(call.args ?? {});
+      toolMessages.push(
+        new ToolMessage({ content: String(result), tool_call_id: call.id ?? "", name: call.name })
+      );
+    } catch (err) {
+      toolMessages.push(
+        new ToolMessage({
+          content: `${call.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+          tool_call_id: call.id ?? "",
+          name: call.name,
           status: "error",
         })
       );
@@ -391,6 +432,49 @@ async function retrieveNode(
   }
 
   return { loopMessages: [...state.loopMessages, ...toolMessages], evidence };
+}
+
+// The HITL gate: interrupt() pauses the graph until a human resumes it from
+// POST /api/chat-threads/:id/resume. The interrupt payload is the human-readable
+// mutation description the frontend renders on the confirm card.
+export interface ChatMutationRequest {
+  tool_name: string;
+  description: string;
+  arguments: Record<string, unknown>;
+}
+
+// Gates every mutating tool call behind interrupt(). On approve the gate returns
+// so toolsNode runs the call; on deny a synthetic tool-result tells the model
+// the user declined, and the turn routes back to generate so the model responds
+// rather than stalling. Read-only tool calls in the same batch are not gated.
+async function confirmMutationNode(
+  state: ChatGraphStateType
+): Promise<Partial<ChatGraphStateType>> {
+  const last = state.loopMessages[state.loopMessages.length - 1];
+  if (!(last instanceof AIMessage) || !last.tool_calls?.length) return {};
+
+  for (const call of last.tool_calls) {
+    if (!MUTATING_TOOL_NAMES.has(call.name)) continue;
+    const decision = interrupt({
+      tool_name: call.name,
+      description: describeMutation(call.name, (call.args ?? {}) as Record<string, unknown>),
+      arguments: call.args ?? {},
+    });
+    if (decision === "deny") {
+      return {
+        mutationDecision: "deny",
+        loopMessages: [
+          ...state.loopMessages,
+          new ToolMessage({
+            content: `The user declined to run ${call.name}. Do not attempt it again unless asked.`,
+            tool_call_id: call.id ?? "",
+            name: call.name,
+          }),
+        ],
+      };
+    }
+  }
+  return { mutationDecision: "approve" };
 }
 
 async function generateNode(
@@ -421,11 +505,12 @@ async function generateNode(
         .join("\n\n");
 
       const modelAlias = await selectModel(PREFERRED_MODEL, true);
+      const registryTools = buildChatTools(state.workspace_id).map((t) => t.tool);
       const model = new ChatAnthropic({
         model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
         clientOptions: { timeout: LLM_TIMEOUT_MS },
         maxTokens: maxOutputTokens(),
-      }).bindTools([retrieveSignalsTool]);
+      }).bindTools([retrieveSignalsTool, ...registryTools]);
 
       const human = [
         buildConversationBlock(state.messages, state.summary),
@@ -480,27 +565,41 @@ async function citationCheckNode(
   return { citation_result: result, messages: [assistantMessage(result)] };
 }
 
-function afterGenerate(state: ChatGraphStateType): "retrieve" | "citationCheck" {
-  // The soft cap wins over tool-call detection: once hit, stop retrieving and
-  // go verify whatever draft (possibly empty -> refusal) exists.
-  if (state.iterationCount >= MAX_RETRIEVAL_ITERATIONS) return "citationCheck";
+function afterGenerate(state: ChatGraphStateType): "tools" | "confirm" | "citationCheck" {
   const last = state.loopMessages[state.loopMessages.length - 1];
-  const hasToolCalls = last instanceof AIMessage && (last.tool_calls?.length ?? 0) > 0;
-  return hasToolCalls ? "retrieve" : "citationCheck";
+  const calls = last instanceof AIMessage ? (last.tool_calls ?? []) : [];
+  // A mutating request is gated, never silently dropped by the iteration cap —
+  // it must reach confirmMutationNode (or the cap, if it were checked first,
+  // would discard a deliberate action and route an empty draft to citationCheck).
+  if (calls.some((call) => MUTATING_TOOL_NAMES.has(call.name))) return "confirm";
+  // The soft cap bounds retrieve loops: once hit, stop retrieving and verify
+  // whatever draft (possibly empty -> refusal) exists.
+  if (state.iterationCount >= MAX_RETRIEVAL_ITERATIONS) return "citationCheck";
+  return calls.length > 0 ? "tools" : "citationCheck";
+}
+
+function afterConfirm(state: ChatGraphStateType): "tools" | "generate" {
+  return state.mutationDecision === "deny" ? "generate" : "tools";
 }
 
 const builder = new StateGraph(ChatGraphState)
   .addNode("compact", compactNode, { retryPolicy: RETRY_POLICY })
   .addNode(GENERATE_NODE_NAME, generateNode, { retryPolicy: RETRY_POLICY })
-  .addNode("retrieve", retrieveNode, { retryPolicy: RETRY_POLICY })
+  .addNode("tools", toolsNode, { retryPolicy: RETRY_POLICY })
+  .addNode("confirmMutation", confirmMutationNode)
   .addNode("citationCheck", citationCheckNode)
   .addEdge(START, "compact")
   .addEdge("compact", "generate")
   .addConditionalEdges("generate", afterGenerate, {
-    retrieve: "retrieve",
+    tools: "tools",
+    confirm: "confirmMutation",
     citationCheck: "citationCheck",
   })
-  .addEdge("retrieve", "generate")
+  .addConditionalEdges("confirmMutation", afterConfirm, {
+    tools: "tools",
+    generate: "generate",
+  })
+  .addEdge("tools", "generate")
   .addEdge("citationCheck", END);
 
 // PostgresSaver does NOT auto-create its tables (unlike PostgresStore), so the
@@ -550,4 +649,27 @@ export function getChatGraph(): ReturnType<typeof builder.compile> {
     });
   }
   return compiledGraph;
+}
+
+// Extracts pending confirm-gate interruptions from a state snapshot. Each
+// interrupt's value is the { tool_name, description, arguments } payload
+// confirmMutationNode interrupted with; anything else is ignored.
+export function pendingMutations(
+  state: { tasks?: readonly { interrupts?: readonly { value?: unknown }[] }[] }
+): ChatMutationRequest[] {
+  const out: ChatMutationRequest[] = [];
+  for (const task of state.tasks ?? []) {
+    for (const interrupt of task.interrupts ?? []) {
+      const value = interrupt.value;
+      if (
+        value &&
+        typeof value === "object" &&
+        "tool_name" in value &&
+        "description" in value
+      ) {
+        out.push(value as ChatMutationRequest);
+      }
+    }
+  }
+  return out;
 }

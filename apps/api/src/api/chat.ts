@@ -209,6 +209,10 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
           if (clientGone) break;
           if (evt.kind === "token") {
             res.write(`event: token\ndata: ${JSON.stringify({ text: evt.text })}\n\n`);
+          } else if (evt.kind === "confirm_required") {
+            res.write(
+              `event: confirm_required\ndata: ${JSON.stringify(evt.mutation)}\n\n`
+            );
           } else {
             // The citation check has corrected (or refused) the streamed draft —
             // this is the correction frame the frontend reconciles against.

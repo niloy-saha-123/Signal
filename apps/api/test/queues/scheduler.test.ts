@@ -22,6 +22,7 @@ vi.mock("@/queues/registry", () => ({
     "pipeline-recovery": {},
     analysis: {},
     "own-company-analysis-sweep": {},
+    "pending-confirmation-expiry": {},
   },
   queues: {
     "collect-reddit": { upsertJobScheduler: upsertJobSchedulerMock },
@@ -31,6 +32,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
     "pipeline-recovery": { upsertJobScheduler: upsertJobSchedulerMock },
     "own-company-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
+    "pending-confirmation-expiry": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -45,6 +47,8 @@ import {
   PIPELINE_RECOVERY_SCHEDULER_ID,
   OWN_COMPANY_ANALYSIS_SWEEP_CRON,
   OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
+  CONFIRMATION_EXPIRY_CRON,
+  CONFIRMATION_EXPIRY_SCHEDULER_ID,
 } from "@/queues/scheduler";
 
 describe("queues/scheduler", () => {
@@ -168,7 +172,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(7);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(8);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
@@ -194,6 +198,21 @@ describe("queues/scheduler", () => {
       OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
       { pattern: OWN_COMPANY_ANALYSIS_SWEEP_CRON },
       { name: "own-company-analysis-sweep", data: {} }
+    );
+  });
+
+  it("registers the daily pending-confirmation expiry sweep under a stable scheduler id", async () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
+    upsertJobSchedulerMock.mockClear();
+
+    await registerQueueSchedules();
+
+    expect(CONFIRMATION_EXPIRY_SCHEDULER_ID).toBe("signal:pending-confirmation-expiry:v1");
+    expect(CONFIRMATION_EXPIRY_CRON).toBe("0 0 * * *");
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      CONFIRMATION_EXPIRY_SCHEDULER_ID,
+      { pattern: CONFIRMATION_EXPIRY_CRON },
+      { name: "pending-confirmation-expiry", data: {} }
     );
   });
 });

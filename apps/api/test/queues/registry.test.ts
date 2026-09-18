@@ -325,6 +325,13 @@ describe("queues/registry", () => {
     });
   });
 
+  it("configures pending-confirmation-expiry per the stub: concurrency 1, no retry", () => {
+    expect(QUEUE_CONFIG["pending-confirmation-expiry"]).toEqual({
+      concurrency: 1,
+      attempts: 1,
+    });
+  });
+
   it("defaults every other queue to concurrency 2, 3 attempts, exponential backoff from 5s", () => {
     for (const name of OTHER_QUEUES) {
       expect(QUEUE_CONFIG[name]).toEqual({
@@ -344,6 +351,7 @@ describe("queues/registry", () => {
     "company-profile-update",
     "discovery-search",
     "own-company-analysis-sweep",
+    "pending-confirmation-expiry",
     ...OTHER_QUEUES,
   ];
     expect(Object.keys(queues).sort()).toEqual(allNames.sort());

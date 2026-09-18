@@ -13,6 +13,7 @@ import { createDiscoveryRouter } from "./discovery";
 import { createWorkspaceRouter } from "./workspaces";
 import { createTrackedEntitiesRouter } from "./tracked-entities";
 import { createDashboardRouter } from "./dashboard";
+import { createCompanyGoalsRouter } from "./company-goals";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
 import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
@@ -128,6 +129,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/workspaces", createWorkspaceRouter());
   app.use("/api/tracked-entities", createTrackedEntitiesRouter());
   app.use("/api/dashboard", createDashboardRouter());
+  app.use("/api/company-goals", createCompanyGoalsRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;

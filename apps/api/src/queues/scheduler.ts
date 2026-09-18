@@ -98,6 +98,12 @@ export const PIPELINE_RECOVERY_SCHEDULER_ID = "signal-pipeline-recovery-v1";
 export const OWN_COMPANY_ANALYSIS_SWEEP_CRON = "0 0 * * 1";
 export const OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID = "signal:own-company-analysis-sweep:v1";
 
+// Daily pending-confirmation expiry sweep (auto-deny confirmations older than
+// the 7-day TTL). Daily is enough — the TTL is in days, sub-day precision is not
+// load-bearing.
+export const CONFIRMATION_EXPIRY_CRON = "0 0 * * *";
+export const CONFIRMATION_EXPIRY_SCHEDULER_ID = "signal:pending-confirmation-expiry:v1";
+
 // Upserts every collector's schedule plus pipeline-recovery's and the weekly
 // own-company analysis sweep's — kept in one function because all three are the
 // same "idempotent upsertJobScheduler at worker startup" operation, not separate
@@ -105,7 +111,10 @@ export const OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID = "signal:own-company-analy
 export async function registerQueueSchedules(
   queueMap: Pick<
     typeof queues,
-    (typeof COLLECTOR_QUEUE_NAMES)[number] | "pipeline-recovery" | "own-company-analysis-sweep"
+    | (typeof COLLECTOR_QUEUE_NAMES)[number]
+    | "pipeline-recovery"
+    | "own-company-analysis-sweep"
+    | "pending-confirmation-expiry"
   > = queues
 ): Promise<void> {
   const config = getCollectorScheduleConfig();
@@ -133,6 +142,14 @@ export async function registerQueueSchedules(
     OWN_COMPANY_ANALYSIS_SWEEP_SCHEDULER_ID,
     { pattern: OWN_COMPANY_ANALYSIS_SWEEP_CRON },
     { name: "own-company-analysis-sweep", data: {} }
+  );
+  // Daily sweep that auto-denies chat confirmations left unresolved past the
+  // TTL. The repeat job carries no data; the processor iterates workspaces and
+  // resumes each stale thread with a deny (see confirmation-expiry-worker.ts).
+  await queueMap["pending-confirmation-expiry"].upsertJobScheduler(
+    CONFIRMATION_EXPIRY_SCHEDULER_ID,
+    { pattern: CONFIRMATION_EXPIRY_CRON },
+    { name: "pending-confirmation-expiry", data: {} }
   );
   // No discovery-search schedule here: a weekly sweep would be a poison job as
   // written (DiscoveryJobDataSchema requires a workspace_id, but a repeat job

@@ -314,6 +314,24 @@ describe("POST /api/chat", () => {
     expect(deps.createAgentRun).not.toHaveBeenCalled();
   });
 
+  it("emits a confirm_required frame when the turn pauses at a mutation gate", async () => {
+    const deps = makeDeps({
+      streamChat: vi.fn(async function* () {
+        yield {
+          kind: "confirm_required",
+          mutation: { tool_name: "create_competitor", description: "Create competitor Acme?", arguments: { name: "Acme", domain: "acme.com" } },
+        } as const;
+      }) as any,
+    });
+    const res = await call(buildApp(deps).app, { query: "add Acme", competitor_ids: [C1] });
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("event: confirm_required");
+    expect(res.text).toContain("create_competitor");
+    expect(res.text).not.toContain("event: result");
+    expect(deps.completeAgentRun).toHaveBeenCalledWith(RUN_ID, "completed");
+  });
+
   it("operational failure: run failed + generic error event with the message redacted", async () => {
     const deps = makeDeps({
       streamChat: vi.fn(async function* () {

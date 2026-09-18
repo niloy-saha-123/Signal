@@ -12,6 +12,7 @@
 // state's citation_result.
 import { HumanMessage } from "@langchain/core/messages";
 import type { AIMessageChunk } from "@langchain/core/messages";
+import { Command } from "@langchain/langgraph";
 import type { ChatAgentResult } from "@signal/shared";
 import {
   getChatGraph,
@@ -19,8 +20,9 @@ import {
   setupChatCheckpointer,
   CHAT_RECURSION_LIMIT,
   GENERATE_NODE_NAME,
+  pendingMutations,
 } from "./chat-graph";
-import type { ChatAgentInput } from "./chat-graph";
+import type { ChatAgentInput, ChatMutationRequest } from "./chat-graph";
 
 export type { ChatAgentInput } from "./chat-graph";
 
@@ -86,7 +88,8 @@ export async function runChatAgent(
 
 export type ChatStreamEvent =
   | { kind: "token"; text: string }
-  | { kind: "result"; result: ChatAgentResult };
+  | { kind: "result"; result: ChatAgentResult }
+  | { kind: "confirm_required"; mutation: ChatMutationRequest };
 
 export interface StreamChatInput extends ChatAgentInput {
   thread_id: string;
@@ -110,6 +113,46 @@ function chunkText(chunk: AIMessageChunk): string {
         : []
     )
     .join("");
+}
+
+// Shared emit loop over a graph stream: forwards generate-node tokens, captures
+// the final citation_result, and — when the stream ends without one — reads the
+// checkpoint for a pending confirm-gate interrupt (the graph paused at a
+// mutating tool call) and surfaces it as confirm_required.
+async function* emitGraphStream(
+  stream: AsyncIterable<unknown>,
+  threadId: string,
+  signal: AbortSignal
+): AsyncGenerator<ChatStreamEvent> {
+  let result: ChatAgentResult | undefined;
+  for await (const chunk of stream) {
+    signal.throwIfAborted();
+    const [ns, mode, payload] = chunk as unknown as [string[], string, unknown];
+    if (mode === "messages") {
+      const [message] = payload as [AIMessageChunk, unknown];
+      if (ns[0]?.split(":")[0] === GENERATE_NODE_NAME) {
+        const text = chunkText(message);
+        if (text) yield { kind: "token", text };
+      }
+    } else if (mode === "values") {
+      const values = payload as { citation_result?: ChatAgentResult };
+      if (values.citation_result) result = values.citation_result;
+    }
+  }
+
+  if (result) {
+    yield { kind: "result", result };
+    return;
+  }
+
+  const mutations = pendingMutations(
+    await getChatGraph().getState({ configurable: { thread_id: threadId } })
+  );
+  if (mutations.length > 0) {
+    for (const mutation of mutations) yield { kind: "confirm_required", mutation };
+    return;
+  }
+  throw new Error("chat-agent: stream finished without a citation_result");
 }
 
 export async function* streamChat(
@@ -152,28 +195,32 @@ export async function* streamChat(
     }
   );
 
-  let result: ChatAgentResult | undefined;
-  // ponytail: the 60s timeout bounds the model/retrieval calls via node-level
-  // signal?.throwIfAborted(); unlike runChatAgent's boundedBySignal race it does
-  // not force-abort a dependency that ignores its signal and hangs. Add a per-chunk
-  // race here if a hung non-abortable dependency is ever observed in production.
-  for await (const chunk of stream) {
-    signal.throwIfAborted();
-    const [ns, mode, payload] = chunk as unknown as [string[], string, unknown];
-    if (mode === "messages") {
-      const [message] = payload as [AIMessageChunk, unknown];
-      if (ns[0]?.split(":")[0] === GENERATE_NODE_NAME) {
-        const text = chunkText(message);
-        if (text) yield { kind: "token", text };
-      }
-    } else if (mode === "values") {
-      const values = payload as { citation_result?: ChatAgentResult };
-      if (values.citation_result) result = values.citation_result;
-    }
-  }
+  yield* emitGraphStream(stream, input.thread_id, signal);
+}
 
-  if (!result) {
-    throw new Error("chat-agent: stream finished without a citation_result");
-  }
-  yield { kind: "result", result };
+// Resumes a thread paused at a confirm gate, then streams whatever happens next:
+// the tool executing, the model's follow-up response, or another confirm_required
+// if the model proposes a second mutating action. Same shape as POST /chat's
+// discoverable resume endpoint in discovery.ts, adapted to an SSE stream.
+export async function* resumeChat(
+  threadId: string,
+  decision: "approve" | "deny",
+  opts: { signal?: AbortSignal } = {}
+): AsyncGenerator<ChatStreamEvent> {
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
+    : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
+  signal.throwIfAborted();
+
+  await setupChatCheckpointer();
+  signal.throwIfAborted();
+
+  const stream = await getChatGraph().stream(new Command({ resume: decision }), {
+    configurable: { thread_id: threadId },
+    signal,
+    recursionLimit: CHAT_RECURSION_LIMIT,
+    streamMode: ["messages", "values"],
+  });
+
+  yield* emitGraphStream(stream, threadId, signal);
 }

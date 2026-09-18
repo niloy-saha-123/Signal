@@ -41,6 +41,7 @@ import {
   workspacesTable,
   workspaceMembersTable,
   chatThreadsTable,
+  companyGoalsTable,
   type SignalPipelineStage,
 } from "./schema";
 import {
@@ -1777,4 +1778,68 @@ export async function touchChatThread(threadId: string): Promise<void> {
     .update(chatThreadsTable)
     .set({ updated_at: new Date() })
     .where(eq(chatThreadsTable.id, threadId));
+}
+
+// ── company_goals ────────────────────────────────────────────────────────
+
+export type CompanyGoal = typeof companyGoalsTable.$inferSelect;
+
+export type CompanyGoalCreatedBy = "user" | "agent";
+export type CompanyGoalStatus = "active" | "archived";
+
+export async function createCompanyGoal(
+  workspaceId: string,
+  content: string,
+  createdBy: CompanyGoalCreatedBy
+): Promise<CompanyGoal> {
+  const [row] = await db
+    .insert(companyGoalsTable)
+    .values({ workspace_id: workspaceId, content, created_by: createdBy })
+    .returning();
+  return row;
+}
+
+export async function listCompanyGoalsForWorkspace(
+  workspaceId: string,
+  opts?: { status?: CompanyGoalStatus }
+): Promise<CompanyGoal[]> {
+  return db
+    .select()
+    .from(companyGoalsTable)
+    .where(
+      and(
+        eq(companyGoalsTable.workspace_id, workspaceId),
+        opts?.status === undefined ? undefined : eq(companyGoalsTable.status, opts.status)
+      )
+    )
+    .orderBy(desc(companyGoalsTable.created_at));
+}
+
+export async function updateCompanyGoal(
+  goalId: string,
+  workspaceId: string,
+  changes: { content?: string; status?: CompanyGoalStatus }
+): Promise<CompanyGoal | undefined> {
+  const [row] = await db
+    .update(companyGoalsTable)
+    .set({ ...changes, updated_at: new Date() })
+    .where(
+      and(
+        eq(companyGoalsTable.id, goalId),
+        eq(companyGoalsTable.workspace_id, workspaceId)
+      )
+    )
+    .returning();
+  return row;
+}
+
+export async function deleteCompanyGoal(goalId: string, workspaceId: string): Promise<void> {
+  await db
+    .delete(companyGoalsTable)
+    .where(
+      and(
+        eq(companyGoalsTable.id, goalId),
+        eq(companyGoalsTable.workspace_id, workspaceId)
+      )
+    );
 }
