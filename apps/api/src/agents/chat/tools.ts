@@ -76,6 +76,12 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "trigger_discovery_search",
 ]);
 
+// Safe-rollout kill switch for chat's mutating tools. Default ON — honored only
+// when the string is exactly "false" (same convention as ENABLE_PLAYWRIGHT).
+export function chatMutatingToolsEnabled(): boolean {
+  return process.env.ENABLE_CHAT_MUTATING_TOOLS !== "false";
+}
+
 function compactCompetitor(row: { id: string; name: string; domain: string; is_active: boolean }) {
   return { id: row.id, name: row.name, domain: row.domain, is_active: row.is_active };
 }
@@ -283,7 +289,7 @@ export function buildChatTools(workspaceId: string, deps: ChatToolDeps = default
     { name: "trigger_discovery_search", mutating: MUTATING_TOOL_NAMES.has("trigger_discovery_search"), tool: triggerDiscoverySearch },
   ] satisfies ChatTool[];
 
-  return all;
+  return chatMutatingToolsEnabled() ? all : all.filter((t) => !t.mutating);
 }
 
 // Human-readable, one-line description of a proposed mutation for the HITL
