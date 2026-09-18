@@ -60,6 +60,8 @@ Recommended actions:
 
 **Chat.** A persistent, multi-thread panel that answers questions from accumulated intelligence, not generic LLM knowledge. It retrieves and re-queries Signal's own stored evidence before answering, cites its sources, and declines rather than guessing when the evidence is thin. Threads are checkpointed — you can rewind any answer and regenerate from there.
 
+**Chat as a control plane.** You can also *act* through the chat: create a competitor, trigger an analysis run, kick off a discovery search, or edit the company's goals/plans by talking to it. Every mutating action is gated — the agent proposes, then asks you to confirm before anything touches data.
+
 **Signal Score.** A 0-100 composite threat score per competitor, recomputed daily: mention velocity (30-day trend, quality-weighted), sentiment trajectory, hiring momentum (department deltas, especially ML/AI/Sales), pricing change recency, and vulnerability window status. It's the 10-second daily check-in before anyone drills into detail.
 
 **Own-company monitoring.** Signal watches your own company the same way it watches competitors — upload your docs and it produces "competitor did X, we haven't" comparisons. Advisory only: it informs, it never acts.
@@ -240,8 +242,9 @@ All routes are authenticated with a Supabase JWT (`Authorization: Bearer …`) a
 | Competitors | `GET/POST /api/competitors`, `GET /api/competitors/:id`, `POST /:id/analyze`, `GET /:id/score`, `GET /:id/scores`, `GET /:id/trend`, `GET /:id/hiring`, `GET /:id/discovery` |
 | Signals | `GET /api/signals` (pagination, source/quality/date filters) |
 | Alerts | `GET /api/alerts` |
-| Chat | `POST /api/chat` — SSE: `event: token`* → `event: result` |
-| Chat threads | `POST/GET /api/chat-threads`, `GET /:id/messages`, `GET /:id/checkpoints`, `POST /:id/regenerate`, `DELETE /:id` |
+| Chat | `POST /api/chat` — SSE: `event: token`* → `event: result` · `event: confirm_required` |
+| Chat threads | `POST/GET /api/chat-threads`, `GET /:id/messages`, `GET /:id/checkpoints`, `POST /:id/regenerate`, `POST /:id/resume`, `GET /pending-confirmations`, `DELETE /:id` |
+| Company goals | `GET/POST /api/company-goals`, `PATCH/DELETE /api/company-goals/:id` |
 | Company profile | `GET/POST /api/company-profile`, `GET/PUT /api/company-profile/signal-goal` |
 | Company documents | `GET/POST /api/company-documents` (file upload), `POST /api/company-documents/text` (pasted text) |
 | Discovery | `GET /api/tracked-entities`, `POST /api/discovery/trigger`, `POST /api/discovery/:threadId/resume` (`{decision: "confirm" \| "dismiss"}`) |
@@ -386,7 +389,7 @@ CIRCUIT_TIMEOUT_MS=1800000
 
 ## What's Coming
 
-- **Chat as a control plane.** Tell the chatbot to create a competitor, run an analysis, or update your company goals — it acts, after asking you to confirm any change that touches data.
+- **Richer chat inputs, with guardrails.** Let the chat read a company/website link, look at an image, or take a document inline — each behind hard guards so pasted links can't reach the internal network, images/documents can't carry prompt-injection payloads, and no one can abuse the chat to amplify API spend. (Planned — see the Phase 8 plan.)
 - **Long-term memory.** Signal will remember the important facts about your company and your preferences across conversations, not just within a single thread.
 
 ---
