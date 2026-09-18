@@ -18,9 +18,16 @@ export interface ParsedSseEvent {
   data: string;
 }
 
+export interface ChatMutationRequest {
+  tool_name: string;
+  description: string;
+  arguments: Record<string, unknown>;
+}
+
 export interface StreamChatOptions {
   threadId?: string;
   onToken?: (text: string) => void;
+  onConfirmRequired?: (mutation: ChatMutationRequest) => void;
   signal?: AbortSignal;
 }
 
@@ -66,7 +73,46 @@ export async function streamChatResult(
     return;
   }
 
-  const reader = response.body.getReader();
+  await consumeSseStream(response, onResult, onError, options);
+}
+
+// Resumes a chat thread paused at a HITL confirm gate: POST /api/chat-threads/:id/resume
+// streams the same token/result/confirm_required corpus as /api/chat.
+export async function resumeChatThread(
+  threadId: string,
+  decision: "approve" | "deny",
+  onResult: (result: ChatAgentResult) => void,
+  onError: (message: string) => void,
+  options: StreamChatOptions = {}
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/chat-threads/${threadId}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeader()) },
+      body: JSON.stringify({ decision }),
+      signal: options.signal,
+    });
+  } catch {
+    onError(GENERIC_ERROR_MESSAGE);
+    return;
+  }
+
+  if (!response.ok || !response.body) {
+    onError(GENERIC_ERROR_MESSAGE);
+    return;
+  }
+
+  await consumeSseStream(response, onResult, onError, options);
+}
+
+async function consumeSseStream(
+  response: Response,
+  onResult: (result: ChatAgentResult) => void,
+  onError: (message: string) => void,
+  options: StreamChatOptions
+): Promise<void> {
+  const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -85,6 +131,8 @@ export async function streamChatResult(
           if (parsed.event === "token") {
             const { text } = JSON.parse(parsed.data) as { text: string };
             options.onToken?.(text);
+          } else if (parsed.event === "confirm_required") {
+            options.onConfirmRequired?.(JSON.parse(parsed.data) as ChatMutationRequest);
           } else if (parsed.event === "result") {
             onResult(JSON.parse(parsed.data) as ChatAgentResult);
           } else if (parsed.event === "error") {

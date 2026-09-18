@@ -6,8 +6,9 @@
 // /api/company-documents (the workspace knowledge path).
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { ChatAgentResult } from "@signal/shared";
 import { SOURCE_COLORS } from "../lib/chart-colors";
-import { streamChatResult } from "../lib/chat-stream";
+import { resumeChatThread, streamChatResult, type ChatMutationRequest } from "../lib/chat-stream";
 import { ThreadList } from "./ThreadList";
 import {
   createChatThread,
@@ -52,6 +53,12 @@ interface ChatMessage {
   error?: string | null;
   pending?: boolean;
   regenerateIndex?: number;
+  confirmation?: {
+    tool_name: string;
+    description: string;
+    arguments: Record<string, unknown>;
+    status: "pending" | "approved" | "denied";
+  } | null;
 }
 
 export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfaceProps) {
@@ -160,6 +167,47 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
     }
   }
 
+  function patchMessage(id: string, patch: Partial<ChatMessage>) {
+    setMessages((current) => current.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
+
+  function applyResult(id: string, result: ChatAgentResult) {
+    patchMessage(id, {
+      pending: false,
+      text: result.refused ? "" : result.answer,
+      refused: result.refused ? { reason: result.reason, suggestedQuery: result.suggested_query } : null,
+      citations: result.refused ? undefined : result.citations,
+    });
+  }
+
+  async function handleConfirm(message: ChatMessage, decision: "approve" | "deny") {
+    const threadId = activeThreadId;
+    if (!threadId || !message.confirmation || message.confirmation.status !== "pending") return;
+    patchMessage(message.id, {
+      confirmation: { ...message.confirmation, status: decision === "approve" ? "approved" : "denied" },
+      pending: true,
+    });
+    setSubmitting(true);
+    try {
+      await resumeChatThread(
+        threadId,
+        decision,
+        (result) => applyResult(message.id, result),
+        (error) => patchMessage(message.id, { pending: false, error }),
+        {
+          onToken: (text) => patchMessage(message.id, { text: message.text + text }),
+          onConfirmRequired: (mutation) =>
+            patchMessage(message.id, {
+              pending: false,
+              confirmation: { ...mutation, status: "pending" },
+            }),
+        }
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = query.trim();
@@ -248,6 +296,15 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               current.map((m) =>
                 m.id === assistantMsgId
                   ? { ...m, text: m.text + text }
+                  : m
+              )
+            );
+          },
+          onConfirmRequired: (mutation: ChatMutationRequest) => {
+            setMessages((current) =>
+              current.map((m) =>
+                m.id === assistantMsgId
+                  ? { ...m, pending: false, confirmation: { ...mutation, status: "pending" } }
                   : m
               )
             );
@@ -358,6 +415,41 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                             </div>
                           )}
                         </>
+                      )}
+                      {message.confirmation && (
+                        <div
+                          data-testid="confirm-card"
+                          className="mt-2 rounded-xl border border-studio-line bg-white p-3 shadow-sm"
+                        >
+                          <p className="text-xs font-medium text-studio-muted">
+                            Signal wants to run this action
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-studio-ink">
+                            {message.confirmation.description}
+                          </p>
+                          {message.confirmation.status === "pending" ? (
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleConfirm(message, "approve")}
+                                className="rounded-lg bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleConfirm(message, "deny")}
+                                className="rounded-lg border border-studio-line bg-studio-paper px-3 py-1.5 text-xs font-semibold text-studio-muted hover:text-studio-ink"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-xs text-studio-muted">
+                              {message.confirmation.status === "approved" ? "Action approved." : "Action cancelled."}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                     {message.regenerateIndex !== undefined && (

@@ -86,7 +86,7 @@ describe("ChatInterface", () => {
       ["comp-1", "comp-2"],
       expect.any(Function),
       expect.any(Function),
-      { threadId: "thread-1", onToken: expect.any(Function) }
+      { threadId: "thread-1", onToken: expect.any(Function), onConfirmRequired: expect.any(Function) }
     );
   });
 
@@ -105,7 +105,7 @@ describe("ChatInterface", () => {
       ["comp-1"],
       expect.any(Function),
       expect.any(Function),
-      { threadId: "thread-1", onToken: expect.any(Function) }
+      { threadId: "thread-1", onToken: expect.any(Function), onConfirmRequired: expect.any(Function) }
     );
   });
 
