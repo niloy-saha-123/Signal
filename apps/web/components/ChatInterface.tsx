@@ -2,8 +2,8 @@
 // Streams via lib/chat-stream.ts (live `token` draft corrected by the final `result`).
 // A refusal (ChatAgentResult.refused === true) is a normal, successful result.
 // Input is disabled while a response is streaming, so a second send can't race the
-// first. Document uploads are validated client-side (type + 10 MB) and stored via
-// /api/company-documents (the workspace knowledge path).
+// first. Per-turn attachments (docs + raster images) are validated client-side and
+// sent with the chat request — they are not auto-persisted to the knowledge base.
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatAgentResult } from "@signal/shared";
@@ -17,10 +17,15 @@ import {
   listChatThreads,
   listChatThreadCheckpoints,
   regenerateChatThread,
-  uploadCompanyDocument,
   type ChatThreadSummary,
 } from "../lib/api";
-import { validateDocument, formatBytes, ACCEPTED_DOC_EXTENSIONS } from "../lib/attachments";
+import {
+  validateChatAttachment,
+  formatBytes,
+  ACCEPTED_CHAT_EXTENSIONS,
+  MAX_CHAT_DOCS,
+  MAX_CHAT_IMAGES,
+} from "../lib/attachments";
 
 export interface ChatInterfaceProps {
   competitorIds: string[];
@@ -33,7 +38,7 @@ interface Attachment {
   id: string;
   name: string;
   size: number;
-  status: "uploading" | "ok" | "error";
+  file: File;
 }
 
 interface Citation {
@@ -86,31 +91,38 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
     fileInputRef.current?.click();
   }
 
-  async function handleFiles(files: FileList | null) {
+  function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setAttachError(null);
-    for (const file of Array.from(files)) {
-      const invalid = validateDocument(file);
-      if (invalid) {
-        setAttachError(invalid);
-        continue;
+    const incoming = Array.from(files);
+    setAttachments((current) => {
+      let docs = current.filter((a) => !/\.(png|jpe?g|webp|gif)$/i.test(a.name)).length;
+      let images = current.filter((a) => /\.(png|jpe?g|webp|gif)$/i.test(a.name)).length;
+      const next = [...current];
+      for (const file of incoming) {
+        const invalid = validateChatAttachment(file);
+        if (invalid) {
+          setAttachError(invalid);
+          continue;
+        }
+        const isImage = /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+        if (isImage) {
+          if (images >= MAX_CHAT_IMAGES) {
+            setAttachError(`At most ${MAX_CHAT_IMAGES} images per message.`);
+            continue;
+          }
+          images += 1;
+        } else {
+          if (docs >= MAX_CHAT_DOCS) {
+            setAttachError(`At most ${MAX_CHAT_DOCS} documents per message.`);
+            continue;
+          }
+          docs += 1;
+        }
+        next.push({ id: crypto.randomUUID(), name: file.name, size: file.size, file });
       }
-      const id = crypto.randomUUID();
-      setAttachments((current) => [
-        ...current,
-        { id, name: file.name, size: file.size, status: "uploading" },
-      ]);
-      try {
-        await uploadCompanyDocument(file);
-        setAttachments((current) =>
-          current.map((a) => (a.id === id ? { ...a, status: "ok" } : a))
-        );
-      } catch {
-        setAttachments((current) =>
-          current.map((a) => (a.id === id ? { ...a, status: "error" } : a))
-        );
-      }
-    }
+      return next;
+    });
   }
 
   async function loadThread(id: string) {
@@ -211,16 +223,10 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = query.trim();
-    const uploadFailed = attachments.some((a) => a.status === "error");
-    const uploadPending = attachments.some((a) => a.status === "uploading");
     if (submitting || (!trimmed && attachments.length === 0)) return;
-    if (uploadFailed) {
-      setAttachError("One or more attachments failed to upload — remove them to continue.");
-      return;
-    }
-    if (uploadPending) return;
 
     const attachmentNames = attachments.map((a) => a.name);
+    const filesToSend = attachments.map((a) => a.file);
     setQuery("");
     setAttachments([]);
     setAttachError(null);
@@ -291,6 +297,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
         },
         {
           threadId,
+          attachments: filesToSend.length > 0 ? filesToSend : undefined,
           onToken: (text) => {
             setMessages((current) =>
               current.map((m) =>
@@ -483,9 +490,6 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                   className="inline-flex items-center gap-1.5 rounded-full border border-studio-line bg-studio-sky-soft px-3 py-1 text-xs text-studio-muted"
                 >
                   {a.name} · {formatBytes(a.size)}
-                  <span className={a.status === "ok" ? "text-emerald-600" : a.status === "error" ? "text-red-600" : "text-studio-muted"}>
-                    {a.status === "ok" ? "✓" : a.status === "error" ? "✕" : "…"}
-                  </span>
                   <button
                     type="button"
                     onClick={() => setAttachments((current) => current.filter((x) => x.id !== a.id))}
@@ -503,7 +507,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               ref={fileInputRef}
               type="file"
               multiple
-              accept={ACCEPTED_DOC_EXTENSIONS.join(",")}
+              accept={ACCEPTED_CHAT_EXTENSIONS.join(",")}
               className="hidden"
               onChange={(e) => {
                 handleFiles(e.target.files);
@@ -514,7 +518,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               type="button"
               onClick={openFilePicker}
               disabled={submitting}
-              title="Attach a document (PDF, TXT, MD, DOC, DOCX, CSV, JSON, RTF — max 10 MB)"
+              title="Attach a document or image for this message only (not saved to company knowledge)"
               className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink disabled:opacity-30"
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

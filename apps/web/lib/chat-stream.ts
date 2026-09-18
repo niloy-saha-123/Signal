@@ -26,6 +26,8 @@ export interface ChatMutationRequest {
 
 export interface StreamChatOptions {
   threadId?: string;
+  /** Per-turn files sent with the chat request — never auto-persisted to the knowledge base. */
+  attachments?: File[];
   onToken?: (text: string) => void;
   onConfirmRequired?: (mutation: ChatMutationRequest) => void;
   signal?: AbortSignal;
@@ -53,14 +55,28 @@ export async function streamChatResult(
 ): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(await authHeader()) },
-      body: JSON.stringify({
+    const headers = { ...(await authHeader()) };
+    let body: BodyInit;
+    if (options.attachments && options.attachments.length > 0) {
+      const form = new FormData();
+      form.set("query", query);
+      form.set("competitor_ids", JSON.stringify(competitorIds));
+      if (options.threadId) form.set("thread_id", options.threadId);
+      for (const file of options.attachments) form.append("attachments", file, file.name);
+      body = form;
+      // Leave Content-Type unset so the browser sets the multipart boundary.
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify({
         query,
         competitor_ids: competitorIds,
         ...(options.threadId ? { thread_id: options.threadId } : {}),
-      }),
+      });
+    }
+    response = await fetch(`${API_BASE}/api/chat`, {
+      method: "POST",
+      headers,
+      body,
       signal: options.signal,
     });
   } catch {

@@ -172,6 +172,9 @@ async function readCapped(res: Response, maxBytes: number): Promise<string> {
 
 export interface SafeFetchInit extends RequestInit {
   maxBytes?: number;
+  // Extra per-hop policy (video-host denylist, etc.) evaluated after the
+  // public-URL check and before connect, including on every redirect target.
+  assertHop?: (url: string) => Promise<void>;
 }
 
 export interface SafeFetchResult {
@@ -183,11 +186,12 @@ export interface SafeFetchResult {
 }
 
 export async function safeFetch(url: string, init: SafeFetchInit = {}): Promise<SafeFetchResult> {
-  const { maxBytes = DEFAULT_MAX_BYTES, ...requestInit } = init;
+  const { maxBytes = DEFAULT_MAX_BYTES, assertHop, ...requestInit } = init;
   let current = url;
 
   for (let hop = 0; ; hop++) {
     await assertPublicUrl(current);
+    await assertHop?.(current);
     const res = await fetch(current, { ...requestInit, redirect: "manual" });
     const location =
       res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;

@@ -23,6 +23,7 @@ import {
   pendingMutations,
 } from "./chat-graph";
 import type { ChatAgentInput, ChatMutationRequest } from "./chat-graph";
+import { clearChatTurnInput, setChatTurnInput, type ChatTurnInput } from "./turn-input";
 
 export type { ChatAgentInput } from "./chat-graph";
 
@@ -93,6 +94,15 @@ export type ChatStreamEvent =
 
 export interface StreamChatInput extends ChatAgentInput {
   thread_id: string;
+  turn?: ChatTurnInput;
+}
+
+function humanTextForTurn(query: string, turn: ChatTurnInput): string {
+  const tags = [
+    ...turn.documents.map((doc) => `[attached document: ${doc.filename}]`),
+    ...turn.images.map((img) => `[attached image: ${img.filename}]`),
+  ];
+  return tags.length === 0 ? query : `${query}\n\n${tags.join("\n")}`;
 }
 
 // Mirrors chat-graph.ts's textFromContent over a single streamed chunk: text
@@ -165,6 +175,7 @@ export async function* streamChat(
     workspace_id: input.workspace_id,
     run_id: input.run_id,
   });
+  const turn = input.turn ?? { documents: [], images: [] };
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, AbortSignal.timeout(OVERALL_TIMEOUT_MS)])
     : AbortSignal.timeout(OVERALL_TIMEOUT_MS);
@@ -173,29 +184,34 @@ export async function* streamChat(
   await setupChatCheckpointer();
   signal.throwIfAborted();
 
-  // streamMode "messages" is a callback-based capture (StreamMessagesHandler with
-  // lc_prefer_streaming) of every chat model that streams inside a node — so the
-  // compaction model's summary tokens appear here too. The node name is the first
-  // checkpoint-namespace segment ("generate:<taskId>"); filter to it so only the
-  // answer draft is forwarded to the client, never the internal summary.
-  const stream = await getChatGraph().stream(
-    {
-      messages: [new HumanMessage(parsed.query)],
-      workspace_id: parsed.workspace_id,
-      competitor_ids: parsed.competitor_ids,
-      run_id: parsed.run_id,
-      // summary intentionally omitted — passing summary: "" would wipe the
-      // checkpointed rolling summary (Task 3 invariant).
-    },
-    {
-      configurable: { thread_id: input.thread_id },
-      signal,
-      recursionLimit: CHAT_RECURSION_LIMIT,
-      streamMode: ["messages", "values"],
-    }
-  );
+  setChatTurnInput(parsed.run_id, turn);
+  try {
+    // streamMode "messages" is a callback-based capture (StreamMessagesHandler with
+    // lc_prefer_streaming) of every chat model that streams inside a node — so the
+    // compaction model's summary tokens appear here too. The node name is the first
+    // checkpoint-namespace segment ("generate:<taskId>"); filter to it so only the
+    // answer draft is forwarded to the client, never the internal summary.
+    const stream = await getChatGraph().stream(
+      {
+        messages: [new HumanMessage(humanTextForTurn(parsed.query, turn))],
+        workspace_id: parsed.workspace_id,
+        competitor_ids: parsed.competitor_ids,
+        run_id: parsed.run_id,
+        // summary intentionally omitted — passing summary: "" would wipe the
+        // checkpointed rolling summary (Task 3 invariant).
+      },
+      {
+        configurable: { thread_id: input.thread_id },
+        signal,
+        recursionLimit: CHAT_RECURSION_LIMIT,
+        streamMode: ["messages", "values"],
+      }
+    );
 
-  yield* emitGraphStream(stream, input.thread_id, signal);
+    yield* emitGraphStream(stream, input.thread_id, signal);
+  } finally {
+    clearChatTurnInput(parsed.run_id);
+  }
 }
 
 // Resumes a thread paused at a confirm gate, then streams whatever happens next:

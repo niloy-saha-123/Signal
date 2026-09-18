@@ -31,10 +31,13 @@
 // omitted a new chat thread is auto-created (title null, i.e. untitled) and the
 // new id is used as the checkpointer's thread_id. After a delivered turn,
 // touchChatThread bumps that thread's updated_at.
-import express, { Router } from "express";
+import express, { Router, type Request, type RequestHandler } from "express";
 import { z } from "zod";
+import multer from "multer";
 import * as queries from "../db/queries";
 import { streamChat as streamChatImpl } from "../agents/chat/chat-agent";
+import { processTurnAttachments, TurnAttachmentError } from "../agents/chat/turn-attachments";
+import type { ChatTurnInput } from "../agents/chat/turn-input";
 import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler } from "./http";
 
@@ -66,11 +69,46 @@ const HEARTBEAT_MS = 15_000;
 // clean 400; streamChat re-validates regardless.
 const ChatBodySchema = z
   .object({
-    query: z.string().trim().min(1).max(2_000),
+    query: z.string().max(2_000),
     competitor_ids: z.array(z.string().uuid()).min(1).max(25),
     thread_id: z.string().uuid().optional(),
   })
   .strict();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 8 },
+});
+
+function uploadedFiles(req: Request): Array<{ originalname: string; mimetype: string; buffer: Buffer }> {
+  const files = (req as Request & { files?: Array<{ originalname: string; mimetype: string; buffer: Buffer }> }).files;
+  return Array.isArray(files) ? files : [];
+}
+
+function chatRequestBody(req: Request): unknown {
+  const files = uploadedFiles(req);
+  if (files.length === 0) return req.body;
+  const rawIds = req.body?.competitor_ids;
+  let competitor_ids = rawIds;
+  if (typeof rawIds === "string") {
+    try {
+      competitor_ids = JSON.parse(rawIds) as unknown;
+    } catch {
+      competitor_ids = rawIds.split(",").map((part: string) => part.trim());
+    }
+  }
+  const query =
+    typeof req.body?.query === "string" && req.body.query.trim().length > 0
+      ? req.body.query
+      : "Review the attached files.";
+  return {
+    query,
+    competitor_ids,
+    ...(typeof req.body?.thread_id === "string" && req.body.thread_id
+      ? { thread_id: req.body.thread_id }
+      : {}),
+  };
+}
 
 const uniq = (ids: string[]): string[] => [...new Set(ids)];
 
@@ -87,15 +125,41 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
 
   router.post(
     "/",
+    upload.array("attachments", 8) as unknown as RequestHandler,
     wrap(async (req, res) => {
       // --- everything that can 4xx happens before a single SSE byte ---
-      const parsed = ChatBodySchema.safeParse(req.body);
+      const parsed = ChatBodySchema.safeParse(chatRequestBody(req));
       if (!parsed.success) {
         res.status(400).json({ error: "validation", issues: parsed.error.issues });
         return;
       }
-      const { query } = parsed.data;
+      const query = parsed.data.query.trim();
+      if (!query) {
+        res.status(400).json({ error: "validation", issues: [{ message: "query is required" }] });
+        return;
+      }
       const competitorIds = uniq(parsed.data.competitor_ids);
+
+      let turn: ChatTurnInput = { documents: [], images: [] };
+      const files = uploadedFiles(req);
+      if (files.length > 0) {
+        try {
+          turn = await processTurnAttachments(
+            files.map((file) => ({
+              filename: file.originalname,
+              mimeType: file.mimetype,
+              buffer: file.buffer,
+            })),
+            req.workspaceId!
+          );
+        } catch (err) {
+          if (err instanceof TurnAttachmentError) {
+            res.status(400).json({ error: "validation", message: err.message });
+            return;
+          }
+          throw err;
+        }
+      }
 
       const found = await deps.getCompetitorsByIdsForWorkspace(competitorIds, req.workspaceId!);
       if (found.length !== competitorIds.length) {
@@ -203,6 +267,7 @@ export function createChatRouter(deps: ChatRouterDeps = defaultChatRouterDeps): 
             workspace_id: req.workspaceId!,
             run_id: run.id,
             thread_id: threadId,
+            turn,
           },
           { signal: ac.signal }
         )) {

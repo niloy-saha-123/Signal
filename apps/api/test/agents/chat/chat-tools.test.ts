@@ -23,6 +23,7 @@ function fakeDeps(overrides: Partial<ChatToolDeps> = {}): ChatToolDeps {
     updateCompanyGoal: vi.fn().mockResolvedValue({ id: GOAL_ID }),
     enqueue: vi.fn().mockResolvedValue(undefined),
     enqueueDiscovery: vi.fn().mockResolvedValue(undefined),
+    fetchUrlPage: vi.fn().mockResolvedValue("page text"),
     ...overrides,
   };
 }
@@ -32,13 +33,14 @@ function registry(deps: ChatToolDeps): Map<string, ChatTool> {
 }
 
 describe("agents/chat/tools — registry shape", () => {
-  it("exposes 8 tools with the expected mutating flags", () => {
+  it("exposes 9 tools with the expected mutating flags", () => {
     const tools = buildChatTools(WORKSPACE_ID, fakeDeps());
     expect(tools.map((t) => [t.name, t.mutating])).toEqual([
       ["list_competitors", false],
       ["get_competitor_score", false],
       ["get_competitor_trend", false],
       ["list_company_goals", false],
+      ["fetch_url", false],
       ["create_competitor", true],
       ["trigger_competitor_analysis", true],
       ["update_company_goals", true],
@@ -92,6 +94,16 @@ describe("agents/chat/tools — read tools", () => {
     expect(JSON.parse(result as string)).toEqual([
       { id: GOAL_ID, content: "Expand to SMB", status: "active", created_by: "user" },
     ]);
+  });
+
+  it("fetch_url delegates to fetchUrlPage with the closed-over workspace id", async () => {
+    const deps = fakeDeps({
+      fetchUrlPage: vi.fn().mockResolvedValue("Pricing dropped 20%"),
+    });
+    const result = await registry(deps).get("fetch_url")!.tool.invoke({ url: "https://acme.com/pricing" });
+    expect(deps.fetchUrlPage).toHaveBeenCalledWith("https://acme.com/pricing", WORKSPACE_ID);
+    expect(result).toBe("Pricing dropped 20%");
+    await expect(registry(deps).get("fetch_url")!.tool.invoke({ url: "not-a-url" })).rejects.toThrow();
   });
 });
 
