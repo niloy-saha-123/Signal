@@ -1,7 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { createCompetitor, resumeDiscovery, triggerDiscovery } from "@/lib/api";
+import { createCompetitor, resumeDiscovery, triggerDiscovery, resolveCompany } from "@/lib/api";
 
 export interface DiscoveryEntity {
   id: string;
@@ -39,8 +39,10 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
-  const [manualName, setManualName] = useState("");
-  const [manualDomain, setManualDomain] = useState("");
+  const [manualInput, setManualInput] = useState("");
+  const [resolvedName, setResolvedName] = useState("");
+  const [resolvedDomain, setResolvedDomain] = useState("");
+  const [resolving, setResolving] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
 
   async function act(entity: DiscoveryEntity, decision: "confirm" | "dismiss") {
@@ -63,15 +65,40 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
     }
   }
 
+  async function handleInputChange(value: string) {
+    setManualInput(value);
+    setManualError(null);
+    if (!value.trim()) {
+      setResolvedName("");
+      setResolvedDomain("");
+      return;
+    }
+
+    setResolving(true);
+    try {
+      const resolved = await resolveCompany(value);
+      setResolvedName(resolved.name);
+      setResolvedDomain(resolved.domain);
+    } catch {
+      setResolvedName("");
+      setResolvedDomain("");
+    } finally {
+      setResolving(false);
+    }
+  }
+
   async function addManually(event: FormEvent) {
     event.preventDefault();
-    if (!manualName.trim() || !manualDomain.trim()) return;
+    if (!manualInput.trim()) return;
     setBusy("__manual__");
     setManualError(null);
     try {
-      await createCompetitor({ name: manualName.trim(), domain: manualDomain.trim() });
-      setManualName("");
-      setManualDomain("");
+      const name = resolvedName || manualInput.trim();
+      const domain = resolvedDomain;
+      await createCompetitor({ name, domain });
+      setManualInput("");
+      setResolvedName("");
+      setResolvedDomain("");
       setManualOpen(false);
       router.refresh();
     } catch {
@@ -106,7 +133,7 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
             onClick={() => setManualOpen((open) => !open)}
             className="inline-flex min-h-11 items-center rounded-full border border-studio-line bg-studio-paper px-5 text-sm font-bold text-studio-ink transition-colors hover:bg-studio-sky-soft"
           >
-            Add competitor manually
+            Add competitor
           </button>
           <button
             onClick={startDiscovery}
@@ -121,31 +148,40 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
       {manualOpen && (
         <form
           onSubmit={addManually}
-          className="flex flex-wrap items-end gap-3 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6"
+          className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6"
         >
           <label className="flex flex-col gap-1 text-sm font-semibold text-studio-ink">
-            Name
+            Company name or domain
             <input
-              value={manualName}
-              onChange={(e) => setManualName(e.target.value)}
+              value={manualInput}
+              onChange={(e) => handleInputChange(e.target.value)}
               required
-              placeholder="Notion"
+              placeholder="Notion, notion.so, https://notion.so"
               className="rounded-full bg-studio-sky-soft px-4 py-2.5 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm font-semibold text-studio-ink">
-            Domain
-            <input
-              value={manualDomain}
-              onChange={(e) => setManualDomain(e.target.value)}
-              required
-              placeholder="notion.so"
-              className="rounded-full bg-studio-sky-soft px-4 py-2.5 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
-            />
-          </label>
+
+          {(resolvedName || resolvedDomain) && (
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-studio-sky-soft text-sm text-studio-muted">
+              {resolving ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-studio-action border-t-transparent" />
+                  Resolving…
+                </span>
+              ) : (
+                <>
+                  <span className="font-semibold text-studio-ink">{resolvedName}</span>
+                  <span className="px-2 py-0.5 rounded-full bg-studio-paper text-studio-muted">
+                    {resolvedDomain}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
           <button
             type="submit"
-            disabled={busy === "__manual__"}
+            disabled={busy === "__manual__" || resolving || !manualInput.trim()}
             className="rounded-full bg-studio-action px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-studio-action-hover disabled:opacity-50"
           >
             Add

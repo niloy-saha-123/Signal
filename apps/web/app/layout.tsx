@@ -1,13 +1,19 @@
 import type { Metadata, Viewport } from "next";
-import { Onest } from "next/font/google";
+import { Fraunces, Public_Sans } from "next/font/google";
 import "./globals.css";
 
-// Keep the existing variable name so authenticated surfaces retain their font contract.
-const onest = Onest({
+const fraunces = Fraunces({
   subsets: ["latin"],
-  variable: "--font-manrope",
+  variable: "--font-fraunces",
   display: "swap",
   weight: ["400", "500", "600", "700", "800"],
+});
+
+const publicSans = Public_Sans({
+  subsets: ["latin"],
+  variable: "--font-public-sans",
+  display: "swap",
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -18,13 +24,13 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#f3faff",
+  themeColor: "#f8fafc", // slate-50
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={onest.variable}>
-      <body className="min-h-screen bg-studio-sky-soft font-sans text-studio-ink antialiased">
+    <html lang="en" className={`${fraunces.variable} ${publicSans.variable}`}>
+      <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
         {children}
       </body>
     </html>

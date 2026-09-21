@@ -524,6 +524,30 @@ export async function deleteCompanyGoal(id: string): Promise<void> {
   }
 }
 
+// ── Resolve Company (name + domain from single input) ───────────────────────────
+
+export interface ResolvedCompany {
+  name: string;
+  domain: string;
+}
+
+export async function resolveCompany(input: string): Promise<ResolvedCompany> {
+  const body = { input };
+  const res = await fetch(`${API_BASE}/api/resolve-company`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeader()),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => undefined);
+    throw new ApiError(res.status, body);
+  }
+  return res.json() as Promise<ResolvedCompany>;
+}
+
 // ── Workspace (account / profile) ────────────────────────────────────────────
 
 export interface Workspace {

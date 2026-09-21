@@ -1,23 +1,36 @@
 @import "tailwindcss";
 
 @theme {
-  /* Typography — Onest is exposed through the legacy variable for app compatibility. */
-  --font-sans: var(--font-manrope);
-  --font-serif: var(--font-manrope);
-  --font-display: var(--font-manrope);
+  /* Typography — Fraunces (display/serif) + Public Sans (UI/body) */
+  --font-sans: var(--font-public-sans);
+  --font-serif: var(--font-fraunces);
+  --font-display: var(--font-fraunces);
 
-  /* Signal Studio — one tonal blue family, paper, and deep ink. */
-  --color-studio-sky: #e2f3ff;
-  --color-studio-sky-soft: #f3faff;
-  --color-studio-sky-deep: #b9ddf7;
-  --color-studio-paper: #ffffff;
-  --color-studio-ink: #0a2033;
-  --color-studio-muted: #49677f;
-  --color-studio-line: #beddf2;
-  --color-studio-action: #0876cf;
-  --color-studio-action-hover: #0564b2;
-  --color-studio-action-soft: #d5edff;
-  
+  /* Signal light theme — slate base, indigo accent, white cards */
+  --color-bg-page: #f8fafc;        /* slate-50 */
+  --color-bg-card: #ffffff;        /* white */
+  --color-bg-card-hover: #f1f5f9;  /* slate-100 */
+  --color-border-subtle: #e2e8f0;  /* slate-200 */
+  --color-text-primary: #0f172a;   /* slate-900 */
+  --color-text-secondary: #475569; /* slate-600 */
+  --color-text-muted: #94a3b8;     /* slate-400 */
+
+  --color-brand: #4f46e5;          /* indigo-600 */
+  --color-brand-hover: #4338ca;    /* indigo-700 */
+  --color-brand-tint: #eef2ff;     /* indigo-50 */
+
+  /* Legacy studio-* tokens (mapped to new palette for backward compat) */
+  --color-studio-paper: var(--color-bg-card);
+  --color-studio-ink: var(--color-text-primary);
+  --color-studio-muted: var(--color-text-secondary);
+  --color-studio-line: var(--color-border-subtle);
+  --color-studio-sky: #dbeafe;     /* blue-100 */
+  --color-studio-sky-soft: #eff6ff; /* blue-50 */
+  --color-studio-sky-deep: #93c5fd; /* blue-300 */
+  --color-studio-action: var(--color-brand);
+  --color-studio-action-hover: var(--color-brand-hover);
+  --color-studio-action-soft: var(--color-brand-tint);
+
   /* Categorical — signal sources (packages/shared SignalSourceSchema), fixed slot order
      from the dataviz skill's validated reference palette. Never reassign per filter state. */
   --color-source-reddit: #2a78d6;
@@ -42,33 +55,37 @@
 }
 
 ::selection {
-  background: #b9ddf7;
-  color: #0a2033;
+  background: #4f46e5; /* indigo-600 */
+  color: #ffffff;
 }
 
 :focus-visible {
-  outline: 3px solid #0876cf;
+  outline: 3px solid #4f46e5;
   outline-offset: 3px;
 }
 
 html {
-  scrollbar-color: #87bfe7 #f3faff;
+  scrollbar-color: #cbd5e1 #f8fafc; /* slate-300 on slate-50 */
   scrollbar-width: thin;
 }
 
 *::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
+  width: 10px;
+  height: 10px;
 }
 
 *::-webkit-scrollbar-track {
-  background: #f3faff;
+  background: #f8fafc;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #87bfe7;
-  border: 3px solid #f3faff;
+  background: #cbd5e1;
+  border: 2px solid #f8fafc;
   border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 
 .studio-evidence-pulse {
