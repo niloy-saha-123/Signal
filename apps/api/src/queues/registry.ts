@@ -76,7 +76,8 @@ export type QueueName =
   | "own-company-analysis-sweep"
   | "daily-analysis-sweep"
   | "pending-confirmation-expiry"
-  | "resolve-predictions";
+  | "resolve-predictions"
+  | "slack-question";
 
 export interface QueueConfig {
   concurrency: number;
@@ -215,6 +216,10 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // resolvePrediction is guarded on status "open" so a double-run cannot
   // overwrite a verdict already recorded.
   "resolve-predictions": { concurrency: 1, attempts: 1 },
+  // Answers a question asked in Slack. attempts: 1 — a retry would post a
+  // second answer into the same thread, and a duplicate answer in a channel is
+  // worse than a missing one.
+  "slack-question": { concurrency: 3, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds

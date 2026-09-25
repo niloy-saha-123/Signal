@@ -480,6 +480,48 @@ export const competitorSignalScoresTable = pgTable(
   ]
 );
 
+// ── slack_installations ──────────────────────────────────────────────────
+// Maps a Slack workspace (team_id) to a Signal workspace, and holds the bot
+// token used to post back into it.
+//
+// This is the authorization boundary for every inbound Slack event. Slack
+// presents no bearer token, so after the HMAC signature proves the request came
+// from Slack, this row is the only thing that says WHICH Signal workspace the
+// request may act on. An event from a team_id with no row here is rejected
+// rather than served — without it, a signed request from any Slack workspace
+// that installed the app would run an agent against unscoped data.
+//
+// One row per team_id: a Slack workspace connects to exactly one Signal
+// workspace, so the unique index is what makes the lookup unambiguous.
+export const slackInstallationsTable = pgTable(
+  "slack_installations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    team_id: text("team_id").notNull(),
+    team_name: text("team_name"),
+    // ponytail: stored as-is. A bot token is a credential and belongs in a
+    // secrets manager or a pgcrypto-encrypted column; this is the shortcut, and
+    // the upgrade path is to move it behind the same boundary the other provider
+    // keys use rather than to add bespoke encryption here.
+    bot_token: text("bot_token").notNull(),
+    bot_user_id: text("bot_user_id").notNull(),
+    // Where alerts and predictions are posted. Null until the user picks one —
+    // delivery stays silent rather than guessing a channel, because putting
+    // competitive intelligence somewhere nobody chose is worse than not posting.
+    default_channel: text("default_channel"),
+    installed_by: text("installed_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("slack_installations_team_id_uidx").on(table.team_id),
+    index("slack_installations_workspace_id_idx").on(table.workspace_id),
+  ]
+);
+
 // ── predictions ──────────────────────────────────────────────────────────
 // The prediction ledger. One row per dated, falsifiable claim Signal makes about
 // a competitor, written by the forecaster node and settled later by the daily

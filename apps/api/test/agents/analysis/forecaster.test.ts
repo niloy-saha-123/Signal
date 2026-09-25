@@ -10,7 +10,17 @@ const {
   listOpenPredictionsMock: vi.fn(),
 }));
 
+// Slack delivery is best-effort by construction (it swallows every failure and
+// returns void), so these suites stub it out rather than assert on it — its own
+// behaviour is covered in test/integrations/slack/delivery.test.ts.
+vi.mock("@/integrations/slack/delivery", () => ({
+  deliverAlertToSlack: vi.fn().mockResolvedValue(undefined),
+  deliverPredictionToSlack: vi.fn().mockResolvedValue(undefined),
+  deliverResolutionToSlack: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("@/db/queries", () => ({
+  getCompetitorById: vi.fn().mockResolvedValue({ id: "c1", name: "Acme" }),
   getRecentSignalsByCompetitorIds: getRecentSignalsByCompetitorIdsMock,
   createPrediction: createPredictionMock,
   listOpenPredictions: listOpenPredictionsMock,

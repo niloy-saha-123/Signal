@@ -12,7 +12,8 @@ import type { Job } from "bullmq";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../../reliability/circuit-breaker";
 import { logger } from "../../lib/logger";
 import { registerWorker } from "../../queues/registry";
-import { listDuePredictions, resolvePrediction } from "../../db/queries";
+import { listDuePredictions, resolvePrediction, getCompetitorById } from "../../db/queries";
+import { deliverResolutionToSlack } from "../../integrations/slack/delivery";
 import { resolvePredictionCriteria } from "./prediction-resolver";
 import { brierScore } from "../../lib/calibration";
 
@@ -67,6 +68,19 @@ export async function predictionResolverProcessor(
           id: prediction.id,
           status: outcome.status,
           resolved_at: now,
+          resolution_note: outcome.note,
+          resolution_evidence_urls: outcome.evidence_urls,
+          brier_score: brier,
+        });
+
+        // Announcing misses as plainly as hits is the point. A ledger that only
+        // broadcasts its wins is marketing wearing a track record's clothes.
+        await deliverResolutionToSlack(prediction.workspace_id, {
+          statement: prediction.statement,
+          competitor_name:
+            (await getCompetitorById(prediction.competitor_id))?.name ?? "A competitor",
+          probability: prediction.probability,
+          status: outcome.status,
           resolution_note: outcome.note,
           resolution_evidence_urls: outcome.evidence_urls,
           brier_score: brier,

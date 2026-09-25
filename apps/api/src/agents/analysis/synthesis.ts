@@ -26,6 +26,7 @@ import {
   getLatestSignalScores,
   createSignalScore,
   createAlert,
+  getCompetitorById,
   completeAgentRun,
   type SignalVolumeByDay,
   type SignalScore as SignalScoreRow,
@@ -38,6 +39,7 @@ import { getActivePrompt } from "../../llm/prompt-registry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { isLlmBudgetExhausted } from "./branch-node";
 import { AnalysisDecisionSchema } from "./contracts";
+import { deliverAlertToSlack } from "../../integrations/slack/delivery";
 
 const AGENT_NAME = "synthesis" as const;
 // "claude-sonnet" IS a DOWNGRADE_MAP key — selectModel can hand back either "claude-sonnet"
@@ -459,6 +461,16 @@ export async function synthesisNode(
       competitor_id: alert.competitor_id,
       pattern: alert.pattern,
       confidence: alert.confidence,
+    });
+    // Best-effort by construction — deliverAlertToSlack swallows every failure
+    // and returns void, so a Slack outage cannot cost this run its Signal Score
+    // or strand the agent_runs row. The alert is already durable in Postgres.
+    await deliverAlertToSlack(state.workspace_id, {
+      competitor_name: (await getCompetitorById(state.competitor_id))?.name ?? "A competitor",
+      pattern: alert.pattern,
+      confidence: alert.confidence,
+      interpretation: alert.interpretation,
+      recommended_actions: alert.recommended_actions,
     });
   }
 
