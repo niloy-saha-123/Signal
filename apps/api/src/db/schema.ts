@@ -305,7 +305,7 @@ export const agentLatenciesTable = pgTable(
   (table) => [
     check(
       "agent_latencies_agent_name_check",
-      sql`${table.agent_name} IN ('intent_analyzer', 'sentiment_clusterer', 'change_detector', 'pattern_detector', 'vulnerability_detector', 'synthesis', 'chat_agent', 'quality_scorer', 'deduplicator', 'entity_extractor', 'comparative_synthesis')`
+      sql`${table.agent_name} IN ('intent_analyzer', 'sentiment_clusterer', 'change_detector', 'pattern_detector', 'vulnerability_detector', 'synthesis', 'chat_agent', 'quality_scorer', 'deduplicator', 'entity_extractor', 'comparative_synthesis', 'forecaster')`
     ),
     check("agent_latencies_status_check", sql`${table.status} IN ('success', 'failed', 'skipped')`),
     check(

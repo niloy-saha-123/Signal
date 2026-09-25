@@ -106,6 +106,13 @@
       "when": 1790311775704,
       "tag": "0014_add_predictions",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790312152427,
+      "tag": "0015_add_forecaster_agent",
+      "breakpoints": true
     }
   ]
 }
