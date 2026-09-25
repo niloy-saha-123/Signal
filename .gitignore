@@ -153,3 +153,7 @@ vite.config.ts.timestamp-*
 
 # Local-only project instructions, not pushed to origin
 CLAUDE.md
+
+# Local scratch/debug scripts
+*.tmp.cjs
+*.tmp.js
