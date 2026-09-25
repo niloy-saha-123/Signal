@@ -1,71 +1,148 @@
 @import "tailwindcss";
 
+/* Signal v3 design tokens. Rationale, references and the audit that motivated
+   the rebuild live in docs/v3-design-direction.md.
+
+   Three rules govern everything below:
+
+   1. Depth is borders, not shadow. A static card never casts one. Shadow is
+      reserved for things that genuinely float above the page.
+   2. Colour is scarce. Status and categorical hues carry meaning; the accent
+      marks interactivity; everything else is ground and ink.
+   3. Numbers are the signature. Tabular mono at real size is the one place
+      this interface raises its voice. */
+
 @theme {
-  /* Typography — Fraunces (display/serif) + Public Sans (UI/body) */
+  /* --- Type ------------------------------------------------------------ */
+  /* Public Sans for UI, a monospace for every number that means something.
+     Fraunces is deliberately gone: a display serif reads editorial, and the
+     reader here is a product lead checking a forecast, not a magazine. */
   --font-sans: var(--font-public-sans);
-  --font-serif: var(--font-fraunces);
-  --font-display: var(--font-fraunces);
+  --font-mono: var(--font-jetbrains-mono);
 
-  /* Signal light theme — slate base, indigo accent, white cards */
-  --color-bg-page: #f8fafc;        /* slate-50 */
-  --color-bg-card: #ffffff;        /* white */
-  --color-bg-card-hover: #f1f5f9;  /* slate-100 */
-  --color-border-subtle: #e2e8f0;  /* slate-200 */
-  --color-text-primary: #0f172a;   /* slate-900 */
-  --color-text-secondary: #475569; /* slate-600 */
-  --color-text-muted: #94a3b8;     /* slate-400 */
+  /* --- Ground and ink -------------------------------------------------- */
+  /* Warm off-white, not slate-50. The warmth IS the second colour — it lets
+     the accent stay scarce instead of carrying the whole personality. */
+  --color-ground: #faf9f7;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f5f4f1;
+  --color-line: #e7e5e0;
+  --color-line-strong: #d6d3cc;
 
-  --color-brand: #4f46e5;          /* indigo-600 */
-  --color-brand-hover: #4338ca;    /* indigo-700 */
-  --color-brand-tint: #eef2ff;     /* indigo-50 */
+  --color-ink: #1a1a18;
+  --color-ink-secondary: #5c5a55;
+  --color-ink-muted: #8a8780;
+  --color-ink-inverse: #faf9f7;
 
-  /* Legacy studio-* tokens (mapped to new palette for backward compat) */
-  --color-studio-paper: var(--color-bg-card);
-  --color-studio-ink: var(--color-text-primary);
-  --color-studio-muted: var(--color-text-secondary);
-  --color-studio-line: var(--color-border-subtle);
-  --color-studio-sky: #dbeafe;     /* blue-100 */
-  --color-studio-sky-soft: #eff6ff; /* blue-50 */
-  --color-studio-sky-deep: #93c5fd; /* blue-300 */
-  --color-studio-action: var(--color-brand);
-  --color-studio-action-hover: var(--color-brand-hover);
-  --color-studio-action-soft: var(--color-brand-tint);
+  /* --- Accent ---------------------------------------------------------- */
+  /* Deep teal. Green, amber, orange and red are all spoken for by status and
+     hit/miss semantics; indigo and purple are banned. Teal is the one hue left
+     that cannot be misread as a status. */
+  --color-accent: #0f6e68;
+  --color-accent-hover: #0b5651;
+  --color-accent-tint: #e6f2f1;
+  --color-accent-line: #9cc9c5;
 
-  /* Categorical — signal sources (packages/shared SignalSourceSchema), fixed slot order
-     from the dataviz skill's validated reference palette. Never reassign per filter state. */
+  /* --- Legacy studio-* aliases ----------------------------------------- */
+  /* Kept so already-shipped surfaces keep rendering while they are migrated
+     one at a time. Remapped onto the new palette rather than left pointing at
+     the old one, so nothing renders half-rebuilt. */
+  --color-studio-paper: var(--color-surface);
+  --color-studio-ink: var(--color-ink);
+  --color-studio-muted: var(--color-ink-secondary);
+  --color-studio-line: var(--color-line);
+  --color-studio-sky: var(--color-accent-tint);
+  --color-studio-sky-soft: var(--color-surface-sunken);
+  --color-studio-sky-deep: var(--color-accent-line);
+  --color-studio-action: var(--color-accent);
+  --color-studio-action-hover: var(--color-accent-hover);
+  --color-studio-action-soft: var(--color-accent-tint);
+
+  --color-bg-page: var(--color-ground);
+  --color-bg-card: var(--color-surface);
+  --color-bg-card-hover: var(--color-surface-sunken);
+  --color-border-subtle: var(--color-line);
+  --color-text-primary: var(--color-ink);
+  --color-text-secondary: var(--color-ink-secondary);
+  --color-text-muted: var(--color-ink-muted);
+  --color-brand: var(--color-accent);
+  --color-brand-hover: var(--color-accent-hover);
+  --color-brand-tint: var(--color-accent-tint);
+
+  /* --- Data palettes --------------------------------------------------- */
+  /* Unchanged from v2. These were validated against the dataviz reference and
+     they carry meaning rather than style, so they are not a look to revisit. */
   --color-source-reddit: #2a78d6;
   --color-source-hn: #eb6834;
   --color-source-jobs: #1baf7a;
   --color-source-changelog: #eda100;
   --color-source-pricing: #e87ba4;
+  --color-source-github: #4b5563;
 
-  /* Status — fixed, never themed, never reused for series identity */
   --color-status-good: #0ca30c;
   --color-status-warning: #fab219;
   --color-status-serious: #ec835a;
   --color-status-critical: #d03b3b;
 
-  /* Diverging pair — hiring deltas, sentiment trajectory (above/below a baseline) */
   --color-diverging-positive: #2a78d6;
   --color-diverging-negative: #e34948;
   --color-diverging-neutral: #f0efec;
 
-  /* Sequential — single-series magnitude (Signal Score sparklines/lines) */
   --color-sequential: #2a78d6;
+
+  /* --- Prediction outcomes --------------------------------------------- */
+  /* A resolved prediction is the product's most load-bearing piece of colour,
+     so it gets its own named tokens rather than borrowing status green/red.
+     `unresolved` is deliberately a neutral, not a muted red: a window that
+     closed with no evidence is not a failure, and colouring it like one would
+     make the ledger lie. */
+  --color-outcome-hit: #0ca30c;
+  --color-outcome-miss: #d03b3b;
+  --color-outcome-unresolved: #8a8780;
+  --color-outcome-open: #0f6e68;
+
+  /* --- Radius ---------------------------------------------------------- */
+  /* Four values with distinct jobs. One value everywhere is a slop tell. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  /* --- Elevation ------------------------------------------------------- */
+  /* Only for things that float. A static card uses a border. */
+  --shadow-popover: 0 4px 16px rgba(26, 26, 24, 0.1), 0 0 0 1px rgba(26, 26, 24, 0.06);
+  --shadow-modal: 0 16px 48px rgba(26, 26, 24, 0.18);
+}
+
+/* Tabular figures wherever a number sits in a column or updates in place. A
+   probability that shifts horizontally as it changes reads as unstable, which
+   is precisely the opposite of what this product claims about itself. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* The signature: the one place this interface raises its voice. */
+.metric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--color-ink);
 }
 
 ::selection {
-  background: #4f46e5; /* indigo-600 */
+  background: var(--color-accent);
   color: #ffffff;
 }
 
 :focus-visible {
-  outline: 3px solid #4f46e5;
-  outline-offset: 3px;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 html {
-  scrollbar-color: #cbd5e1 #f8fafc; /* slate-300 on slate-50 */
+  scrollbar-color: var(--color-line-strong) var(--color-ground);
   scrollbar-width: thin;
 }
 
@@ -75,54 +152,24 @@ html {
 }
 
 *::-webkit-scrollbar-track {
-  background: #f8fafc;
+  background: var(--color-ground);
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border: 2px solid #f8fafc;
+  background: var(--color-line-strong);
+  border: 2px solid var(--color-ground);
   border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--color-ink-muted);
 }
 
-.studio-evidence-pulse {
-  animation: studio-evidence-pulse 5.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
-  transform-origin: left center;
-}
-
-.studio-stage-enter {
-  animation: studio-stage-enter 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes studio-evidence-pulse {
-  0%,
-  18% {
-    opacity: 0.35;
-    transform: scaleX(0.12);
-  }
-  44%,
-  72% {
-    opacity: 1;
-    transform: scaleX(1);
-  }
-  100% {
-    opacity: 0.35;
-    transform: scaleX(1);
-  }
-}
-
-@keyframes studio-stage-enter {
-  from {
-    opacity: 0.72;
-    transform: translate3d(2rem, 1.5rem, 0);
-  }
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
+/* Negative tracking above 18px — the reason dense screens still scan. */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
 }
 
 @keyframes slide-in-right {

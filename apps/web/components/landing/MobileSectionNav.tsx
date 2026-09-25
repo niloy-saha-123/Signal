@@ -42,14 +42,14 @@ export function MobileSectionNav() {
       </summary>
       <nav
         aria-label="Mobile section navigation"
-        className="absolute top-13 right-0 z-50 w-52 overflow-hidden rounded-2xl border border-studio-line bg-studio-paper p-2 shadow-[0_18px_42px_-24px_rgba(10,32,51,0.45)]"
+        className="absolute top-13 right-0 z-50 w-52 overflow-hidden rounded-[10px] border border-studio-line bg-studio-paper p-2 shadow-[0_18px_42px_-24px_rgba(10,32,51,0.45)]"
       >
         {SECTION_LINKS.map(([href, label]) => (
           <a
             key={href}
             href={href}
             onClick={closeNavigation}
-            className="block rounded-xl px-4 py-3 text-sm font-semibold text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink"
+            className="block rounded-[10px] px-4 py-3 text-sm font-semibold text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink"
           >
             {label}
           </a>

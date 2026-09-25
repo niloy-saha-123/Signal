@@ -57,7 +57,7 @@ export function BriefingClient({
             Overnight briefing
           </h1>
         </div>
-        <section className="relative overflow-hidden rounded-3xl border border-studio-line bg-studio-paper px-7 py-12 sm:px-12 sm:py-16">
+        <section className="relative overflow-hidden rounded-[10px] border border-studio-line bg-studio-paper px-7 py-12 sm:px-12 sm:py-16">
           <div className="absolute top-0 left-0 h-1 w-full bg-studio-action" />
           <h2 className="max-w-xl font-display text-3xl font-bold tracking-[-0.035em] text-studio-ink">
             Your briefing starts with a competitor.

@@ -54,7 +54,7 @@ export function OnboardingForm() {
           value={name}
           onChange={(event) => setName(event.target.value)}
           required
-          className="rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+          className="rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-accent"
         />
       </label>
       {error ? (
@@ -65,7 +65,7 @@ export function OnboardingForm() {
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+        className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-ink-inverse transition-colors hover:bg-[#33322e] disabled:bg-ink-muted"
       >
         Create workspace
       </button>

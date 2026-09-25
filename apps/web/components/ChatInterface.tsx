@@ -355,7 +355,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               {messages.map((message) =>
                 message.role === "user" ? (
                   <div key={message.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-3xl rounded-br-lg bg-studio-action-soft px-4 py-3">
+                    <div className="max-w-[85%] rounded-[10px] rounded-br-lg bg-studio-action-soft px-4 py-3">
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mb-2 flex flex-wrap gap-1.5">
                           {message.attachments.map((a) => (
@@ -378,11 +378,11 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                   <div key={message.id} className="group flex items-start gap-2">
                     <div className="flex-1">
                       {message.error ? (
-                        <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700">
+                        <p className="rounded-[10px] bg-red-50 px-4 py-3 text-sm text-red-700">
                           {message.error}
                         </p>
                       ) : message.refused ? (
-                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                        <div className="rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
                           <p className="text-sm text-amber-900">{message.refused.reason}</p>
                           {message.refused.suggestedQuery && (
                             <p className="mt-1 text-xs text-amber-800">
@@ -426,7 +426,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                       {message.confirmation && (
                         <div
                           data-testid="confirm-card"
-                          className="mt-2 rounded-xl border border-studio-line bg-white p-3 shadow-sm"
+                          className="mt-2 rounded-[10px] border border-studio-line bg-white p-3"
                         >
                           <p className="text-xs font-medium text-studio-muted">
                             Signal wants to run this action
@@ -439,14 +439,14 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "approve")}
-                                className="rounded-lg bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                                className="rounded-[10px] bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
                               >
                                 Confirm
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "deny")}
-                                className="rounded-lg border border-studio-line bg-studio-paper px-3 py-1.5 text-xs font-semibold text-studio-muted hover:text-studio-ink"
+                                className="rounded-[10px] border border-studio-line bg-studio-paper px-3 py-1.5 text-xs font-semibold text-studio-muted hover:text-studio-ink"
                               >
                                 Cancel
                               </button>
@@ -536,7 +536,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               }}
               placeholder="Ask Signal a question…"
               rows={1}
-              className="max-h-40 w-full resize-none rounded-3xl border border-studio-line bg-studio-sky-soft px-4 py-2.5 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
+              className="max-h-40 w-full resize-none rounded-[10px] border border-studio-line bg-studio-sky-soft px-4 py-2.5 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
               disabled={submitting}
             />
             <button

@@ -30,6 +30,7 @@ import {
   competitorSignalScoresTable,
   predictionsTable,
   slackInstallationsTable,
+  circuitEventsTable,
   agentLatenciesTable,
   agentRunsTable,
   companyProfileTable,
@@ -1187,6 +1188,84 @@ export async function voidPredictionForWorkspace(
     )
     .returning({ id: predictionsTable.id });
   return updated.length > 0;
+}
+
+// ── agent activity ───────────────────────────────────────────────────────
+
+export interface WorkspaceActivityRun {
+  id: string;
+  competitor_id: string;
+  trigger: string;
+  status: string;
+  outcome: string | null;
+  started_at: Date;
+  completed_at: Date | null;
+}
+
+export interface WorkspaceActivity {
+  runs: WorkspaceActivityRun[];
+  spend_today_usd: number;
+  daily_budget_usd: number;
+  open_circuits: string[];
+}
+
+const ACTIVITY_RUN_LIMIT = 40;
+
+// Everything below is scoped through competitors.workspace_id. agent_runs and
+// llm_costs both key on competitor_id rather than workspace_id, so the join is
+// what keeps one tenant's activity out of another's view — the existing
+// getAgentLatencyReport/getCostByCompetitorDay helpers span every workspace and
+// are for operator CLI use only, never an HTTP route.
+export async function getWorkspaceActivity(workspaceId: string): Promise<WorkspaceActivity> {
+  const runs = await db
+    .select({
+      id: agentRunsTable.id,
+      competitor_id: agentRunsTable.competitor_id,
+      trigger: agentRunsTable.trigger,
+      status: agentRunsTable.status,
+      outcome: agentRunsTable.outcome,
+      started_at: agentRunsTable.started_at,
+      completed_at: agentRunsTable.completed_at,
+    })
+    .from(agentRunsTable)
+    .innerJoin(competitorsTable, eq(agentRunsTable.competitor_id, competitorsTable.id))
+    .where(eq(competitorsTable.workspace_id, workspaceId))
+    .orderBy(desc(agentRunsTable.started_at))
+    .limit(ACTIVITY_RUN_LIMIT);
+
+  const [spend] = await db
+    .select({ total: sql<string>`COALESCE(SUM(${llmCostsTable.cost_usd}), 0)` })
+    .from(llmCostsTable)
+    .innerJoin(competitorsTable, eq(llmCostsTable.competitor_id, competitorsTable.id))
+    .where(
+      and(
+        eq(competitorsTable.workspace_id, workspaceId),
+        sql`${llmCostsTable.created_at} >= date_trunc('day', NOW() AT TIME ZONE 'UTC')`
+      )
+    );
+
+  // Circuit state is system health — "is OpenAI reachable" — not another
+  // tenant's data, so it is reported as-is. An open circuit is the single most
+  // useful thing to see when the product looks idle.
+  const circuits = await db
+    .select({ service: circuitEventsTable.service, state: circuitEventsTable.state })
+    .from(circuitEventsTable)
+    .orderBy(desc(circuitEventsTable.occurred_at))
+    .limit(100);
+
+  const latestByService = new Map<string, string>();
+  for (const event of circuits) {
+    if (!latestByService.has(event.service)) latestByService.set(event.service, event.state);
+  }
+
+  return {
+    runs,
+    spend_today_usd: Number(spend?.total ?? 0),
+    daily_budget_usd: Number(process.env.DAILY_BUDGET_USD ?? 2),
+    open_circuits: [...latestByService.entries()]
+      .filter(([, state]) => state === "open")
+      .map(([service]) => service),
+  };
 }
 
 // ── slack ────────────────────────────────────────────────────────────────
