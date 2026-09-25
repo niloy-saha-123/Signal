@@ -32,7 +32,7 @@ function SourcesView() {
       ].map(([source, detail, time], index) => (
         <div
           key={source}
-          className={`grid grid-cols-[auto_1fr_auto] items-center gap-4 rounded-2xl px-4 py-3.5 ${
+          className={`grid grid-cols-[auto_1fr_auto] items-center gap-4 rounded-[10px] px-4 py-3.5 ${
             index === 0 ? "bg-studio-ink text-white" : "bg-studio-sky-soft text-studio-ink"
           }`}
         >

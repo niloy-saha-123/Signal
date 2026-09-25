@@ -149,7 +149,7 @@ export default function LandingPage() {
               <div className="mt-8 grid gap-3">
                 {["Pricing evidence stays open", "Release context stays linked", "Hiring trajectory stays visible"].map(
                   (item) => (
-                    <div key={item} className="flex items-center gap-3 rounded-2xl bg-studio-sky-soft px-4 py-3">
+                    <div key={item} className="flex items-center gap-3 rounded-[10px] bg-studio-sky-soft px-4 py-3">
                       <span className="h-2 w-2 rounded-full bg-studio-action" />
                       <span className="text-sm font-semibold">{item}</span>
                     </div>

@@ -183,7 +183,7 @@ export function CompanyClient({
           rows={2}
           disabled={goalLoading}
           placeholder="e.g. Catch up to Acme in the mid-market"
-          className="rounded-2xl bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky disabled:opacity-60"
+          className="rounded-[10px] bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky disabled:opacity-60"
         />
         {goalMessage && <p className="text-sm text-studio-muted">{goalMessage}</p>}
         <button
@@ -209,7 +209,7 @@ export function CompanyClient({
             onChange={(e) => setProductDescription(e.target.value)}
             required
             rows={4}
-            className="rounded-2xl bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+            className="rounded-[10px] bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
             placeholder="What your product does, and for whom."
           />
         </label>
@@ -377,7 +377,7 @@ export function CompanyClient({
             {documents.map((doc) => (
               <li
                 key={doc.id}
-                className="flex items-center justify-between gap-4 rounded-2xl bg-studio-sky-soft px-4 py-3"
+                className="flex items-center justify-between gap-4 rounded-[10px] bg-studio-sky-soft px-4 py-3"
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-studio-ink">{doc.filename}</p>

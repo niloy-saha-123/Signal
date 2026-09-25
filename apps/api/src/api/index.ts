@@ -15,6 +15,7 @@ import { createTrackedEntitiesRouter } from "./tracked-entities";
 import { createDashboardRouter } from "./dashboard";
 import { createCompanyGoalsRouter } from "./company-goals";
 import { createPredictionRouter } from "./predictions";
+import { createActivityRouter } from "./activity";
 import { createSlackRouter, type SlackQuestion } from "./slack";
 import { getSlackInstallation } from "../db/queries";
 import { createResolveCompanyRouter } from "./resolve-company";
@@ -150,6 +151,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/dashboard", createDashboardRouter());
   app.use("/api/company-goals", createCompanyGoalsRouter());
   app.use("/api/predictions", createPredictionRouter());
+  app.use("/api/activity", createActivityRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;

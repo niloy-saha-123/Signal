@@ -162,7 +162,7 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
           </label>
 
           {(resolvedName || resolvedDomain) && (
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-studio-sky-soft text-sm text-studio-muted">
+            <div className="flex items-center gap-3 p-3 rounded-[10px] bg-studio-sky-soft text-sm text-studio-muted">
               {resolving ? (
                 <span className="flex items-center gap-2">
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-studio-action border-t-transparent" />
@@ -206,14 +206,14 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
 
             <div className="flex flex-col gap-3">
               {column.entities.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-studio-line px-4 py-8 text-center">
+                <div className="rounded-[10px] border border-dashed border-studio-line px-4 py-8 text-center">
                   <p className="text-xs text-studio-muted">Nothing here yet.</p>
                 </div>
               ) : (
                 column.entities.map((entity) => (
                   <div
                     key={entity.id}
-                    className="flex flex-col gap-3 rounded-2xl bg-studio-paper p-4"
+                    className="flex flex-col gap-3 rounded-[10px] bg-studio-paper p-4"
                   >
                     <div className="flex items-center gap-2">
                       <span

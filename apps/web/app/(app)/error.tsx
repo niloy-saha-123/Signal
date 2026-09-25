@@ -16,7 +16,7 @@ export default function AppError({ error, reset }: AppErrorProps) {
   return (
     <section
       aria-labelledby="app-error-title"
-      className="mx-auto max-w-2xl rounded-3xl border border-studio-line bg-studio-paper px-7 py-12 shadow-[0_20px_50px_-36px_rgba(10,32,51,0.45)] sm:px-12"
+      className="mx-auto max-w-2xl rounded-[10px] border border-studio-line bg-studio-paper px-7 py-12 shadow-[0_20px_50px_-36px_rgba(10,32,51,0.45)] sm:px-12"
     >
       <p className="text-sm font-bold text-studio-action">Signal could not load this view</p>
       <h1

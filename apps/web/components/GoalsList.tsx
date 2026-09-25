@@ -86,7 +86,7 @@ export function GoalsList() {
   }
 
   return (
-    <section className="rounded-[1.6rem] bg-studio-paper p-6 shadow-sm">
+    <section className="rounded-[1.6rem] bg-studio-paper p-6">
       <div className="flex items-baseline justify-between">
         <h2 className="font-display text-xl font-semibold tracking-tight text-studio-ink">
           Goals &amp; plans
@@ -104,7 +104,7 @@ export function GoalsList() {
             <li
               key={goal.id}
               data-testid={`goal-${goal.id}`}
-              className="flex items-start gap-2 rounded-xl border border-studio-line bg-studio-sky-soft px-3 py-2.5"
+              className="flex items-start gap-2 rounded-[10px] border border-studio-line bg-studio-sky-soft px-3 py-2.5"
             >
               {editingId === goal.id ? (
                 <div className="flex w-full items-center gap-2">
@@ -115,12 +115,12 @@ export function GoalsList() {
                       if (e.key === "Enter") void handleSave(goal.id);
                       if (e.key === "Escape") setEditingId(null);
                     }}
-                    className="w-full rounded-lg border border-studio-line bg-white px-3 py-1.5 text-sm text-studio-ink focus:border-studio-action focus:outline-none"
+                    className="w-full rounded-[10px] border border-studio-line bg-white px-3 py-1.5 text-sm text-studio-ink focus:border-studio-action focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => void handleSave(goal.id)}
-                    className="shrink-0 rounded-lg bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                    className="shrink-0 rounded-[10px] bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
                   >
                     Save
                   </button>
@@ -159,7 +159,7 @@ export function GoalsList() {
             </li>
           ))}
           {goals.length === 0 && (
-            <li className="rounded-xl border border-dashed border-studio-line px-3 py-4 text-sm text-studio-muted">
+            <li className="rounded-[10px] border border-dashed border-studio-line px-3 py-4 text-sm text-studio-muted">
               No goals yet — add one, or ask Signal in chat to draft one.
             </li>
           )}
@@ -171,12 +171,12 @@ export function GoalsList() {
           value={newGoal}
           onChange={(e) => setNewGoal(e.target.value)}
           placeholder="Add a goal or plan…"
-          className="w-full rounded-lg border border-studio-line bg-white px-3 py-2 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
+          className="w-full rounded-[10px] border border-studio-line bg-white px-3 py-2 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
         />
         <button
           type="submit"
           disabled={adding || newGoal.trim().length === 0}
-          className="shrink-0 rounded-lg bg-studio-ink px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+          className="shrink-0 rounded-[10px] bg-studio-ink px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-30"
         >
           Add
         </button>

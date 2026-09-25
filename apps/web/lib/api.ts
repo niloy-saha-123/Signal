@@ -670,3 +670,29 @@ export function getCalibration(
 export function voidPrediction(id: string, token?: string): Promise<{ id: string; status: string }> {
   return request(`/api/predictions/${id}/void`, { method: "POST" }, token);
 }
+
+
+// --- Agent activity ---
+
+export interface ActivityRun {
+  id: string;
+  competitor_id: string;
+  trigger: string;
+  status: string;
+  outcome: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface WorkspaceActivity {
+  runs: ActivityRun[];
+  spend_today_usd: number;
+  daily_budget_usd: number;
+  // Services whose circuit breaker is currently open. The most useful thing to
+  // see when the product looks idle but should not be.
+  open_circuits: string[];
+}
+
+export function getActivity(token?: string): Promise<WorkspaceActivity> {
+  return request("/api/activity", undefined, token);
+}
