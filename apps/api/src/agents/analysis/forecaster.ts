@@ -29,6 +29,7 @@ import { getCompanyContext } from "../../lib/company-context";
 import {
   getRecentSignalsByCompetitorIds,
   createPrediction,
+  listOpenPredictions,
   type Signal,
 } from "../../db/queries";
 import { trackLatency } from "../../lib/latency-tracker";
@@ -61,6 +62,13 @@ const EVIDENCE_WINDOW_DAYS = 30;
 // Same "don't blow the context window" bound the other nodes apply.
 const FORECASTER_INPUT_MAX_LENGTH = 24_000;
 
+// Two open predictions of the same pattern resolving within this many days of
+// each other are the same call made twice. The daily sweep re-reads the same
+// evidence every day, so without this gate the ledger fills with near-duplicates
+// that each resolve separately — turning one correct call into what looks like a
+// winning streak, which is precisely the dishonesty the ledger exists to remove.
+const DUPLICATE_HORIZON_DAYS = 14;
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const SYSTEM_PROMPT_BASE = [
@@ -83,6 +91,25 @@ const SYSTEM_PROMPT_BASE = [
 // its own distinct piece of evidence, keyed by its own id.
 export function countDistinctEvidence(signals: Signal[]): number {
   return new Set(signals.map((signal) => signal.cluster_id ?? signal.id)).size;
+}
+
+// A forecast duplicates an open prediction when it makes the same kind of call
+// about the same competitor on roughly the same timeline. Deliberately
+// deterministic — no embedding call, no second model round-trip, nothing that can
+// fail at the moment the ledger's integrity depends on it.
+// ponytail: pattern_type plus horizon proximity is coarse, so two genuinely
+// distinct product_launch calls inside one fortnight collapse into one. Semantic
+// comparison on `statement` is the upgrade path if that starts costing real signal.
+export function isDuplicateForecast(
+  forecast: Pick<Forecast, "pattern_type">,
+  resolvesAt: Date,
+  open: Array<{ pattern_type: string; resolves_at: Date }>
+): boolean {
+  return open.some((existing) => {
+    if (existing.pattern_type !== forecast.pattern_type) return false;
+    const gap = Math.abs(existing.resolves_at.getTime() - resolvesAt.getTime());
+    return gap <= DUPLICATE_HORIZON_DAYS * MS_PER_DAY;
+  });
 }
 
 function buildEvidenceText(signals: Signal[]): string {
@@ -180,11 +207,28 @@ export async function forecasterNode(
       return { forecasts: [] };
     }
 
+    // Narrowed to the two fields the gate reads, so a forecast persisted inside
+    // the loop below can be appended without inventing an id for a row we just
+    // wrote — the gate has to see this batch's own writes, or one model response
+    // can seed its own duplicates.
+    const open: Array<{ pattern_type: string; resolves_at: Date }> = (
+      await listOpenPredictions(state.competitor_id)
+    ).map((row) => ({ pattern_type: row.pattern_type, resolves_at: row.resolves_at }));
+
     const evidenceSignalIds = signals.map((signal) => signal.id);
     const stored: Forecast[] = [];
 
     for (const forecast of parsed.forecasts) {
       const resolvesAt = new Date(Date.now() + forecast.horizon_days * MS_PER_DAY);
+
+      if (isDuplicateForecast(forecast, resolvesAt, open)) {
+        logger.info("forecaster: dropping a forecast that duplicates an open prediction", {
+          competitor_id: state.competitor_id,
+          run_id: state.run_id,
+          pattern_type: forecast.pattern_type,
+        });
+        continue;
+      }
 
       // One forecast failing to persist must not cost the others in this batch —
       // same per-item isolation the collectors apply.
@@ -204,6 +248,7 @@ export async function forecasterNode(
           status: "open",
         });
         stored.push(forecast);
+        open.push({ pattern_type: forecast.pattern_type, resolves_at: resolvesAt });
       } catch (error) {
         logger.error("forecaster: failed to persist one prediction — continuing with the rest", {
           competitor_id: state.competitor_id,

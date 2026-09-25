@@ -229,3 +229,93 @@ describe("forecaster node", () => {
     expect(out.forecasts).toEqual([]);
   });
 });
+
+describe("forecaster duplicate gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    createPredictionMock.mockImplementation(async () => ({ id: "pred-1" }));
+    getDailySpendMock.mockResolvedValue(0);
+    getRecentSignalsByCompetitorIdsMock.mockResolvedValue(makeSignals(9));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops a forecast that repeats an open prediction of the same pattern and horizon", async () => {
+    // The daily sweep re-reads the same evidence every day. Without this gate the
+    // ledger fills with near-duplicates that each resolve separately, turning one
+    // correct call into an apparent winning streak.
+    listOpenPredictionsMock.mockResolvedValue([
+      {
+        id: "p-1",
+        pattern_type: "product_launch",
+        resolves_at: new Date("2026-12-20T00:00:00.000Z"),
+      },
+    ]);
+    structuredInvokeMock.mockResolvedValue({
+      parsed: { forecasts: [validForecast], abstained_reason: null },
+      raw: { usage_metadata: { input_tokens: 10, output_tokens: 10 } },
+    });
+
+    const out = await forecasterNode(baseState);
+
+    expect(createPredictionMock).not.toHaveBeenCalled();
+    expect(out.forecasts).toEqual([]);
+  });
+
+  it("keeps a forecast of the same pattern when the open one resolves far away", async () => {
+    listOpenPredictionsMock.mockResolvedValue([
+      {
+        id: "p-1",
+        pattern_type: "product_launch",
+        resolves_at: new Date("2027-06-01T00:00:00.000Z"),
+      },
+    ]);
+    structuredInvokeMock.mockResolvedValue({
+      parsed: { forecasts: [validForecast], abstained_reason: null },
+      raw: { usage_metadata: { input_tokens: 10, output_tokens: 10 } },
+    });
+
+    await forecasterNode(baseState);
+
+    expect(createPredictionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a forecast whose pattern differs from the open one on the same timeline", async () => {
+    listOpenPredictionsMock.mockResolvedValue([
+      {
+        id: "p-1",
+        pattern_type: "pricing_change",
+        resolves_at: new Date("2026-12-24T00:00:00.000Z"),
+      },
+    ]);
+    structuredInvokeMock.mockResolvedValue({
+      parsed: { forecasts: [validForecast], abstained_reason: null },
+      raw: { usage_metadata: { input_tokens: 10, output_tokens: 10 } },
+    });
+
+    await forecasterNode(baseState);
+
+    expect(createPredictionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let one batch store two forecasts that duplicate each other", async () => {
+    // The gate has to see what this run just wrote, not only what was open when
+    // it started, or a single model response can seed its own duplicates.
+    listOpenPredictionsMock.mockResolvedValue([]);
+    structuredInvokeMock.mockResolvedValue({
+      parsed: {
+        forecasts: [validForecast, { ...validForecast, horizon_days: 95 }],
+        abstained_reason: null,
+      },
+      raw: { usage_metadata: { input_tokens: 10, output_tokens: 10 } },
+    });
+
+    await forecasterNode(baseState);
+
+    expect(createPredictionMock).toHaveBeenCalledTimes(1);
+  });
+});
