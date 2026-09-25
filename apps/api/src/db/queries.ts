@@ -1392,7 +1392,8 @@ export async function finalizeDiscovery(
     result.greenhouse_token != null ||
     result.lever_token != null ||
     result.pricing_url != null ||
-    result.changelog_rss != null;
+    result.changelog_rss != null ||
+    result.github_org != null;
   const discoveryStatus = result.logs.length === 0 || anyValue ? "complete" : "failed";
 
   await db.transaction(async (tx) => {
@@ -1404,6 +1405,7 @@ export async function finalizeDiscovery(
         lever_token: result.lever_token,
         pricing_url: result.pricing_url,
         changelog_rss: result.changelog_rss,
+        github_org: result.github_org,
         discovery_status: discoveryStatus,
         discovered_at: new Date(),
         updated_at: new Date(),
@@ -1536,6 +1538,7 @@ export async function createCompetitorForWorkspace(
       ...(input.lever_token === undefined ? {} : { lever_token: input.lever_token }),
       ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
       ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
+      ...(input.github_org === undefined ? {} : { github_org: input.github_org }),
       discovery_status: "pending",
     })
     .returning();

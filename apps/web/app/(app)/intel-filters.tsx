@@ -4,7 +4,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Competitor } from "@/lib/api";
 
-const SOURCES = ["reddit", "hn", "jobs", "changelog", "pricing"] as const;
+const SOURCES = ["reddit", "hn", "jobs", "changelog", "pricing", "github"] as const;
 
 export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
   const router = useRouter();

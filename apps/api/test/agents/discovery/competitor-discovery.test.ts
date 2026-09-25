@@ -60,6 +60,7 @@ const emptyExisting = {
   lever_token: null,
   pricing_url: null,
   changelog_rss: null,
+  github_org: null,
 };
 
 function logFor(result: Awaited<ReturnType<typeof discoverCompetitor>>, field: string) {
@@ -103,7 +104,7 @@ describe("agents/discovery/competitor-discovery", () => {
     expect(normalizeDomain("https://acme.com")).toBe("acme.com");
   });
 
-  it("discovers all five fields and ranks subreddits by mention count", async () => {
+  it("discovers all six fields and ranks subreddits by mention count", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes("reddit.com") && url.includes("type=sr")) {
         return response({
@@ -134,6 +135,9 @@ describe("agents/discovery/competitor-discovery", () => {
         return response();
       }
       if (url === "https://acme.com/blog/rss") return response({ text: FEED_XML });
+      if (url === "https://api.github.com/orgs/acme") {
+        return response({ json: { login: "acme", blog: "https://acme.com" } });
+      }
       return response({ status: 404 });
     });
 
@@ -149,6 +153,7 @@ describe("agents/discovery/competitor-discovery", () => {
       lever_token: "acme",
       pricing_url: "https://acme.com/pricing",
       changelog_rss: "https://acme.com/blog/rss",
+      github_org: "acme",
     });
     expect(result.subreddits.slice(0, 2)).toEqual(["SaaSBuilders", "AcmeUsers"]);
     expect(result.subreddits).toEqual(expect.arrayContaining(["SaaS", "startups"]));
@@ -158,6 +163,7 @@ describe("agents/discovery/competitor-discovery", () => {
       "lever",
       "pricing_url",
       "rss_url",
+      "github_org",
     ]);
     expect(result.logs.every((entry) => entry.status === "found")).toBe(true);
   });
@@ -357,6 +363,7 @@ describe("agents/discovery/competitor-discovery", () => {
         lever_token: "acme-lever",
         pricing_url: "https://acme.com/custom-pricing",
         changelog_rss: "https://acme.com/custom-feed.xml",
+        github_org: "acme-oss",
       },
     });
 
@@ -366,6 +373,7 @@ describe("agents/discovery/competitor-discovery", () => {
       lever_token: "acme-lever",
       pricing_url: "https://acme.com/custom-pricing",
       changelog_rss: "https://acme.com/custom-feed.xml",
+      github_org: "acme-oss",
       logs: [],
     });
     expect(fetchMock).not.toHaveBeenCalled();

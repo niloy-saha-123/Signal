@@ -66,6 +66,7 @@ export type QueueName =
   | "collect-jobs"
   | "collect-changelog"
   | "collect-pricing"
+  | "collect-github"
   | "pipeline-entity-extraction"
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
@@ -181,6 +182,7 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "collect-jobs": COLLECTOR_CONFIG,
   "collect-changelog": COLLECTOR_CONFIG,
   "collect-pricing": COLLECTOR_CONFIG,
+  "collect-github": COLLECTOR_CONFIG,
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,
@@ -318,6 +320,7 @@ async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void>
       lever_token: competitor.lever_token,
       pricing_url: competitor.pricing_url,
       changelog_rss: competitor.changelog_rss,
+      github_org: competitor.github_org,
     },
   });
   const discoveryStatus = await finalizeDiscovery(competitor_id, result);

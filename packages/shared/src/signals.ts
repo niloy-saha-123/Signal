@@ -41,6 +41,13 @@ export const CompetitorCreateInputSchema = z.object({
   lever_token: z.string().trim().min(1).max(200).optional(),
   pricing_url: z.string().url().max(2_048).optional(),
   rss_url: z.string().url().max(2_048).optional(),
+  // A GitHub org/user login, not a URL — GitHub's own limit is 39 characters of
+  // alphanumerics and single hyphens.
+  github_org: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/, "must be a GitHub org or user login")
+    .optional(),
 });
 export type CompetitorCreateInput = z.infer<typeof CompetitorCreateInputSchema>;
 
@@ -51,7 +58,14 @@ export type DiscoveryStatus = z.infer<typeof DiscoveryStatusSchema>;
 // One row of competitor_discovery_log — what CompetitorDiscoveryAgent tried
 // for a single field and what it found (or didn't).
 export const DiscoveryLogSchema = z.object({
-  field_name: z.enum(["subreddits", "greenhouse", "lever", "pricing_url", "rss_url"]),
+  field_name: z.enum([
+    "subreddits",
+    "greenhouse",
+    "lever",
+    "pricing_url",
+    "rss_url",
+    "github_org",
+  ]),
   attempted_urls: z.array(z.string()),
   discovered_value: z.string().nullable(),
   status: z.enum(["found", "not_found", "error"]),
@@ -69,13 +83,21 @@ export const CompetitorDiscoveryResultSchema = z.object({
   lever_token: z.string().nullable(),
   pricing_url: z.string().nullable(),
   changelog_rss: z.string().nullable(),
+  github_org: z.string().nullable(),
   logs: z.array(DiscoveryLogSchema),
 });
 export type CompetitorDiscoveryResult = z.infer<typeof CompetitorDiscoveryResultSchema>;
 
 // One row of the `signals` table (apps/api/src/db/schema.ts) — a single collected
 // mention/post/comment/pricing-page-diff before or after clustering.
-export const SignalSourceSchema = z.enum(["reddit", "hn", "jobs", "changelog", "pricing"]);
+export const SignalSourceSchema = z.enum([
+  "reddit",
+  "hn",
+  "jobs",
+  "changelog",
+  "pricing",
+  "github",
+]);
 export type SignalSource = z.infer<typeof SignalSourceSchema>;
 
 export const SignalSchema = z.object({

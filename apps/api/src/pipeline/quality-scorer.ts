@@ -19,9 +19,15 @@ import { ensureSignalPipelineJob } from "./recovery";
 // rather than the change itself. jobs is first-party but only weakly a competitive signal (a
 // posting implies direction, it doesn't state one). hn/reddit are third-party community
 // mentions with no way to verify accuracy — weighted equally since neither source carries
-// more inherent authority than the other here.
+// more inherent authority than the other here. github sits just under pricing: a release or
+// pull request IS the change rather than a description of it, and it is timestamped and
+// first-party, but a large share of repository activity is routine engineering with no
+// competitive meaning at all.
+// ponytail: one weight for every github artifact type — a release deserves more authority
+// than an arbitrary PR; split the key into github_release/github_pr if the blend hurts.
 const SOURCE_AUTHORITY: Record<Signal["source"], number> = {
   pricing: 1.0,
+  github: 0.8,
   changelog: 0.85,
   jobs: 0.6,
   hn: 0.3,
