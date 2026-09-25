@@ -15,13 +15,22 @@ import {
   type CompetitorCreateInput,
   type ChatAgentResult,
   type DiscoveryStatus,
+  type PredictionPatternType,
+  type PredictionStatus,
+  type ResolutionCriteria,
   type Signal,
   type SignalScore,
 } from "@signal/shared";
 import { z } from "zod";
 import { getSupabaseBrowserClient } from "./supabase-browser";
 
-export type { CompanyProfile, SignalSource } from "@signal/shared";
+export type {
+  CompanyProfile,
+  PredictionPatternType,
+  PredictionStatus,
+  ResolutionCriteria,
+  SignalSource,
+} from "@signal/shared";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -566,4 +575,98 @@ export function renameWorkspace(name: string): Promise<Workspace> {
     method: "PATCH",
     body: JSON.stringify({ name }),
   });
+}
+
+
+// --- Prediction ledger ---
+
+export interface PredictionRow {
+  id: string;
+  workspace_id: string;
+  competitor_id: string;
+  run_id: string | null;
+  statement: string;
+  pattern_type: PredictionPatternType;
+  probability: number;
+  resolution_criteria: ResolutionCriteria;
+  horizon_days: number;
+  resolves_at: string;
+  evidence_signal_ids: string[];
+  evidence_count: number;
+  status: PredictionStatus;
+  resolved_at: string | null;
+  resolution_note: string | null;
+  resolution_evidence_urls: string[];
+  // null while open, and null for unresolved/void — those carry no information
+  // about accuracy, so they never get a score. Render the absence, do not
+  // coerce it to 0: zero is a perfect Brier score.
+  brier_score: number | null;
+  created_at: string;
+}
+
+export interface PredictionDetail extends PredictionRow {
+  evidence: Signal[];
+}
+
+export interface ListPredictionsParams {
+  status?: PredictionStatus;
+  pattern_type?: PredictionPatternType;
+  competitor_id?: string;
+  limit?: number;
+}
+
+export async function listPredictions(
+  params: ListPredictionsParams = {},
+  token?: string
+): Promise<PredictionRow[]> {
+  const query = buildQuery({
+    status: params.status,
+    pattern_type: params.pattern_type,
+    competitor_id: params.competitor_id,
+    limit: params.limit?.toString(),
+  });
+  const res = await request<{ data: PredictionRow[] }>(
+    `/api/predictions?${query}`,
+    undefined,
+    token
+  );
+  return res.data;
+}
+
+export function getPrediction(id: string, token?: string): Promise<PredictionDetail> {
+  return request(`/api/predictions/${id}`, undefined, token);
+}
+
+export interface CalibrationBucket {
+  range: string;
+  predicted: number;
+  observed: number;
+  count: number;
+}
+
+export interface Calibration {
+  resolved_count: number;
+  // null means no track record yet. It must render as "nothing resolved yet",
+  // never as a score — 0 is flawless calibration and would be a lie.
+  brier: number | null;
+  baseline_brier: number;
+  buckets: CalibrationBucket[];
+}
+
+export function getCalibration(
+  params: { competitor_id?: string; pattern_type?: PredictionPatternType } = {},
+  token?: string
+): Promise<Calibration> {
+  const query = buildQuery({
+    competitor_id: params.competitor_id,
+    pattern_type: params.pattern_type,
+  });
+  return request(`/api/predictions/calibration?${query}`, undefined, token);
+}
+
+// Marks a prediction moot. Only an open prediction can be voided — a settled
+// one keeps its recorded outcome, so a user cannot quietly delete a miss from
+// their own track record.
+export function voidPrediction(id: string, token?: string): Promise<{ id: string; status: string }> {
+  return request(`/api/predictions/${id}/void`, { method: "POST" }, token);
 }

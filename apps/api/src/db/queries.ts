@@ -1122,6 +1122,72 @@ export async function getCalibration(
   );
 }
 
+export interface PredictionListQuery {
+  workspace_id: string;
+  status?: PredictionStatus;
+  pattern_type?: PredictionPatternType;
+  competitor_id?: string;
+  limit: number;
+}
+
+export async function listPredictionsForWorkspace(
+  query: PredictionListQuery
+): Promise<Array<typeof predictionsTable.$inferSelect>> {
+  const conditions = [eq(predictionsTable.workspace_id, query.workspace_id)];
+  if (query.status) conditions.push(eq(predictionsTable.status, query.status));
+  if (query.pattern_type) conditions.push(eq(predictionsTable.pattern_type, query.pattern_type));
+  if (query.competitor_id) {
+    conditions.push(eq(predictionsTable.competitor_id, query.competitor_id));
+  }
+
+  return db
+    .select()
+    .from(predictionsTable)
+    .where(and(...conditions))
+    .orderBy(desc(predictionsTable.created_at))
+    .limit(query.limit);
+}
+
+// Workspace id is part of the WHERE clause rather than a check after the fetch,
+// so another workspace's row is never loaded. Callers turn `undefined` into a
+// 404 — never a 403, which would confirm the id exists.
+export async function getPredictionForWorkspace(
+  id: string,
+  workspaceId: string
+): Promise<typeof predictionsTable.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(predictionsTable)
+    .where(and(eq(predictionsTable.id, id), eq(predictionsTable.workspace_id, workspaceId)))
+    .limit(1);
+  return row;
+}
+
+// Marks a prediction moot — a competitor got acquired, a product line was
+// cancelled, the question stopped being meaningful. Returns false when the row
+// is not this workspace's, or is already resolved.
+//
+// Only an `open` prediction can be voided. Voiding a settled one would erase a
+// recorded hit or miss from the Brier score, which is the one thing a user must
+// not be able to do to their own track record.
+export async function voidPredictionForWorkspace(
+  id: string,
+  workspaceId: string
+): Promise<boolean> {
+  const updated = await db
+    .update(predictionsTable)
+    .set({ status: "void", resolved_at: new Date() })
+    .where(
+      and(
+        eq(predictionsTable.id, id),
+        eq(predictionsTable.workspace_id, workspaceId),
+        eq(predictionsTable.status, "open")
+      )
+    )
+    .returning({ id: predictionsTable.id });
+  return updated.length > 0;
+}
+
 // ── resolution windows ───────────────────────────────────────────────────
 // The resolver asks a different question than the analysis nodes do: not "what
 // happened recently" but "what happened between these two instants". A relative
