@@ -15,6 +15,8 @@ import { createTrackedEntitiesRouter } from "./tracked-entities";
 import { createDashboardRouter } from "./dashboard";
 import { createCompanyGoalsRouter } from "./company-goals";
 import { createPredictionRouter } from "./predictions";
+import { createSlackRouter, type SlackQuestion } from "./slack";
+import { getSlackInstallation } from "../db/queries";
 import { createResolveCompanyRouter } from "./resolve-company";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
@@ -119,6 +121,20 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
       res.status(503).json({ status: "unavailable" });
     }
   });
+  // Mounted before requireAuth on purpose. Slack has no bearer token to
+  // present — the HMAC signature verified inside this router IS the
+  // authentication, and putting it behind requireAuth would reject every
+  // legitimate Slack event.
+  app.use(
+    "/api/slack",
+    createSlackRouter({
+      signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+      getSlackInstallation,
+      enqueueSlackQuestion: async (question: SlackQuestion) => {
+        await queues["slack-question"].add("slack-question", question);
+      },
+    })
+  );
   app.use("/api", requireAuth);
   app.use("/api/competitors", createCompetitorRouter());
   app.use("/api/signals", createSignalRouter());

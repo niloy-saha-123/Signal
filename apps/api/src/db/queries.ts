@@ -29,6 +29,7 @@ import {
   signalClustersTable,
   competitorSignalScoresTable,
   predictionsTable,
+  slackInstallationsTable,
   agentLatenciesTable,
   agentRunsTable,
   companyProfileTable,
@@ -1186,6 +1187,62 @@ export async function voidPredictionForWorkspace(
     )
     .returning({ id: predictionsTable.id });
   return updated.length > 0;
+}
+
+// ── slack ────────────────────────────────────────────────────────────────
+
+export async function getSlackInstallation(
+  teamId: string
+): Promise<typeof slackInstallationsTable.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(slackInstallationsTable)
+    .where(eq(slackInstallationsTable.team_id, teamId))
+    .limit(1);
+  return row;
+}
+
+// The delivery-side lookup: given a Signal workspace, where do we post?
+export async function getSlackInstallationForWorkspace(
+  workspaceId: string
+): Promise<typeof slackInstallationsTable.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(slackInstallationsTable)
+    .where(eq(slackInstallationsTable.workspace_id, workspaceId))
+    .limit(1);
+  return row;
+}
+
+export interface UpsertSlackInstallationInput {
+  workspace_id: string;
+  team_id: string;
+  team_name: string | null;
+  bot_token: string;
+  bot_user_id: string;
+  default_channel: string | null;
+  installed_by: string | null;
+}
+
+export async function upsertSlackInstallation(
+  input: UpsertSlackInstallationInput
+): Promise<typeof slackInstallationsTable.$inferSelect> {
+  const [row] = await db
+    .insert(slackInstallationsTable)
+    .values(input)
+    .onConflictDoUpdate({
+      target: slackInstallationsTable.team_id,
+      set: {
+        workspace_id: input.workspace_id,
+        team_name: input.team_name,
+        bot_token: input.bot_token,
+        bot_user_id: input.bot_user_id,
+        default_channel: input.default_channel,
+        updated_at: new Date(),
+      },
+    })
+    .returning();
+  return row;
 }
 
 // ── resolution windows ───────────────────────────────────────────────────

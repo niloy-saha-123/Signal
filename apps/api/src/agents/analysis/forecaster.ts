@@ -30,8 +30,10 @@ import {
   getRecentSignalsByCompetitorIds,
   createPrediction,
   listOpenPredictions,
+  getCompetitorById,
   type Signal,
 } from "../../db/queries";
+import { deliverPredictionToSlack } from "../../integrations/slack/delivery";
 import { trackLatency } from "../../lib/latency-tracker";
 import { trackCost } from "../../llm/cost-tracker";
 import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
@@ -216,6 +218,10 @@ export async function forecasterNode(
     ).map((row) => ({ pattern_type: row.pattern_type, resolves_at: row.resolves_at }));
 
     const evidenceSignalIds = signals.map((signal) => signal.id);
+    // Resolved once for the batch. A Slack message read out of context needs a
+    // name, not "a competitor".
+    const competitorName =
+      (await getCompetitorById(state.competitor_id))?.name ?? "A competitor";
     const stored: Forecast[] = [];
 
     for (const forecast of parsed.forecasts) {
@@ -249,6 +255,18 @@ export async function forecasterNode(
         });
         stored.push(forecast);
         open.push({ pattern_type: forecast.pattern_type, resolves_at: resolvesAt });
+
+        // Best-effort by construction — this swallows every failure and returns
+        // void, so Slack being down cannot lose a prediction that is already
+        // written to Postgres.
+        await deliverPredictionToSlack(state.workspace_id, {
+          statement: forecast.statement,
+          competitor_name: competitorName,
+          probability: forecast.probability,
+          resolves_at: resolvesAt,
+          evidence_count: evidenceCount,
+          pattern_type: forecast.pattern_type,
+        });
       } catch (error) {
         logger.error("forecaster: failed to persist one prediction — continuing with the rest", {
           competitor_id: state.competitor_id,
