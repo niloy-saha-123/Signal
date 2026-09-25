@@ -1,56 +1,47 @@
 # Signal
 
-Signal replaces your competitive analyst — it runs permanently, gets smarter the longer it runs, and tells your team what to do before your competitors announce it.
+Signal watches what your competitors ship in public, writes down what it expects them to do next with a probability and a date, and scores itself when the date arrives. Built for product and engineering leads at companies that build developer tools.
 
 ---
 
 ## What It Is
 
-Product and growth teams at Series B+ B2B SaaS companies spend $40K+/year on tools like Crayon and Klue, plus 10 hours a week of analyst time, to produce battlecards that are outdated the moment they're published. Those tools automate collection — a changed pricing page, a new job posting — but a human still has to figure out what it means and what to do about it.
+Developer-tool companies build in public. A pull request, a new repository, a job posting for a role that doesn't exist yet, and a rewritten homepage all show up weeks before the launch post. The existing competitive-intelligence tools (Crayon, Klue) are built for sales teams. They track marketing surfaces, produce battlecards, and never say what they expect to happen or whether they were right.
 
-Signal is the analyst. You add a competitor once and it monitors five public sources permanently: Reddit, Hacker News, job boards, RSS changelogs, and pricing pages. A quality-scoring and semantic-deduplication pipeline cleans every incoming signal, a multi-agent LangGraph.js system interprets it, and an alert is generated when a competitor's move opens a vulnerability window worth acting on — with a chain of evidence, a confidence score backed by historical backtesting, and specific recommended actions.
+Signal is built for the people who plan the roadmap. You add a competitor once, and it monitors **nine public sources** permanently: GitHub, job boards, the competitor's own website, changelogs, newsroom posts, pricing pages, their community forum, Hacker News and Reddit. A quality-scoring and semantic-deduplication pipeline cleans every signal, and a multi-agent LangGraph.js system interprets it. When enough independent evidence lines up, Signal writes a **prediction** into a ledger: a dated, machine-checkable claim with a stated probability.
 
-It gets better over time. Every analysis run stores its signal pattern alongside what actually happened next. Six months of accumulated behavioral fingerprints on a competitor produce materially better predictions than six days — a moat a team starting fresh cannot replicate no matter how much they pay for Crayon.
+Nothing is presented as certain. Every prediction is checked by plain code when its date arrives and scored as hit, miss or unresolved, and the workspace's running Brier score sits next to the coin-flip baseline. There is no published accuracy figure yet: the backtest has a case file, and the number gets published when it exists.
 
 ---
 
 ## Sample Output
 
+Illustrative only. Kestrel is a fictional company, and this shows the shape of a ledger entry, not a measured result.
+
 ```
-STRATEGIC SIGNAL DETECTED  ·  HIGH CONFIDENCE  ·  81%
+PREDICTION  ·  open  ·  resolves 2026-12-15
 
-Competitor: Notion
-Pattern: Upmarket Pivot + AI Feature Push
+Competitor:  Kestrel
+Claim:       Ships a managed Postgres adapter within the quarter
+Probability: 0.72
+Evidence:    6 distinct signal clusters
 
-Evidence chain:
-  [1] 5 ML Engineer posts in 7 days (3x normal velocity)
-      3 of 5 JDs reference "embedding models" and "semantic search"
-  [2] Changelog: "improved search relevance" shipped 12 days ago
-  [3] Pricing: free plan removed, Pro raised $8/month
-  [4] Reddit r/Notion: "too expensive for small teams" up 340% this week
-  [5] G2: 14 new 3-star reviews citing pricing in last 10 days
+  [github]     kestrel/engine — "feat: pg driver behind a flag" merged
+  [github]     "docs: postgres adapter guide (draft)" opened
+  [jobs]       Two database-engineer roles posted in the same fortnight
+  [website]    /product copy now mentions "bring your own database"
+  [community]  Forum thread on Postgres support answered by staff
+  [changelog]  Connection pooling shipped as a prerequisite
 
-Interpretation:
-  Deliberate upmarket pivot. SMB segment being abandoned.
-  AI search feature likely 30-60 days out.
-
-Vulnerability window: OPEN  ·  ~45 days
-  ~40% of their user base used the free tier.
-  They are looking for alternatives right now.
-
-Recommended actions:
-  POSITIONING  Lead with SMB simplicity and transparent pricing
-  CONTENT      Publish a head-to-head comparison for small teams
-  OUTREACH     Engage r/Notion and r/productivity communities
-  COPY         "We don't charge you more for growing."
-  TIMING       Act within 21 days before the window closes
+Resolves by:  github_release matching /postgres/i on kestrel/* before the date
+Scoring:      hit or miss, Brier-scored. No evidence either way → unresolved, not a miss
 ```
 
 ---
 
 ## How It Works
 
-**Add a competitor by name and domain.** Signal discovers everything else automatically — subreddits, job boards, pricing pages, changelog feeds. It also proposes new competitors you haven't thought to add, and asks you to confirm each one before it starts tracking it.
+**Add a competitor by name and domain.** Signal discovers everything else automatically: subreddits, job boards, pricing page, changelog feed, GitHub org, key website pages, a public Discourse forum, and a newsroom/press feed. It also proposes new competitors you haven't thought to add, and asks you to confirm each one before it starts tracking it.
 
 **Briefing.** The default view your team opens every morning. The top 3 most significant competitive movements from the last 24 hours — what happened, why it matters, the recommended action, and a one-click button to act on it.
 
@@ -60,7 +51,11 @@ Recommended actions:
 
 **Chat.** A persistent, multi-thread panel that answers questions from accumulated intelligence, not generic LLM knowledge. It retrieves and re-queries Signal's own stored evidence before answering, cites its sources, and declines rather than guessing when the evidence is thin. Threads are checkpointed — you can rewind any answer and regenerate from there.
 
-**Chat as a control plane.** You can also *act* through the chat: create a competitor, trigger an analysis run, kick off a discovery search, or edit the company's goals/plans by talking to it. Every mutating action is gated — the agent proposes, then asks you to confirm before anything touches data.
+**Chat as a control plane.** The chat agent has 15 tools covering the whole system: competitors, scores, trends, goals, predictions, calibration, alerts and agent activity. You can act through it too: create a competitor, trigger an analysis run, start a discovery search, edit company goals, or void a prediction. The five actions that change data are gated: the agent proposes, and nothing runs until you approve (`ENABLE_CHAT_MUTATING_TOOLS=false` removes them entirely). It stays on topic. It refuses questions unrelated to competitive intelligence and doesn't answer from general knowledge. It's always one click away: a small circular avatar on the right edge of every page.
+
+**Slack.** Mention Signal in Slack and it answers from the same chat agent, with the same evidence rules. Predictions and alerts can be posted to a channel. Requests are HMAC-verified, acknowledged immediately, then answered from a queue.
+
+**Agent activity.** A product that claims to run on its own should let you watch it run. The activity page shows recent agent runs, today's model spend against budget, and which data sources are currently circuit-broken.
 
 **Prediction ledger.** Signal writes down what it thinks a competitor will do next — as a dated claim with a stated probability, machine-checkable resolution criteria, and the evidence count behind it. When the date arrives, a resolver settles it against evidence actually collected and marks it hit, miss, or unresolved. Nothing is ever presented as certain, and every claim is scored later whether it was right or not.
 
@@ -179,7 +174,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 
 | | |
 |---|---|
-| **Next.js** | Command center — landing, Briefing, Radar, Intel, Discovery, Company, Chat, Alerts, Board, Settings |
+| **Next.js** | Landing, auth, Briefing, Alerts, Predictions (`/forecast`), Scorecard, Signal feed (`/intel`), Radar, Discovery, Chat, Company, Agent activity, Settings. Design system in [`DESIGN.md`](DESIGN.md) |
 | **Recharts** | Signal Score sparklines, mention volume trends, sentiment over time, department hiring charts |
 | **Socket.io client** | Real-time alert display |
 
@@ -197,7 +192,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 
 ### Discovery
 
-**Metadata discovery** — no LLM. Triggered once when a competitor is added. Discovers subreddits (Reddit search API, ranked by mention frequency), job board tokens (Greenhouse + Lever pattern matching), pricing URL (common path probing with a web-search fallback), and RSS/changelog feed (path probing plus HTML parsing). Logs every attempt to `competitor_discovery_log`.
+**Metadata discovery** — no LLM. Triggered once when a competitor is added. Discovers subreddits (Reddit search API, ranked by mention frequency), job board tokens (Greenhouse + Lever pattern matching), pricing URL (common path probing with a web-search fallback), RSS/changelog feed (path probing plus HTML parsing), GitHub org (confirmed by blog-domain match or an Organization whose login equals the domain slug), website pages (homepage plus the first of /product, /features, /platform), a Discourse forum (`forum.`/`community.`/`discuss.`/`discourse.` subdomains answering `/latest.json`), and a newsroom feed (`/newsroom`, `/press`, `/news` RSS paths). Probes that derive hosts from the domain are refused outright when the apex resolves to a non-public address. Logs every attempt to `competitor_discovery_log`.
 
 **Competitor discovery** — LLM. A separate LangGraph agent that *proposes brand-new competitors* you haven't added. A tool-calling model (DuckDuckGo web search + Signal's own retrieval) runs a bounded ReAct loop and proposes up to 5 candidates. Each lands in `tracked_entities` as a `candidate` and is promoted only through explicit human confirmation — never automatically.
 
@@ -211,6 +206,9 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 | ChangelogCollectionAgent | Every 12h | RSS/Atom feeds · Cheerio for full-text content |
 | PricingWatcherAgent | Every 48h | Playwright · structured extraction · always closes the browser |
 | GithubCollectionAgent | Every 6h | GitHub REST API · releases, pull requests, new repositories · authenticated rate limit |
+| WebsiteCollectionAgent | Every 24h | The competitor's own pages · diffed against the last snapshot · only copy changes of 120+ characters become signals; first sight is a baseline |
+| CommunityCollectionAgent | Every 12h | Public Discourse `/latest.json` · no key · Discord/Slack deliberately excluded (private, bot-gated) |
+| PostingsCollectionAgent | Every 12h | Newsroom / press RSS · same feed sweep as changelogs, separate source and circuit |
 
 Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before embedding.
 
@@ -250,7 +248,9 @@ A miss has to be earned by evidence that existed and disagreed. When the window 
 
 ### Chat — Claude Sonnet
 
-Real-time, tool-calling retrieval, not a fixed pipeline: the model re-queries Signal's stored evidence with refined terms until it has enough to answer, then the answer is citation-checked. A grounded answer cites its sources; insufficient evidence returns a structured refusal instead of a low-quality guess. Answers stream live over SSE, threads are checkpointed for memory, and any past answer can be regenerated from its checkpoint.
+Guardrails first: the system prompt limits the agent to evidence Signal has collected, has it refuse off-topic requests, requires approval (a LangGraph `interrupt()`) before any of the five mutating tools run, and forbids presenting a prediction as a promise. Every tool closes over the caller's workspace, so the model can't reach another tenant's data.
+
+Retrieval is real-time and tool-calling, not a fixed pipeline: the model re-queries Signal's stored evidence with refined terms until it has enough to answer, then the answer is citation-checked. A grounded answer cites its sources; insufficient evidence returns a structured refusal instead of a low-quality guess. Answers stream live over SSE, threads are checkpointed for memory, and any past answer can be regenerated from its checkpoint.
 
 ---
 
@@ -269,6 +269,9 @@ All routes are authenticated with a Supabase JWT (`Authorization: Bearer …`) a
 | Company profile | `GET/POST /api/company-profile`, `GET/PUT /api/company-profile/signal-goal` |
 | Company documents | `GET/POST /api/company-documents` (file upload), `POST /api/company-documents/text` (pasted text) |
 | Discovery | `GET /api/tracked-entities`, `POST /api/discovery/trigger`, `POST /api/discovery/:threadId/resume` (`{decision: "confirm" \| "dismiss"}`) |
+| Predictions | `GET /api/predictions`, `GET /api/predictions/calibration`, `GET /api/predictions/:id`, `POST /api/predictions/:id/void` |
+| Activity | `GET /api/activity` |
+| Slack | `POST /api/slack/events` (Slack-signed, not JWT) |
 | Dashboard | `GET /api/dashboard/summary` |
 | Workspaces | `GET/POST/PATCH /api/workspaces` |
 
@@ -323,6 +326,9 @@ signal/
     │   │   │   ├── company-profile.ts   # company profile
     │   │   │   ├── company-documents.ts # doc upload + paste
     │   │   │   ├── discovery.ts         # discovery trigger + HITL resume
+    │   │   │   ├── predictions.ts       # prediction ledger + calibration scorecard
+    │   │   │   ├── activity.ts          # agent runs, spend, circuit state
+    │   │   │   ├── slack.ts             # signed Slack events endpoint
     │   │   │   └── workspaces.ts        # workspace management
     │   │   ├── collectors/              # BullMQ collection workers (no LLM)
     │   │   ├── pipeline/                # entity extraction → quality → dedup
@@ -344,7 +350,7 @@ signal/
     │   └── scripts/                     # backfill, backtest, eval, promote, rag-eval, …
     │
     └── web/                             # Frontend: Next.js command center
-        ├── app/                         # landing, briefing, intel, discovery, company, alerts, board, chat, radar, settings
+        ├── app/                         # landing, auth, briefing, forecast, scorecard, intel, radar, discovery, chat, company, activity, settings
         ├── components/                  # charts, cards, chat, feed, command bar
         └── lib/                         # api client, chat-stream, socket, attachments, export
 ```
@@ -404,7 +410,16 @@ DAILY_BUDGET_USD=2.00
 ENABLE_PLAYWRIGHT=true
 CIRCUIT_FAILURE_THRESHOLD=5
 CIRCUIT_TIMEOUT_MS=1800000
+ENABLE_CHAT_MUTATING_TOOLS=true
+GITHUB_TOKEN=            # optional; lifts GitHub from 60 to 5,000 requests/hour
+SLACK_SIGNING_SECRET=    # required for Slack; the endpoint fails closed without it
+
+# apps/web
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
+
+The website, community (Discourse) and newsroom collectors need no keys.
 
 `DATABASE_URL` is a Supabase PostgreSQL connection string. Generate migrations with Drizzle, review them, and apply them through the established Supabase migration workflow.
 
@@ -412,8 +427,8 @@ CIRCUIT_TIMEOUT_MS=1800000
 
 ## What's Coming
 
-- **Prediction and calibration API + UI.** The ledger and the scorecard are written and resolved, but not yet exposed over HTTP or rendered. `GET /api/predictions`, `GET /api/calibration`, and a `/forecast` surface are next.
-- **Slack.** Talk to Signal from Slack and receive alerts and predictions there — a Slack app with a signed events endpoint routed into the existing chat graph, not a second agent.
+- **Slack install flow.** The events endpoint and delivery are built, but workspaces are mapped to Slack teams by a row in `slack_installations`. An OAuth install route comes next.
+- **Social postings.** "Public postings" is currently newsroom and press RSS. X and LinkedIn need paid API access and are not collected.
 - **Measured accuracy.** The backtest harness has a case file of real devtool launches to replay against, so the README's central claim becomes a number rather than an assertion. Whatever that number is, it gets published here.
 - **Long-term memory (Phase 2 Task 7).** Chat-turn memory extractor writing `signal_goal`/`relationship`/`preference`/`company_fact` per turn — not yet built. Outcome memory (dismissed candidates / denied tools) is partially shipped: dismissed-domain biasing is live; denied-tool memory is deferred (no consumer).
 
