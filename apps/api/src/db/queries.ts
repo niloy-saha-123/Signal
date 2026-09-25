@@ -1,5 +1,5 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, gte, count, sql, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, gte, lte, count, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type {
   AgentName,
@@ -1036,6 +1036,57 @@ export type CreateSignalScoreInput = {
 
 // SynthesisAgent's write — retries replace the same competitor's UTC-day row
 // instead of appending a duplicate score.
+// ── resolution windows ───────────────────────────────────────────────────
+// The resolver asks a different question than the analysis nodes do: not "what
+// happened recently" but "what happened between these two instants". A relative
+// NOW() - INTERVAL window cannot express that, because a prediction's window is
+// anchored to when it was made, not to when the sweep runs.
+
+export interface SignalWindowQuery {
+  from: Date;
+  to: Date;
+  sources?: SignalSource[];
+}
+
+export async function listSignalsInWindow(
+  competitorId: string,
+  window: SignalWindowQuery
+): Promise<Signal[]> {
+  const conditions = [
+    eq(signalsTable.competitor_id, competitorId),
+    gte(signalsTable.collected_at, window.from),
+    lte(signalsTable.collected_at, window.to),
+  ];
+  if (window.sources && window.sources.length > 0) {
+    conditions.push(inArray(signalsTable.source, window.sources));
+  }
+
+  return db
+    .select()
+    .from(signalsTable)
+    .where(and(...conditions))
+    .orderBy(desc(signalsTable.collected_at))
+    .limit(analysisInputLimit(500));
+}
+
+export async function listPricingDiffsInWindow(
+  competitorId: string,
+  window: { from: Date; to: Date }
+): Promise<PricingDiff[]> {
+  return db
+    .select()
+    .from(pricingDiffsTable)
+    .where(
+      and(
+        eq(pricingDiffsTable.competitor_id, competitorId),
+        gte(pricingDiffsTable.detected_at, window.from),
+        lte(pricingDiffsTable.detected_at, window.to)
+      )
+    )
+    .orderBy(desc(pricingDiffsTable.detected_at))
+    .limit(analysisInputLimit(500));
+}
+
 // ── predictions ──────────────────────────────────────────────────────────
 
 export interface CreatePredictionInput {
