@@ -1316,21 +1316,42 @@ export async function getLatestWebsiteSnapshot(
 // Replaces rather than appends: only the latest snapshot is ever read, so
 // keeping history would grow unboundedly for no benefit. The change itself is
 // already durable as a signal row.
-export async function createWebsiteSnapshot(input: {
+interface WebsiteSnapshotInput {
   competitor_id: string;
   url: string;
   content: string;
-}): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx
-      .delete(websiteSnapshotsTable)
-      .where(
-        and(
-          eq(websiteSnapshotsTable.competitor_id, input.competitor_id),
-          eq(websiteSnapshotsTable.url, input.url)
-        )
-      );
-    await tx.insert(websiteSnapshotsTable).values(input);
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function replaceWebsiteSnapshot(tx: Tx, input: WebsiteSnapshotInput): Promise<void> {
+  await tx
+    .delete(websiteSnapshotsTable)
+    .where(
+      and(
+        eq(websiteSnapshotsTable.competitor_id, input.competitor_id),
+        eq(websiteSnapshotsTable.url, input.url)
+      )
+    );
+  await tx.insert(websiteSnapshotsTable).values(input);
+}
+
+export async function createWebsiteSnapshot(input: WebsiteSnapshotInput): Promise<void> {
+  await db.transaction((tx) => replaceWebsiteSnapshot(tx, input));
+}
+
+// The signal and the new baseline commit together. Written separately, a
+// snapshot that failed after its signal landed would leave the old baseline in
+// place, and tomorrow's diff would report the same change a second time.
+export async function createWebsiteChangeSignal(
+  signal: CreateSignalInput,
+  snapshot: WebsiteSnapshotInput
+): Promise<Signal> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(signalsTable).values(signal).returning();
+    await tx.insert(signalPipelineOutboxTable).values({ signal_id: row.id });
+    await replaceWebsiteSnapshot(tx, snapshot);
+    return row;
   });
 }
 

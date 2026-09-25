@@ -70,7 +70,11 @@ describe("community collector", () => {
 
     await communityCollectorProcessor(job);
 
-    expect(safeFetchMock.mock.calls[0][0]).toBe("https://forum.kestrel.dev/latest.json");
+    // Newest-created first: /latest is ordered by last activity, so a new but
+    // quiet topic could sit past the page and never be read.
+    expect(safeFetchMock.mock.calls[0][0]).toBe(
+      "https://forum.kestrel.dev/latest.json?order=created"
+    );
     expect(createSignalMock).toHaveBeenCalledTimes(1);
     const [signal] = createSignalMock.mock.calls[0];
     expect(signal.source).toBe("community");

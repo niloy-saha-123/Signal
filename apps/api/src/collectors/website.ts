@@ -19,9 +19,9 @@ import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
-  createSignal,
   getLatestWebsiteSnapshot,
   createWebsiteSnapshot,
+  createWebsiteChangeSignal,
 } from "../db/queries";
 import { assertPublicUrl, safeFetch } from "../lib/safe-fetch";
 
@@ -40,14 +40,31 @@ const MAX_SIGNAL_CHARS = 12_000;
 // pages turn out to under-report.
 const MIN_CHANGED_CHARS = 120;
 
+interface DomNode {
+  type: string;
+  data?: string;
+  children?: DomNode[];
+}
+
+// cheerio's .text() concatenates adjacent elements with nothing between them,
+// so minified markup fuses "<h1>for teams</h1><p>Now with" into "teamsNow" —
+// a word that never existed, which then diffs as new copy. Joining text nodes
+// with a space keeps block boundaries.
+function joinText(node: DomNode | undefined): string {
+  if (!node) return "";
+  if (node.type === "text") return node.data ?? "";
+  return (node.children ?? []).map(joinText).join(" ");
+}
+
 // Same extraction contract as the changelog collector: strip chrome, prefer
 // semantic containers, fall back to the body.
 function extractText(html: string): string {
   const $ = cheerio.load(html);
   $("script, style, nav, footer, header, noscript, svg").remove();
-  const text = $("main, article, [role='main']").first().text() || $("body").text();
   // Collapse whitespace so reflowed markup does not read as changed copy.
-  return text.replace(/\s+/g, " ").trim();
+  const collapse = (text: string) => text.replace(/\s+/g, " ").trim();
+  const main = collapse(joinText($("main, article, [role='main']").get(0)));
+  return main || collapse(joinText($("body").get(0)));
 }
 
 // Function words appear on every page, so on their own they say nothing about
@@ -60,11 +77,17 @@ const STOPWORDS = new Set([
   "is", "are", "be", "our", "your", "we", "you", "it", "as", "no", "from", "that",
 ]);
 
+// Words are compared bare: "team," and "team" are the same word, so moving a
+// comma is not new copy. The emitted phrase keeps the original punctuation.
+function bare(token: string): string {
+  return token.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+}
+
 // Word-level difference, reported as the runs of words present now that were
 // not present before. Cheap and good enough to answer "what did they start
 // saying".
 export function changedText(previous: string, current: string): string {
-  const before = new Set(previous.toLowerCase().split(" "));
+  const before = new Set(previous.split(" ").map(bare));
   const added: string[] = [];
   let run: string[] = [];
   // A run of nothing but function words is glue, not new copy.
@@ -77,14 +100,15 @@ export function changedText(previous: string, current: string): string {
     runHasNewWord = false;
   };
 
-  for (const word of current.split(" ")) {
-    const lower = word.toLowerCase();
-    if (STOPWORDS.has(lower)) {
-      run.push(word);
-    } else if (before.has(lower)) {
+  for (const token of current.split(" ")) {
+    const word = bare(token);
+    // Pure punctuation ("—", "|") glues a phrase together like a stopword.
+    if (!word || STOPWORDS.has(word)) {
+      run.push(token);
+    } else if (before.has(word)) {
       flush();
     } else {
-      run.push(word);
+      run.push(token);
       runHasNewWord = true;
     }
   }
@@ -110,18 +134,34 @@ async function collectForCompetitor(competitor: {
   name: string;
   website_urls: string[];
 }): Promise<void> {
-  for (const url of competitor.website_urls.slice(0, MAX_PAGES_PER_COMPETITOR)) {
-    // One page failing must not cost the others.
-    try {
-      const current = await withRetry(() => fetchPageText(url));
-      if (!current) continue;
+  let fetchError: unknown;
 
+  for (const url of competitor.website_urls.slice(0, MAX_PAGES_PER_COMPETITOR)) {
+    let current: string;
+    try {
+      current = await withRetry(() => fetchPageText(url));
+    } catch (err) {
+      // One unreachable page must not cost the others, but the run still
+      // fails afterwards: a site that blocks us has to trip the breaker, or
+      // it burns retries every day without ever showing up as broken.
+      fetchError = err;
+      logger.warn("website collector could not fetch a page — continuing with the rest", {
+        competitor_id: competitor.id,
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+    if (!current) continue;
+
+    try {
       const previous = await getLatestWebsiteSnapshot(competitor.id, url);
+      const snapshot = { competitor_id: competitor.id, url, content: current };
 
       // First sight of a page is a baseline, not news. Emitting it would report
       // a competitor's entire existing homepage as a change on day one.
       if (!previous) {
-        await createWebsiteSnapshot({ competitor_id: competitor.id, url, content: current });
+        await createWebsiteSnapshot(snapshot);
         continue;
       }
 
@@ -131,27 +171,31 @@ async function collectForCompetitor(competitor: {
       if (added.length < MIN_CHANGED_CHARS) {
         // Cosmetic churn. Still re-baseline, or the same trivial diff is
         // recomputed against a stale snapshot every day forever.
-        await createWebsiteSnapshot({ competitor_id: competitor.id, url, content: current });
+        await createWebsiteSnapshot(snapshot);
         continue;
       }
 
-      const signal = await createSignal({
-        competitor_id: competitor.id,
-        source: SOURCE,
-        source_url: url,
-        title: `Website copy changed: ${url}`,
-        raw_text: `New or rewritten copy on ${url}:\n\n${added.slice(0, MAX_SIGNAL_CHARS)}`,
-      });
-      await createWebsiteSnapshot({ competitor_id: competitor.id, url, content: current });
+      const signal = await createWebsiteChangeSignal(
+        {
+          competitor_id: competitor.id,
+          source: SOURCE,
+          source_url: url,
+          title: `Website copy changed: ${url}`,
+          raw_text: `New or rewritten copy on ${url}:\n\n${added.slice(0, MAX_SIGNAL_CHARS)}`,
+        },
+        snapshot
+      );
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
-      logger.error("website collector failed for one page — continuing with the rest", {
+      logger.error("website collector failed to record one page — continuing with the rest", {
         competitor_id: competitor.id,
         url,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
+
+  if (fetchError) throw fetchError;
 }
 
 interface WebsiteCollectJobData {

@@ -6,10 +6,10 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { listCompetitorsMock, createSignalMock, getSnapshotMock, createSnapshotMock } = vi.hoisted(
+const { listCompetitorsMock, createChangeMock, getSnapshotMock, createSnapshotMock } = vi.hoisted(
   () => ({
     listCompetitorsMock: vi.fn(),
-    createSignalMock: vi.fn(),
+    createChangeMock: vi.fn(),
     getSnapshotMock: vi.fn(),
     createSnapshotMock: vi.fn(),
   })
@@ -17,7 +17,7 @@ const { listCompetitorsMock, createSignalMock, getSnapshotMock, createSnapshotMo
 
 vi.mock("@/db/queries", () => ({
   listCompetitors: listCompetitorsMock,
-  createSignal: createSignalMock,
+  createWebsiteChangeSignal: createChangeMock,
   getLatestWebsiteSnapshot: getSnapshotMock,
   createWebsiteSnapshot: createSnapshotMock,
 }));
@@ -33,6 +33,7 @@ vi.mock("@/lib/safe-fetch", () => ({
 }));
 
 import { changedText, websiteCollectorProcessor } from "@/collectors/website";
+import { recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import type { Job } from "bullmq";
 
 const job = {} as Job<Record<string, never>>;
@@ -59,6 +60,12 @@ describe("changedText", () => {
     expect(added).not.toContain("Deploy in seconds");
   });
 
+  it("ignores punctuation-only rewrites", () => {
+    expect(
+      changedText("Fast secure global reliable deploys", "Fast, secure, global, reliable, deploys.")
+    ).toBe("");
+  });
+
   it("ignores stray single-word churn", () => {
     // A rotating word in a hero ("faster" -> "quicker") is not a positioning
     // change, and must not become a signal.
@@ -76,7 +83,7 @@ describe("website collector", () => {
     listCompetitorsMock.mockResolvedValue([
       { id: "c1", name: "Kestrel", is_active: true, website_urls: ["https://kestrel.dev/"] },
     ]);
-    createSignalMock.mockResolvedValue({ id: "s1" });
+    createChangeMock.mockResolvedValue({ id: "s1" });
   });
 
   it("baselines a page on first sight instead of reporting it as a change", async () => {
@@ -87,7 +94,7 @@ describe("website collector", () => {
 
     await websiteCollectorProcessor(job);
 
-    expect(createSignalMock).not.toHaveBeenCalled();
+    expect(createChangeMock).not.toHaveBeenCalled();
     expect(createSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
@@ -97,11 +104,14 @@ describe("website collector", () => {
 
     await websiteCollectorProcessor(job);
 
-    expect(createSignalMock).toHaveBeenCalledTimes(1);
-    const [signal] = createSignalMock.mock.calls[0];
+    expect(createChangeMock).toHaveBeenCalledTimes(1);
+    const [signal, snapshot] = createChangeMock.mock.calls[0];
     expect(signal.source).toBe("website");
     expect(signal.raw_text).toContain("managed Postgres database");
-    expect(createSnapshotMock).toHaveBeenCalledTimes(1);
+    // One write for both: a snapshot that fails after the signal lands would
+    // re-diff against the stale copy tomorrow and emit the same change twice.
+    expect(snapshot).toMatchObject({ competitor_id: "c1", url: "https://kestrel.dev/" });
+    expect(createSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("re-baselines cosmetic churn without emitting a signal", async () => {
@@ -110,7 +120,7 @@ describe("website collector", () => {
 
     await websiteCollectorProcessor(job);
 
-    expect(createSignalMock).not.toHaveBeenCalled();
+    expect(createChangeMock).not.toHaveBeenCalled();
     // Without re-baselining, the same trivial diff is recomputed forever.
     expect(createSnapshotMock).toHaveBeenCalledTimes(1);
   });
@@ -123,5 +133,42 @@ describe("website collector", () => {
     await websiteCollectorProcessor(job);
 
     expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps words from adjacent blocks apart on minified pages", async () => {
+    getSnapshotMock.mockResolvedValue(undefined);
+    safeFetchMock.mockResolvedValue({
+      status: 200,
+      headers: new Headers(),
+      text: async () =>
+        "<html><body><main><h1>Ship fast for teams</h1><p>Now with managed Postgres</p></main></body></html>",
+    });
+
+    await websiteCollectorProcessor(job);
+
+    expect(createSnapshotMock.mock.calls[0][0].content).toBe(
+      "Ship fast for teams Now with managed Postgres"
+    );
+  });
+
+  it("trips the circuit when pages cannot be fetched, without skipping the rest", async () => {
+    listCompetitorsMock.mockResolvedValue([
+      {
+        id: "c1",
+        name: "Kestrel",
+        is_active: true,
+        website_urls: ["https://kestrel.dev/", "https://kestrel.dev/product"],
+      },
+    ]);
+    getSnapshotMock.mockResolvedValue(undefined);
+    safeFetchMock
+      .mockRejectedValueOnce(new Error("403 from bot protection"))
+      .mockResolvedValueOnce(page(BEFORE));
+
+    await websiteCollectorProcessor(job);
+
+    expect(createSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(recordFailure).toHaveBeenCalled();
+    expect(recordSuccess).not.toHaveBeenCalled();
   });
 });

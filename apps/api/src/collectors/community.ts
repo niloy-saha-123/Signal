@@ -54,7 +54,12 @@ function isNewerThan(timestamp: string, cutoff: Date | undefined): boolean {
 }
 
 async function fetchDiscourseTopics(baseUrl: string): Promise<DiscourseTopic[]> {
-  const url = new URL("/latest.json", baseUrl).toString();
+  // Newest-created first. The default /latest order is last activity, so a
+  // new topic nobody replied to can sink past the page between runs and the
+  // created_at cutoff below would never see it.
+  // ponytail: one page of MAX_TOPICS; follow more_topics_url if a forum ever
+  // opens more than that many topics between 12h runs.
+  const url = new URL("/latest.json?order=created", baseUrl).toString();
   // Competitor-supplied host, so this one genuinely needs the SSRF guard.
   await assertPublicUrl(url);
   const response = await safeFetch(url, {
