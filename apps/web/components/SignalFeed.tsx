@@ -51,7 +51,7 @@ export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
       {signals.map((signal) => (
         <li
           key={signal.id}
-          className="flex items-start gap-3 rounded-2xl border border-studio-line bg-studio-sky-soft p-4"
+          className="flex items-start gap-3 rounded-[10px] border border-studio-line bg-studio-sky-soft p-4"
         >
           <span
             className="mt-1 h-2 w-2 shrink-0 rounded-full"

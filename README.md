@@ -62,6 +62,12 @@ Recommended actions:
 
 **Chat as a control plane.** You can also *act* through the chat: create a competitor, trigger an analysis run, kick off a discovery search, or edit the company's goals/plans by talking to it. Every mutating action is gated — the agent proposes, then asks you to confirm before anything touches data.
 
+**Prediction ledger.** Signal writes down what it thinks a competitor will do next — as a dated claim with a stated probability, machine-checkable resolution criteria, and the evidence count behind it. When the date arrives, a resolver settles it against evidence actually collected and marks it hit, miss, or unresolved. Nothing is ever presented as certain, and every claim is scored later whether it was right or not.
+
+Two rules make the ledger worth reading. Predictions only get made above an evidence floor, so the system abstains far more often than it speaks. And an unresolved window — one that closed with no evidence either way — is recorded as unresolved rather than counted as a miss, because abstaining is not the same as being wrong.
+
+**Calibration.** Every resolved prediction is Brier-scored, and the workspace's running score sits next to the 0.25 baseline you would get by saying "maybe" to everything. A Brier score is a proper scoring rule: it is minimised by stating your true belief, so overclaiming confidence costs you when you are wrong and hedging costs you when you are right. A workspace with nothing resolved yet shows no score at all — never a zero, which would read as perfection.
+
 **Signal Score.** A 0-100 composite threat score per competitor, recomputed daily: mention velocity (30-day trend, quality-weighted), sentiment trajectory, hiring momentum (department deltas, especially ML/AI/Sales), pricing change recency, and vulnerability window status. It's the 10-second daily check-in before anyone drills into detail.
 
 **Own-company monitoring.** Signal watches your own company the same way it watches competitors — upload your docs and it produces "competitor did X, we haven't" comparisons. Advisory only: it informs, it never acts.
@@ -84,12 +90,13 @@ graph TB
     subgraph AGENTS["AGENTIC RUNTIME · LangGraph.js"]
         CHAT["Chat agent<br/>tool-calling retrieval · threads · time-travel"]
         DISC["Discovery agent<br/>ReAct web search · human-in-the-loop confirm"]
-        ANAL["Analysis DAG<br/>6 specialist nodes + comparative synthesis"]
+        ANAL["Analysis DAG<br/>6 specialist nodes + comparative synthesis<br/>+ forecaster (writes the prediction ledger)"]
     end
 
     subgraph WORKER["WORKER · BullMQ (separate process)"]
-        COLLECT["Collectors<br/>reddit · hn · jobs · changelog · pricing"]
+        COLLECT["Collectors<br/>reddit · hn · jobs · changelog · pricing · github"]
         PIPE["Pipeline<br/>entity extraction → quality → dedup"]
+        RESOLVE["Prediction resolver<br/>daily · deterministic · Brier-scored"]
     end
 
     RETRIEVAL["Retrieval<br/>hybrid search (BM25 + semantic + RRF) → rerank → citation check"]
@@ -117,15 +124,18 @@ graph TB
     PIPE -->|clean signals| PG
     PIPE -->|clean signals| PINECONE
     ANAL -->|scores + alerts| PG
+    ANAL -->|predictions| PG
+    RESOLVE -->|outcomes + brier scores| PG
     ANAL -->|alerts| FE
     AGENTS -.-> REL
 ```
 
-Three LangGraph graphs, one per surface:
+Three LangGraph graphs, one per surface, plus a deterministic resolver that closes the loop:
 
 - **Chat agent** — tool-calling retrieval: the model re-queries Signal's stored evidence (`hybridRetrieve → rerank → enforceCitations`) before answering, with citation-grounded answers and structured refusals instead of guesses. Checkpointed for multi-turn threads and time-travel.
 - **Discovery agent** — a bounded ReAct loop over DuckDuckGo web search + Signal's own retrieval that proposes new competitors; each candidate is gated behind a human confirmation step, never auto-tracked.
-- **Analysis DAG** — a fixed 6-node pipeline (intent, sentiment, change, pattern, vulnerability, synthesis) that scores every competitor daily, plus a conditional comparative-synthesis node for own-company monitoring. Deterministic where possible; LLM only where reasoning is required.
+- **Analysis DAG** — a fixed 6-node pipeline (intent, sentiment, change, pattern, vulnerability, synthesis) that scores every competitor daily, plus a conditional comparative-synthesis node for own-company monitoring, and a forecaster that runs last and writes the prediction ledger. Deterministic where possible; LLM only where reasoning is required.
+- **Prediction resolver** — not a graph and not an agent. A daily BullMQ sweep that settles due predictions by matching rows in code, so the one number the product stakes its credibility on is never produced by something that wants to please the reader.
 
 All three run behind the same reliability layer: circuit breakers on every LLM call site, native retry policies (429/5xx/timeout only), and explicit recursion limits so no agent loop can spin forever.
 
@@ -150,7 +160,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 
 | | |
 |---|---|
-| **PostgreSQL (Supabase)** | Primary store — competitors, signals, signal_clusters, pricing_diffs, agent_runs, prompt_versions, agent_test_cases, circuit_events, llm_costs, alerts, competitor_signal_scores, company_profile, company_documents, tracked_entities, chat_threads, competitor_discovery_log. Also holds LangGraph checkpoints (thread state) and inferred cross-thread memory. |
+| **PostgreSQL (Supabase)** | Primary store — competitors, signals, signal_clusters, pricing_diffs, agent_runs, prompt_versions, agent_test_cases, circuit_events, llm_costs, alerts, competitor_signal_scores, predictions, company_profile, company_documents, tracked_entities, chat_threads, competitor_discovery_log. Also holds LangGraph checkpoints (thread state) and inferred cross-thread memory. |
 | **Redis (Upstash)** | BullMQ backend, circuit breaker state (shared across worker instances), chat response cache, company profile cache. |
 | **Pinecone** | Signals embedded and namespaced per competitor; company documents embedded under a per-workspace `profile:` namespace. `quality_score` in vector metadata for weighted retrieval. |
 
@@ -160,7 +170,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 |---|---|---|
 | GPT-4.1 | IntentAnalyzer, PatternDetector, VulnerabilityDetector (analysis) | Multi-signal reasoning across large context windows |
 | GPT-4o-mini | ChangeDetector, EntityExtractor, PricingExtractor | Structured extraction — cheaper, sufficient accuracy |
-| Claude Sonnet | SynthesisAgent, ComparativeSynthesis, ChatAgent, VulnerabilityDetector (copy) | Writing quality matters for user-facing output |
+| Claude Sonnet | SynthesisAgent, ComparativeSynthesis, ChatAgent, Forecaster, VulnerabilityDetector (copy) | Writing quality matters for user-facing output |
 | Claude Haiku | SentimentClusterer, document classifier | Fast, cheap classification |
 | text-embedding-3-small | All embeddings | Cost-efficient semantic accuracy |
 | Cohere rerank-english-v3.0 | ChatAgent reranking | Jointly scores (query, chunk) pairs — improves retrieval precision over vector similarity alone |
@@ -200,6 +210,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 | JobPostingCollectionAgent | Every 24h | Greenhouse + Lever public APIs · delta only against stored baseline |
 | ChangelogCollectionAgent | Every 12h | RSS/Atom feeds · Cheerio for full-text content |
 | PricingWatcherAgent | Every 48h | Playwright · structured extraction · always closes the browser |
+| GithubCollectionAgent | Every 6h | GitHub REST API · releases, pull requests, new repositories · authenticated rate limit |
 
 Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before embedding.
 
@@ -225,7 +236,17 @@ Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before e
 
 **SynthesisAgent** (Claude Sonnet) — the fan-in. Computes the daily Signal Score, incorporates corroboration, and decides real-time alert vs. digest vs. suppress.
 
+**Forecaster** (Claude Sonnet) — the last node in the DAG, and the one that most often says nothing. Below an evidence floor of five distinct signal clusters it does not call the model at all: a model handed four signals will still produce three fluent, confident forecasts, so the only reliable defence is not to ask. Above the floor it emits at most three dated predictions, each with a probability bounded away from 0 and 1, and each carrying resolution criteria a machine can later check. Forecasts that repeat an already-open prediction of the same pattern and timeline are dropped, so the daily sweep cannot fill the ledger with near-duplicates that each resolve separately and inflate the track record.
+
 **ComparativeSynthesis** (Claude Sonnet) — for own-company monitoring only. Runs when the analyzed row is the workspace's own-company row and produces "competitor did X, we haven't — possible reasons, possible responses." Advisory only.
+
+### Resolution — no LLM
+
+**PredictionResolver** — a daily sweep (01:00 UTC, an hour after the analysis sweep so the day's collection has landed) that settles every prediction whose date has passed.
+
+No language model decides a verdict. A model asked "did this come true?" will find a way to say yes — it is agreeable, it has the prediction in front of it, and partial matches read as success in prose. A product whose entire claim is an honest track record cannot have its scoring done by something biased toward pleasing the reader. So resolution is row matching in code: `signal_match` requires every term to appear across the window's signals, `github_release` requires both the repo and `/releases/` in the URL so a pull request cannot satisfy a prediction that said ship, and `pricing_change` matches a recorded diff's direction.
+
+A miss has to be earned by evidence that existed and disagreed. When the window closed with too little activity to judge either way, the outcome is `unresolved` and no Brier score is stored — otherwise Signal would be scoring itself on competitors that went quiet and on its own collection gaps.
 
 ### Chat — Claude Sonnet
 
@@ -259,10 +280,11 @@ Chat answers arrive as SSE frames: `token` frames stream the draft live, then a 
 
 Signal ships evaluation harnesses that run in CI and on demand, but no benchmark results are published here — the product hasn't yet been run against a verified dataset, so there are no claimed accuracy numbers.
 
-- **Backtesting** (`npm run backtest:full`): replays human-verified historical events against the pipeline and reports lead time, confidence, and correctness. The harness is built; results are published only once a verified case file is supplied.
+- **Backtesting** (`npm run backtest:full`): replays human-verified historical events against the pipeline and reports lead time, confidence, and correctness. The harness is built and a verified case file has been started (`apps/api/fixtures/backtest-ground-truth.json`) — two real devtool launches, every date and URL read from the vendor's own blog. It is deliberately not a benchmark yet: two positive cases and no controls would produce a number that is noise, and `apps/api/fixtures/README.md` states exactly what has to happen before one is published. No accuracy figure is claimed here until that work is done.
 - **Prompt versioning** (`npm run eval` / `npm run promote`): every prompt change is gated by a regression suite, and promotion requires a statistically significant improvement over the active version.
 - **Deduplication calibration** (`npm run dedup-calibration`): scores the dedup threshold against human-labeled pairs and recommends a value without ever editing the runtime threshold.
 - **RAG quality** (`npm run rag-eval`): runs curated Q&A pairs through the chat pipeline and scores faithfulness with an LLM judge. It runs in CI and fails the build below a configured threshold.
+- **Calibration**: unlike the harnesses above, this is not a script — it is the product measuring itself continuously. Every resolved prediction contributes a Brier score, and the workspace aggregate is queryable per competitor and per pattern type. No accuracy figure is published here yet: the ledger has to accumulate resolved predictions before a score means anything, and a number produced before then would be noise presented as evidence.
 
 ---
 
@@ -307,7 +329,8 @@ signal/
     │   │   ├── agents/
     │   │   │   ├── discovery/           # metadata discovery (no LLM)
     │   │   │   ├── discovery-search/    # LLM competitor-discovery agent (ReAct + HITL)
-    │   │   │   ├── analysis/            # 6 analysis nodes + comparative-synthesis
+    │   │   │   ├── analysis/            # 6 analysis nodes + comparative-synthesis + forecaster
+    │   │   │   ├── resolver/            # prediction resolution strategies + daily sweep
     │   │   │   └── chat/                # chat graph + adapters
     │   │   ├── graph/                   # analysis-graph DAG + state
     │   │   ├── queues/                  # queue registry + scheduler
@@ -389,8 +412,10 @@ CIRCUIT_TIMEOUT_MS=1800000
 
 ## What's Coming
 
-- **End-to-end ship + daily analysis fan-out.** Automatically score every competitor on a daily schedule (today analysis is manual/on-demand), and finish the agentic runtime hardening — subgraphs, intent routing, reflection, outcome memory, and HITL invariant tests in CI. (Planned — see the Phase 7 plan.)
-- **Long-term memory.** Signal will remember the important facts about your company and your preferences across conversations, not just within a single thread.
+- **Prediction and calibration API + UI.** The ledger and the scorecard are written and resolved, but not yet exposed over HTTP or rendered. `GET /api/predictions`, `GET /api/calibration`, and a `/forecast` surface are next.
+- **Slack.** Talk to Signal from Slack and receive alerts and predictions there — a Slack app with a signed events endpoint routed into the existing chat graph, not a second agent.
+- **Measured accuracy.** The backtest harness has a case file of real devtool launches to replay against, so the README's central claim becomes a number rather than an assertion. Whatever that number is, it gets published here.
+- **Long-term memory (Phase 2 Task 7).** Chat-turn memory extractor writing `signal_goal`/`relationship`/`preference`/`company_fact` per turn — not yet built. Outcome memory (dismissed candidates / denied tools) is partially shipped: dismissed-domain biasing is live; denied-tool memory is deferred (no consumer).
 
 ---
 

@@ -1,4 +1,4 @@
-import { LeftSidebar } from "@/components/LeftSidebar";
+import { AppSidebar } from "@/components/AppSidebar";
 import { TopBar } from "@/components/TopBar";
 import { ChatSidebar } from "@/components/ChatSidebar";
 import { AlertBanner } from "@/components/AlertBanner";
@@ -7,17 +7,19 @@ import { AppCommandBar } from "../app-command-bar";
 // Authenticated pages depend on per-request session and API data.
 export const dynamic = "force-dynamic";
 
-// Authenticated shell: three-column layout with nav, content, and chat
+// Authenticated shell. The sidebar is fixed on large screens and collapses
+// below `lg`, where TopBar carries navigation instead — the content column is
+// the priority at narrow widths, not the chrome.
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <LeftSidebar />
+      <AppSidebar />
       <TopBar />
       <ChatSidebar />
       <AppCommandBar />
       <AlertBanner />
-      <main className="mt-16 mr-12 ml-64 min-h-screen bg-studio-sky-soft px-8 py-10 text-studio-ink transition-all duration-300">
-        {children}
+      <main className="min-h-screen bg-ground px-4 pt-20 pb-16 text-ink sm:px-6 lg:ml-60 lg:px-8">
+        <div className="mx-auto max-w-6xl">{children}</div>
       </main>
     </>
   );

@@ -14,6 +14,10 @@ import { createWorkspaceRouter } from "./workspaces";
 import { createTrackedEntitiesRouter } from "./tracked-entities";
 import { createDashboardRouter } from "./dashboard";
 import { createCompanyGoalsRouter } from "./company-goals";
+import { createPredictionRouter } from "./predictions";
+import { createActivityRouter } from "./activity";
+import { createSlackRouter, type SlackQuestion } from "./slack";
+import { getSlackInstallation } from "../db/queries";
 import { createResolveCompanyRouter } from "./resolve-company";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
@@ -105,6 +109,24 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   const app = express();
   app.disable("x-powered-by");
   app.use(cors({ origin: process.env.FRONTEND_URL ?? "http://localhost:3001", credentials: true }));
+  // Mounted before requireAuth because Slack has no bearer token to present —
+  // the HMAC signature verified inside this router IS the authentication. It is
+  // also mounted before the global express.json() below, and that ordering is
+  // load-bearing: body-parser sets req._body on the first parse, so a second
+  // express.json() further down the stack silently skips its own `verify` hook
+  // and the router would never see the raw bytes Slack signed.
+  app.use(
+    "/api/slack",
+    createSlackRouter({
+      signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+      getSlackInstallation,
+      enqueueSlackQuestion: async (question: SlackQuestion) => {
+        await queues["slack-question"].add("slack-question", question, {
+          jobId: question.dedupe_key,
+        });
+      },
+    })
+  );
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   // Compatibility liveness endpoint: process-only by design. Infrastructure
   // health belongs to /ready so an outage does not trigger restart loops.
@@ -132,6 +154,8 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/tracked-entities", createTrackedEntitiesRouter());
   app.use("/api/dashboard", createDashboardRouter());
   app.use("/api/company-goals", createCompanyGoalsRouter());
+  app.use("/api/predictions", createPredictionRouter());
+  app.use("/api/activity", createActivityRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;

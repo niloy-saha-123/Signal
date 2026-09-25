@@ -1,8 +1,12 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, gte, count, sql, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, gte, lte, count, sql, type SQL } from "drizzle-orm";
+import { computeCalibration, type Calibration } from "../lib/calibration";
 import { z } from "zod";
 import type {
   AgentName,
+  PredictionPatternType,
+  PredictionStatus,
+  ResolutionCriteria,
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
@@ -24,6 +28,9 @@ import {
   signalsTable,
   signalClustersTable,
   competitorSignalScoresTable,
+  predictionsTable,
+  slackInstallationsTable,
+  circuitEventsTable,
   agentLatenciesTable,
   agentRunsTable,
   companyProfileTable,
@@ -683,9 +690,14 @@ export async function getJobSignalsForHiringDelta(
 
 // Retrieval pipeline source — fetch recent signals across multiple competitors
 // for BM25 corpus. inArray with empty array is a Drizzle footgun, so short-circuit.
+// Capped like every sibling query here. The forecaster reads a 30-day window
+// across every active competitor daily; without a limit a high-volume
+// competitor loads thousands of rows into memory purely to have most of them
+// discarded by buildEvidenceText's later truncation.
 export async function getRecentSignalsByCompetitorIds(
   competitorIds: string[],
-  days = 7
+  days = 7,
+  limit = 500
 ): Promise<Signal[]> {
   if (competitorIds.length === 0) {
     return [];
@@ -1032,6 +1044,399 @@ export type CreateSignalScoreInput = {
 
 // SynthesisAgent's write — retries replace the same competitor's UTC-day row
 // instead of appending a duplicate score.
+// Every open prediction whose resolution date has passed, across all workspaces.
+// Backed by predictions_workspace_status_resolves_idx.
+// Bounded. The sweep runs once a day at concurrency 1, so an unbounded result
+// set turns a volume spike into a job whose wall-clock time grows with no
+// backpressure, blocking every other workspace's resolutions behind it.
+// Oldest-due first, so a backlog drains in the order predictions came due
+// rather than starving the ones that have waited longest.
+export const DUE_PREDICTIONS_BATCH_LIMIT = 500;
+
+export async function listDuePredictions(
+  now: Date,
+  limit: number = DUE_PREDICTIONS_BATCH_LIMIT
+): Promise<Array<typeof predictionsTable.$inferSelect>> {
+  return db
+    .select()
+    .from(predictionsTable)
+    .where(and(eq(predictionsTable.status, "open"), lte(predictionsTable.resolves_at, now)))
+    .orderBy(asc(predictionsTable.resolves_at))
+    .limit(limit);
+}
+
+export interface ResolvePredictionInput {
+  id: string;
+  status: PredictionStatus;
+  resolved_at: Date;
+  resolution_note: string;
+  resolution_evidence_urls: string[];
+  // null for `unresolved` — a window that produced no evidence says nothing
+  // about accuracy and must not be averaged into the workspace's score.
+  brier_score: number | null;
+}
+
+// Returns whether this call is the one that actually settled the prediction.
+// The status='open' guard already makes a duplicate write a no-op at the row
+// level, but a caller that ignores the result will still go on to announce the
+// resolution a second time. Reporting the outcome is what lets the caller keep
+// the Slack side idempotent too.
+export async function resolvePrediction(input: ResolvePredictionInput): Promise<boolean> {
+  // Guarded on status "open": the daily sweep and a manual re-run can overlap,
+  // and re-resolving a settled prediction would overwrite a recorded outcome
+  // with a fresh verdict computed over a different window.
+  const updated = await db
+    .update(predictionsTable)
+    .set({
+      status: input.status,
+      resolved_at: input.resolved_at,
+      resolution_note: input.resolution_note,
+      resolution_evidence_urls: input.resolution_evidence_urls,
+      brier_score: input.brier_score,
+    })
+    .where(and(eq(predictionsTable.id, input.id), eq(predictionsTable.status, "open")))
+    .returning({ id: predictionsTable.id });
+  return updated.length > 0;
+}
+
+export interface CalibrationQuery {
+  competitorId?: string;
+  patternType?: PredictionPatternType;
+}
+
+// A workspace's forecasting track record. Only `hit` and `miss` are selected —
+// filtering in SQL rather than in JavaScript so an unscoreable row can never
+// reach computeCalibration, where an `unresolved` treated as a miss would let a
+// competitor going quiet damage the score, and a `void` would let a human's
+// bookkeeping move it.
+//
+// Returns brier: null for an empty track record. See lib/calibration.ts: zero is
+// a perfect score, so "nothing has resolved yet" must not render as flawless.
+export async function getCalibration(
+  workspaceId: string,
+  opts: CalibrationQuery = {}
+): Promise<Calibration> {
+  const conditions = [
+    eq(predictionsTable.workspace_id, workspaceId),
+    inArray(predictionsTable.status, ["hit", "miss"]),
+  ];
+  if (opts.competitorId) {
+    conditions.push(eq(predictionsTable.competitor_id, opts.competitorId));
+  }
+  if (opts.patternType) {
+    conditions.push(eq(predictionsTable.pattern_type, opts.patternType));
+  }
+
+  const rows = await db
+    .select({
+      probability: predictionsTable.probability,
+      status: predictionsTable.status,
+    })
+    .from(predictionsTable)
+    .where(and(...conditions));
+
+  return computeCalibration(
+    rows
+      .filter(
+        (row): row is { probability: number; status: "hit" | "miss" } =>
+          row.status === "hit" || row.status === "miss"
+      )
+      .map((row) => ({ probability: row.probability, status: row.status }))
+  );
+}
+
+export interface PredictionListQuery {
+  workspace_id: string;
+  status?: PredictionStatus;
+  pattern_type?: PredictionPatternType;
+  competitor_id?: string;
+  limit: number;
+}
+
+export async function listPredictionsForWorkspace(
+  query: PredictionListQuery
+): Promise<Array<typeof predictionsTable.$inferSelect>> {
+  const conditions = [eq(predictionsTable.workspace_id, query.workspace_id)];
+  if (query.status) conditions.push(eq(predictionsTable.status, query.status));
+  if (query.pattern_type) conditions.push(eq(predictionsTable.pattern_type, query.pattern_type));
+  if (query.competitor_id) {
+    conditions.push(eq(predictionsTable.competitor_id, query.competitor_id));
+  }
+
+  return db
+    .select()
+    .from(predictionsTable)
+    .where(and(...conditions))
+    .orderBy(desc(predictionsTable.created_at))
+    .limit(query.limit);
+}
+
+// Workspace id is part of the WHERE clause rather than a check after the fetch,
+// so another workspace's row is never loaded. Callers turn `undefined` into a
+// 404 — never a 403, which would confirm the id exists.
+export async function getPredictionForWorkspace(
+  id: string,
+  workspaceId: string
+): Promise<typeof predictionsTable.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(predictionsTable)
+    .where(and(eq(predictionsTable.id, id), eq(predictionsTable.workspace_id, workspaceId)))
+    .limit(1);
+  return row;
+}
+
+// Marks a prediction moot — a competitor got acquired, a product line was
+// cancelled, the question stopped being meaningful. Returns false when the row
+// is not this workspace's, or is already resolved.
+//
+// Only an `open` prediction can be voided. Voiding a settled one would erase a
+// recorded hit or miss from the Brier score, which is the one thing a user must
+// not be able to do to their own track record.
+export async function voidPredictionForWorkspace(
+  id: string,
+  workspaceId: string
+): Promise<boolean> {
+  const updated = await db
+    .update(predictionsTable)
+    .set({ status: "void", resolved_at: new Date() })
+    .where(
+      and(
+        eq(predictionsTable.id, id),
+        eq(predictionsTable.workspace_id, workspaceId),
+        eq(predictionsTable.status, "open")
+      )
+    )
+    .returning({ id: predictionsTable.id });
+  return updated.length > 0;
+}
+
+// ── agent activity ───────────────────────────────────────────────────────
+
+export interface WorkspaceActivityRun {
+  id: string;
+  competitor_id: string;
+  trigger: string;
+  status: string;
+  outcome: string | null;
+  started_at: Date;
+  completed_at: Date | null;
+}
+
+export interface WorkspaceActivity {
+  runs: WorkspaceActivityRun[];
+  spend_today_usd: number;
+  daily_budget_usd: number;
+  open_circuits: string[];
+}
+
+const ACTIVITY_RUN_LIMIT = 40;
+
+// Everything below is scoped through competitors.workspace_id. agent_runs and
+// llm_costs both key on competitor_id rather than workspace_id, so the join is
+// what keeps one tenant's activity out of another's view — the existing
+// getAgentLatencyReport/getCostByCompetitorDay helpers span every workspace and
+// are for operator CLI use only, never an HTTP route.
+export async function getWorkspaceActivity(workspaceId: string): Promise<WorkspaceActivity> {
+  const runs = await db
+    .select({
+      id: agentRunsTable.id,
+      competitor_id: agentRunsTable.competitor_id,
+      trigger: agentRunsTable.trigger,
+      status: agentRunsTable.status,
+      outcome: agentRunsTable.outcome,
+      started_at: agentRunsTable.started_at,
+      completed_at: agentRunsTable.completed_at,
+    })
+    .from(agentRunsTable)
+    .innerJoin(competitorsTable, eq(agentRunsTable.competitor_id, competitorsTable.id))
+    .where(eq(competitorsTable.workspace_id, workspaceId))
+    .orderBy(desc(agentRunsTable.started_at))
+    .limit(ACTIVITY_RUN_LIMIT);
+
+  const [spend] = await db
+    .select({ total: sql<string>`COALESCE(SUM(${llmCostsTable.cost_usd}), 0)` })
+    .from(llmCostsTable)
+    .innerJoin(competitorsTable, eq(llmCostsTable.competitor_id, competitorsTable.id))
+    .where(
+      and(
+        eq(competitorsTable.workspace_id, workspaceId),
+        sql`${llmCostsTable.created_at} >= date_trunc('day', NOW() AT TIME ZONE 'UTC')`
+      )
+    );
+
+  // Circuit state is system health — "is OpenAI reachable" — not another
+  // tenant's data, so it is reported as-is. An open circuit is the single most
+  // useful thing to see when the product looks idle.
+  const circuits = await db
+    .select({ service: circuitEventsTable.service, state: circuitEventsTable.state })
+    .from(circuitEventsTable)
+    .orderBy(desc(circuitEventsTable.occurred_at))
+    .limit(100);
+
+  const latestByService = new Map<string, string>();
+  for (const event of circuits) {
+    if (!latestByService.has(event.service)) latestByService.set(event.service, event.state);
+  }
+
+  return {
+    runs,
+    spend_today_usd: Number(spend?.total ?? 0),
+    daily_budget_usd: Number(process.env.DAILY_BUDGET_USD ?? 2),
+    open_circuits: [...latestByService.entries()]
+      .filter(([, state]) => state === "open")
+      .map(([service]) => service),
+  };
+}
+
+// ── slack ────────────────────────────────────────────────────────────────
+
+export async function getSlackInstallation(
+  teamId: string
+): Promise<typeof slackInstallationsTable.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(slackInstallationsTable)
+    .where(eq(slackInstallationsTable.team_id, teamId))
+    .limit(1);
+  return row;
+}
+
+// The delivery-side lookup: given a Signal workspace, where do we post?
+export async function getSlackInstallationForWorkspace(
+  workspaceId: string
+): Promise<typeof slackInstallationsTable.$inferSelect | undefined> {
+  const [row] = await db
+    .select()
+    .from(slackInstallationsTable)
+    .where(eq(slackInstallationsTable.workspace_id, workspaceId))
+    .limit(1);
+  return row;
+}
+
+export interface UpsertSlackInstallationInput {
+  workspace_id: string;
+  team_id: string;
+  team_name: string | null;
+  bot_token: string;
+  bot_user_id: string;
+  default_channel: string | null;
+  installed_by: string | null;
+}
+
+export async function upsertSlackInstallation(
+  input: UpsertSlackInstallationInput
+): Promise<typeof slackInstallationsTable.$inferSelect> {
+  const [row] = await db
+    .insert(slackInstallationsTable)
+    .values(input)
+    .onConflictDoUpdate({
+      target: slackInstallationsTable.team_id,
+      set: {
+        workspace_id: input.workspace_id,
+        team_name: input.team_name,
+        bot_token: input.bot_token,
+        bot_user_id: input.bot_user_id,
+        default_channel: input.default_channel,
+        updated_at: new Date(),
+      },
+    })
+    .returning();
+  return row;
+}
+
+// ── resolution windows ───────────────────────────────────────────────────
+// The resolver asks a different question than the analysis nodes do: not "what
+// happened recently" but "what happened between these two instants". A relative
+// NOW() - INTERVAL window cannot express that, because a prediction's window is
+// anchored to when it was made, not to when the sweep runs.
+
+export interface SignalWindowQuery {
+  from: Date;
+  to: Date;
+  sources?: SignalSource[];
+}
+
+export async function listSignalsInWindow(
+  competitorId: string,
+  window: SignalWindowQuery
+): Promise<Signal[]> {
+  const conditions = [
+    eq(signalsTable.competitor_id, competitorId),
+    gte(signalsTable.collected_at, window.from),
+    lte(signalsTable.collected_at, window.to),
+  ];
+  if (window.sources && window.sources.length > 0) {
+    conditions.push(inArray(signalsTable.source, window.sources));
+  }
+
+  return db
+    .select()
+    .from(signalsTable)
+    .where(and(...conditions))
+    .orderBy(desc(signalsTable.collected_at))
+    .limit(analysisInputLimit(500));
+}
+
+export async function listPricingDiffsInWindow(
+  competitorId: string,
+  window: { from: Date; to: Date }
+): Promise<PricingDiff[]> {
+  return db
+    .select()
+    .from(pricingDiffsTable)
+    .where(
+      and(
+        eq(pricingDiffsTable.competitor_id, competitorId),
+        gte(pricingDiffsTable.detected_at, window.from),
+        lte(pricingDiffsTable.detected_at, window.to)
+      )
+    )
+    .orderBy(desc(pricingDiffsTable.detected_at))
+    .limit(analysisInputLimit(500));
+}
+
+// ── predictions ──────────────────────────────────────────────────────────
+
+export interface CreatePredictionInput {
+  workspace_id: string;
+  competitor_id: string;
+  run_id: string | null;
+  statement: string;
+  pattern_type: PredictionPatternType;
+  probability: number;
+  resolution_criteria: ResolutionCriteria;
+  horizon_days: number;
+  resolves_at: Date;
+  evidence_signal_ids: string[];
+  evidence_count: number;
+  status: PredictionStatus;
+}
+
+export async function createPrediction(
+  input: CreatePredictionInput
+): Promise<typeof predictionsTable.$inferSelect> {
+  const [row] = await db.insert(predictionsTable).values(input).returning();
+  return row;
+}
+
+// The duplicate gate's input: this competitor's still-open predictions, with only
+// the two fields that decide whether a new forecast repeats one of them.
+export async function listOpenPredictions(
+  competitorId: string
+): Promise<Array<{ id: string; pattern_type: PredictionPatternType; resolves_at: Date }>> {
+  return db
+    .select({
+      id: predictionsTable.id,
+      pattern_type: predictionsTable.pattern_type,
+      resolves_at: predictionsTable.resolves_at,
+    })
+    .from(predictionsTable)
+    .where(
+      and(eq(predictionsTable.competitor_id, competitorId), eq(predictionsTable.status, "open"))
+    );
+}
+
 export async function createSignalScore(input: CreateSignalScoreInput): Promise<SignalScore> {
   const [row] = await db
     .insert(competitorSignalScoresTable)

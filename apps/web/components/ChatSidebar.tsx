@@ -25,7 +25,7 @@ export function ChatSidebar() {
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-indigo-600 text-white shadow-[0_8px_24px_-8px_rgba(79,70,229,0.4)] hover:bg-indigo-700 transition-all duration-200 hover:scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/50"
+          className="fixed bottom-6 right-6 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-ink text-ink-inverse transition-colors hover:bg-[#33322e] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           aria-label="Open chat"
         >
           <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -50,13 +50,13 @@ export function ChatSidebar() {
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setChatKey((prev) => prev + 1)}
-                  className="rounded-full px-3 py-1.5 text-xs font-medium text-slate-900 hover:bg-indigo-50"
+                  className="rounded-md px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-sunken"
                 >
                   New chat
                 </button>
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="rounded-full p-1.5 text-slate-500 hover:bg-indigo-50 hover:text-slate-900"
+                  className="rounded-md p-1.5 text-ink-muted hover:bg-surface-sunken hover:text-ink"
                   aria-label="Close chat"
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

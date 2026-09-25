@@ -114,7 +114,7 @@ export function SettingsClient() {
 
       {message && (
         <p
-          className={`max-w-2xl rounded-2xl px-4 py-3 text-sm ${
+          className={`max-w-2xl rounded-[10px] px-4 py-3 text-sm ${
             message.kind === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
           }`}
         >

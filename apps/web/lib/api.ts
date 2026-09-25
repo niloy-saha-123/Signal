@@ -14,14 +14,24 @@ import {
   type CompanyProfile,
   type CompetitorCreateInput,
   type ChatAgentResult,
+  PredictionSchema,
   type DiscoveryStatus,
+  type PredictionPatternType,
+  type PredictionStatus,
+  type ResolutionCriteria,
   type Signal,
   type SignalScore,
 } from "@signal/shared";
 import { z } from "zod";
 import { getSupabaseBrowserClient } from "./supabase-browser";
 
-export type { CompanyProfile, SignalSource } from "@signal/shared";
+export type {
+  CompanyProfile,
+  PredictionPatternType,
+  PredictionStatus,
+  ResolutionCriteria,
+  SignalSource,
+} from "@signal/shared";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -566,4 +576,123 @@ export function renameWorkspace(name: string): Promise<Workspace> {
     method: "PATCH",
     body: JSON.stringify({ name }),
   });
+}
+
+
+// --- Prediction ledger ---
+
+// Inferred from the shared schema rather than hand-mirrored, so a field rename
+// in packages/shared is a compile error here instead of a silent shape drift.
+// brier_score is null while open and null for unresolved/void — those carry no
+// information about accuracy. Render the absence; never coerce it to 0, because
+// zero is a perfect Brier score.
+export type PredictionRow = z.infer<typeof PredictionSchema>;
+
+export interface PredictionDetail extends PredictionRow {
+  evidence: Signal[];
+}
+
+export interface ListPredictionsParams {
+  status?: PredictionStatus;
+  pattern_type?: PredictionPatternType;
+  competitor_id?: string;
+  limit?: number;
+}
+
+// Validated at the boundary, like every other endpoint in this file. The
+// brier_score null-vs-number distinction is the single most load-bearing
+// invariant in this product — null means "nothing resolved", 0 means "a perfect
+// score" — and an unvalidated response is the one place a backend change could
+// flip it silently, with no type error and no failing test.
+const PredictionRowSchema = PredictionSchema;
+const PredictionDetailSchema = PredictionSchema.extend({
+  evidence: z.array(SignalSchema),
+});
+
+const CalibrationBucketSchema = z.object({
+  range: z.string(),
+  predicted: z.number(),
+  observed: z.number(),
+  count: z.number().int().nonnegative(),
+});
+
+const CalibrationSchema = z.object({
+  resolved_count: z.number().int().nonnegative(),
+  brier: z.number().nullable(),
+  baseline_brier: z.number(),
+  buckets: z.array(CalibrationBucketSchema),
+});
+
+export async function listPredictions(
+  params: ListPredictionsParams = {},
+  token?: string
+): Promise<PredictionRow[]> {
+  const query = buildQuery({
+    status: params.status,
+    pattern_type: params.pattern_type,
+    competitor_id: params.competitor_id,
+    limit: params.limit?.toString(),
+  });
+  const res = await request<{ data: unknown[] }>(
+    `/api/predictions?${query}`,
+    undefined,
+    token
+  );
+  return z.array(PredictionRowSchema).parse(res.data);
+}
+
+export async function getPrediction(id: string, token?: string): Promise<PredictionDetail> {
+  const res = await request<unknown>(`/api/predictions/${id}`, undefined, token);
+  return PredictionDetailSchema.parse(res);
+}
+
+export type CalibrationBucket = z.infer<typeof CalibrationBucketSchema>;
+
+// `brier: null` means no track record yet. It must render as "nothing resolved
+// yet", never as a score — 0 is flawless calibration and would be a lie.
+export type Calibration = z.infer<typeof CalibrationSchema>;
+
+export async function getCalibration(
+  params: { competitor_id?: string; pattern_type?: PredictionPatternType } = {},
+  token?: string
+): Promise<Calibration> {
+  const query = buildQuery({
+    competitor_id: params.competitor_id,
+    pattern_type: params.pattern_type,
+  });
+  const res = await request<unknown>(`/api/predictions/calibration?${query}`, undefined, token);
+  return CalibrationSchema.parse(res);
+}
+
+// Marks a prediction moot. Only an open prediction can be voided — a settled
+// one keeps its recorded outcome, so a user cannot quietly delete a miss from
+// their own track record.
+export function voidPrediction(id: string, token?: string): Promise<{ id: string; status: string }> {
+  return request(`/api/predictions/${id}/void`, { method: "POST" }, token);
+}
+
+
+// --- Agent activity ---
+
+export interface ActivityRun {
+  id: string;
+  competitor_id: string;
+  trigger: string;
+  status: string;
+  outcome: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface WorkspaceActivity {
+  runs: ActivityRun[];
+  spend_today_usd: number;
+  daily_budget_usd: number;
+  // Services whose circuit breaker is currently open. The most useful thing to
+  // see when the product looks idle but should not be.
+  open_circuits: string[];
+}
+
+export function getActivity(token?: string): Promise<WorkspaceActivity> {
+  return request("/api/activity", undefined, token);
 }

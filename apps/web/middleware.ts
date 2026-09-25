@@ -11,6 +11,9 @@ const PREVIEW_APP_PATHS = [
   "/settings",
   "/chat",
   "/onboarding",
+  "/forecast",
+  "/scorecard",
+  "/activity",
 ];
 
 function allowUnauthenticatedApp() {

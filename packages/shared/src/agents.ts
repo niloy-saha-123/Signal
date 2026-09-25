@@ -15,6 +15,7 @@ export const AgentNameSchema = z.enum([
   "deduplicator",
   "entity_extractor",
   "comparative_synthesis",
+  "forecaster",
 ]);
 export type AgentName = z.infer<typeof AgentNameSchema>;
 

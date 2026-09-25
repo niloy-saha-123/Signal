@@ -75,7 +75,9 @@ export type QueueName =
   | "discovery-search"
   | "own-company-analysis-sweep"
   | "daily-analysis-sweep"
-  | "pending-confirmation-expiry";
+  | "pending-confirmation-expiry"
+  | "resolve-predictions"
+  | "slack-question";
 
 export interface QueueConfig {
   concurrency: number;
@@ -155,6 +157,25 @@ export async function ensureStableJob(
   throw new Error(`Unexpected BullMQ job state "${state}" for job "${input.jobId}"`);
 }
 
+// Job payloads are logged verbatim when a job fails, and at least one queue
+// (slack-question) carries a live OAuth token. A stalled job during a routine
+// deploy would print a working credential into the log stream, where anyone
+// with log read access could lift it.
+//
+// Matches on key shape rather than a fixed list, so a queue added later that
+// carries a credential is covered without anyone remembering to update this.
+const SECRET_KEY_PATTERN = /token|secret|password|passwd|api[-_]?key|credential|authorization/i;
+
+export function redactJobData(data: unknown): unknown {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return data;
+  return Object.fromEntries(
+    Object.entries(data as Record<string, unknown>).map(([key, value]) => [
+      key,
+      SECRET_KEY_PATTERN.test(key) ? "[redacted]" : value,
+    ])
+  );
+}
+
 const DEFAULT_CONFIG: QueueConfig = {
   concurrency: 2,
   attempts: 3,
@@ -209,6 +230,15 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // One at a time; no retry (a missed tick is corrected by the next one, and a
   // double-run would just re-check the same threads idempotently).
   "pending-confirmation-expiry": { concurrency: 1, attempts: 1 },
+  // Daily sweep that settles every prediction whose date has passed. One at a
+  // time; no retry. A missed tick is corrected by the next day's run, and
+  // resolvePrediction is guarded on status "open" so a double-run cannot
+  // overwrite a verdict already recorded.
+  "resolve-predictions": { concurrency: 1, attempts: 1 },
+  // Answers a question asked in Slack. attempts: 1 — a retry would post a
+  // second answer into the same thread, and a duplicate answer in a channel is
+  // worse than a missing one.
+  "slack-question": { concurrency: 3, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
@@ -265,7 +295,7 @@ export function registerWorker(queueName: QueueName, processor: Processor): Work
     logger.error(`Job failed on queue "${queueName}"`, {
       queue: queueName,
       job_id: job?.id,
-      job_data: job?.data,
+      job_data: redactJobData(job?.data),
       attempts_made: job?.attemptsMade,
       attempts_allowed: job?.opts?.attempts ?? 1,
       error: err?.message,

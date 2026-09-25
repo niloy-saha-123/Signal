@@ -146,6 +146,7 @@ import {
   registerWorker,
   initWorkers,
   type QueueName,
+  redactJobData,
 } from "@/queues/registry";
 
 const COMP_ID = "11111111-1111-4111-8111-111111111111";
@@ -364,6 +365,8 @@ describe("queues/registry", () => {
     "own-company-analysis-sweep",
     "daily-analysis-sweep",
     "pending-confirmation-expiry",
+    "resolve-predictions",
+    "slack-question",
     ...OTHER_QUEUES,
   ];
     expect(Object.keys(queues).sort()).toEqual(allNames.sort());
@@ -1088,5 +1091,45 @@ describe("daily-analysis-sweep worker", () => {
       expect.stringContaining("daily analysis"),
       expect.objectContaining({ competitor_id: COMP_A, run_id: "run-a" })
     );
+  });
+});
+
+describe("worker failure logging", () => {
+  it("redacts credential-shaped fields from job data", () => {
+    // The slack-question queue's payload carries a live Slack bot token. The
+    // generic 'failed' handler logs job.data verbatim, so a stalled job during
+    // a routine deploy would print a working credential into the log stream.
+    const redacted = redactJobData({
+      workspace_id: "ws-1",
+      channel: "C1",
+      question: "what changed?",
+      bot_token: "xoxb-super-secret",
+      dedupe_key: "T1:1.0",
+    }) as Record<string, unknown>;
+
+    expect(redacted.bot_token).toBe("[redacted]");
+    expect(redacted.workspace_id).toBe("ws-1");
+    expect(redacted.question).toBe("what changed?");
+  });
+
+  it("redacts any key that looks like a secret, not just a known list", () => {
+    const redacted = redactJobData({
+      access_token: "a",
+      apiKey: "b",
+      client_secret: "c",
+      password: "d",
+      signing_secret: "e",
+      harmless: "keep",
+    }) as Record<string, unknown>;
+
+    for (const key of ["access_token", "apiKey", "client_secret", "password", "signing_secret"]) {
+      expect(redacted[key], key).toBe("[redacted]");
+    }
+    expect(redacted.harmless).toBe("keep");
+  });
+
+  it("passes through non-object job data untouched", () => {
+    expect(redactJobData(undefined)).toBeUndefined();
+    expect(redactJobData("a string")).toBe("a string");
   });
 });

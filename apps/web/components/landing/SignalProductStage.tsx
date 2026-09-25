@@ -86,7 +86,7 @@ export function SignalProductStage() {
           ].map((d, index) => (
             <span
               key={d}
-              className={`grid h-9 w-9 place-items-center rounded-2xl ${
+              className={`grid h-9 w-9 place-items-center rounded-[10px] ${
                 index === 0 ? "bg-studio-ink text-white" : "text-studio-muted"
               }`}
             >
@@ -182,7 +182,7 @@ export function SignalProductStage() {
           </div>
 
           <div className="border-t border-studio-line/80 p-4 sm:px-6">
-            <div className="flex min-h-11 items-center justify-between rounded-xl border border-studio-line bg-studio-paper px-3.5">
+            <div className="flex min-h-11 items-center justify-between rounded-[10px] border border-studio-line bg-studio-paper px-3.5">
               <span className="text-xs text-studio-muted">Ask a follow-up about this movement</span>
               <span className="text-studio-action">
                 <ArrowUpRightIcon />

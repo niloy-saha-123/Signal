@@ -4,6 +4,16 @@
 // model output, while avoiding importing database/model clients at CLI parse
 // time.
 import { z } from "zod";
+import {
+  PREDICTION_HORIZON_MAX_DAYS,
+  PREDICTION_HORIZON_MIN_DAYS,
+  PREDICTION_PROBABILITY_MAX,
+  PREDICTION_PROBABILITY_MIN,
+  PREDICTION_STATEMENT_MAX_LENGTH,
+  PREDICTION_STATEMENT_MIN_LENGTH,
+  PredictionPatternTypeSchema,
+  ResolutionCriteriaSchema,
+} from "@signal/shared";
 
 export const HiringIntentSchema = z.object({
   summary: z.string(),
@@ -148,3 +158,51 @@ export const AnalysisDecisionSchema = z.object({
   // tool-calling) still parse and the run still succeeds.
   detail: AlertDetailSchema.optional().catch(undefined),
 });
+
+// ── forecaster ───────────────────────────────────────────────────────────
+// The forecaster node's structured output: zero to three dated, resolvable
+// predictions, or an explicit refusal to make any.
+//
+// Every bound here is load-bearing, because this schema is the only thing
+// standing between a language model's natural fluency and a ledger full of
+// claims nothing can settle:
+//
+//   probability  clamped away from 0 and 1 — a model that emits either is
+//                claiming certainty, and a ledger that accepts it produces an
+//                uninformative Brier score
+//   statement    long enough to name a specific move; "big pricing move" is
+//                not something a resolver can ever settle
+//   horizon      bounded below so a prediction cannot resolve before evidence
+//                could plausibly appear, and above so the ledger cannot be
+//                padded with claims that come due after anyone cares
+//   criteria     the shared discriminated union, so an unresolvable forecast
+//                fails to parse rather than becoming a permanently open row
+//
+// An empty `forecasts` array is a valid, expected answer. The node is supposed
+// to abstain more often than it speaks — `abstained_reason` is where it says
+// why, so silence is legible instead of looking like a failure.
+export const FORECAST_MAX_ITEMS = 3;
+
+export const ForecastSchema = z.object({
+  statement: z
+    .string()
+    .trim()
+    .min(PREDICTION_STATEMENT_MIN_LENGTH)
+    .max(PREDICTION_STATEMENT_MAX_LENGTH),
+  pattern_type: PredictionPatternTypeSchema,
+  probability: z.number().min(PREDICTION_PROBABILITY_MIN).max(PREDICTION_PROBABILITY_MAX),
+  horizon_days: z
+    .number()
+    .int()
+    .min(PREDICTION_HORIZON_MIN_DAYS)
+    .max(PREDICTION_HORIZON_MAX_DAYS),
+  resolution_criteria: ResolutionCriteriaSchema,
+  reasoning: z.string().trim().min(1).max(2_000),
+});
+export type Forecast = z.infer<typeof ForecastSchema>;
+
+export const ForecastOutputSchema = z.object({
+  forecasts: z.array(ForecastSchema).max(FORECAST_MAX_ITEMS),
+  abstained_reason: z.string().trim().max(500).nullable(),
+});
+export type ForecastOutput = z.infer<typeof ForecastOutputSchema>;
