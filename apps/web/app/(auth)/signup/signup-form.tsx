@@ -44,17 +44,17 @@ export function SignupForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1 text-sm text-studio-muted">
+      <label className="flex flex-col gap-1.5 text-[13px] font-medium text-ink-secondary">
         Email
         <input
           type="email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           required
-          className="rounded-md border border-studio-line px-3 py-2 text-sm text-studio-ink outline-none focus:border-studio-action"
+          className="rounded-lg border border-line-strong bg-surface px-3 py-2.5 text-[14px] text-ink outline-none transition-shadow focus:border-accent focus:ring-3 focus:ring-[var(--color-accent-tint)]"
         />
       </label>
-      <label className="flex flex-col gap-1 text-sm text-studio-muted">
+      <label className="flex flex-col gap-1.5 text-[13px] font-medium text-ink-secondary">
         Password
         <input
           type="password"
@@ -62,36 +62,36 @@ export function SignupForm() {
           onChange={(event) => setPassword(event.target.value)}
           required
           minLength={6}
-          className="rounded-md border border-studio-line px-3 py-2 text-sm text-studio-ink outline-none focus:border-studio-action"
+          className="rounded-lg border border-line-strong bg-surface px-3 py-2.5 text-[14px] text-ink outline-none transition-shadow focus:border-accent focus:ring-3 focus:ring-[var(--color-accent-tint)]"
         />
       </label>
       {error ? (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-[var(--color-status-critical)]">
           {error}
         </p>
       ) : null}
       <button
         type="submit"
         disabled={pending}
-        className="rounded-full bg-studio-ink px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#071625] disabled:opacity-50"
+        className="rounded-lg bg-accent px-4 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
       >
         Sign up
       </button>
-      <div className="flex items-center gap-3 text-xs text-studio-muted">
-        <div className="h-px flex-1 bg-studio-line" />
+      <div className="flex items-center gap-3 text-[12px] text-ink-muted">
+        <div className="h-px flex-1 bg-line" />
         or
-        <div className="h-px flex-1 bg-studio-line" />
+        <div className="h-px flex-1 bg-line" />
       </div>
       <button
         type="button"
         onClick={handleGoogle}
-        className="rounded-full border border-studio-line px-4 py-2.5 text-sm font-medium text-studio-ink transition-colors hover:bg-studio-sky-soft"
+        className="rounded-lg border border-line-strong bg-surface px-4 py-2.5 text-[14px] font-medium text-ink transition-colors hover:bg-surface-sunken"
       >
         Continue with Google
       </button>
-      <p className="text-center text-sm text-studio-muted">
+      <p className="text-center text-[13px] text-ink-muted">
         Have an account already?{" "}
-        <Link href="/login" className="font-medium text-studio-action">
+        <Link href="/login" className="font-medium text-accent hover:underline">
           Log in
         </Link>
       </p>

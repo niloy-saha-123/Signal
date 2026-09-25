@@ -14,10 +14,10 @@
 
 @theme {
   /* --- Type ------------------------------------------------------------ */
-  /* Public Sans for UI, a monospace for every number that means something.
+  /* Instrument Sans for UI, a monospace for every number that means something.
      Fraunces is deliberately gone: a display serif reads editorial, and the
      reader here is a product lead checking a forecast, not a magazine. */
-  --font-sans: var(--font-public-sans);
+  --font-sans: var(--font-instrument-sans);
   --font-mono: var(--font-jetbrains-mono);
 
   /* --- Ground and ink -------------------------------------------------- */
@@ -43,20 +43,6 @@
   --color-accent-tint: #e6f2f1;
   --color-accent-line: #9cc9c5;
 
-  /* --- Legacy studio-* aliases ----------------------------------------- */
-  /* Kept so already-shipped surfaces keep rendering while they are migrated
-     one at a time. Remapped onto the new palette rather than left pointing at
-     the old one, so nothing renders half-rebuilt. */
-  --color-studio-paper: var(--color-surface);
-  --color-studio-ink: var(--color-ink);
-  --color-studio-muted: var(--color-ink-secondary);
-  --color-studio-line: var(--color-line);
-  --color-studio-sky: var(--color-accent-tint);
-  --color-studio-sky-soft: var(--color-surface-sunken);
-  --color-studio-sky-deep: var(--color-accent-line);
-  --color-studio-action: var(--color-accent);
-  --color-studio-action-hover: var(--color-accent-hover);
-  --color-studio-action-soft: var(--color-accent-tint);
 
   --color-bg-page: var(--color-ground);
   --color-bg-card: var(--color-surface);
@@ -78,6 +64,9 @@
   --color-source-changelog: #eda100;
   --color-source-pricing: #e87ba4;
   --color-source-github: #4b5563;
+  --color-source-website: #9a6a3a;
+  --color-source-community: #7a8b2e;
+  --color-source-postings: #1c9aa8;
 
   --color-status-good: #0ca30c;
   --color-status-warning: #fab219;
@@ -100,6 +89,38 @@
   --color-outcome-miss: #d03b3b;
   --color-outcome-unresolved: #8a8780;
   --color-outcome-open: #0f6e68;
+
+  /* --- Decorative tints ------------------------------------------------ */
+  /* Soft, low-saturation washes for surfaces that carry NO status meaning —
+     section grounds, step cards, source tiles. Kept deliberately separate from
+     the status and outcome palettes above: those hues mean something specific
+     (hit, miss, critical, warning) and must never be spent on decoration, or a
+     reader learns to ignore the colour that matters.
+
+     Low chroma on purpose. These sit under dense type all day; a saturated
+     panel is tiring and starts competing with the data. */
+  --color-tint-teal: #e9f4f2;
+  --color-tint-sand: #faf1e6;
+  --color-tint-sky: #ecf3fa;
+  --color-tint-sage: #eef4ec;
+  --color-tint-clay: #fbeeea;
+  --color-tint-stone: #f2f1ee;
+
+  /* --- The signal trace ------------------------------------------------ */
+  /* The one saturated colour moment on public pages: the logo's line motif,
+     drawn as flowing gradient strokes. Teal is the accent; sky and sand warm it
+     without touching the status hues. Never used inside the app, where colour
+     has to mean something. */
+  --color-trace-a: #0f6e68;
+  --color-trace-b: #3f9fc4;
+  --color-trace-c: #8cc9d6;
+  --color-trace-d: #efc79a;
+
+  /* A deeper teal for the one dark band on the landing page — colour with
+     weight, rather than the black slab most sites reach for. */
+  --color-deep: #0b3b38;
+  --color-deep-ink: #e8f3f1;
+  --color-deep-muted: #a6c9c4;
 
   /* --- Radius ---------------------------------------------------------- */
   /* Four values with distinct jobs. One value everywhere is a slop tell. */
@@ -163,6 +184,68 @@ html {
 
 *::-webkit-scrollbar-thumb:hover {
   background: var(--color-ink-muted);
+}
+
+/* Vertical grid rails. Two hairlines that frame the content column down the
+   full height of a public page — the engineering-drawing cue, and the thing
+   that makes a long page read as one composed object instead of stacked bands. */
+.rails {
+  position: relative;
+}
+.rails::before,
+.rails::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-line);
+  pointer-events: none;
+}
+.rails::before {
+  left: max(1.25rem, calc((100% - 72rem) / 2));
+}
+.rails::after {
+  right: max(1.25rem, calc((100% - 72rem) / 2));
+}
+
+/* Soft technical grid, used behind the hero only. Masked so it fades out
+   rather than ending at a hard edge. */
+.grid-backdrop {
+  background-image:
+    linear-gradient(to right, rgba(26, 26, 24, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(26, 26, 24, 0.045) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 35%, transparent 75%);
+}
+
+/* Trace strokes draw in once on load. Reduced-motion users get the finished
+   drawing immediately via the global rule below. */
+@keyframes trace-draw {
+  from {
+    stroke-dashoffset: var(--trace-length, 1600);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.trace-draw {
+  stroke-dasharray: var(--trace-length, 1600);
+  animation: trace-draw 2.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise-in {
+  animation: rise-in 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Negative tracking above 18px — the reason dense screens still scan. */

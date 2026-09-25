@@ -29,18 +29,18 @@ export function AlertBanner() {
       {alerts.map((alert) => (
         <div
           key={alert.id}
-          className="pointer-events-auto flex items-center justify-between gap-3 rounded-[10px] border border-studio-line bg-studio-paper px-4 py-3 shadow-[0_12px_32px_-16px_rgba(10,32,51,0.4)]"
+          className="pointer-events-auto flex items-center justify-between gap-3 rounded-[10px] border border-line bg-surface px-4 py-3 shadow-[0_12px_32px_-16px_rgba(10,32,51,0.4)]"
         >
           <div className="flex items-center gap-2.5">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-studio-action" />
-            <p className="text-sm text-studio-ink">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-accent" />
+            <p className="text-sm text-ink">
               New alert on <span className="font-semibold">{alert.pattern.replace(/_/g, " ")}</span>
             </p>
           </div>
           <button
             type="button"
             onClick={() => dismiss(alert.id)}
-            className="text-xs text-studio-muted transition-colors hover:text-studio-ink"
+            className="text-xs text-ink-secondary transition-colors hover:text-ink"
             aria-label="Dismiss alert"
           >
             ✕

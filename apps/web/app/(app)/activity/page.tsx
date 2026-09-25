@@ -65,10 +65,10 @@ export default async function ActivityPage() {
       />
 
       <div className="mb-6 grid gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-3">
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-teal)] p-5">
           <Metric value={String(activity.runs.length)} label="Recent runs" size="md" />
         </div>
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-sky)] p-5">
           <Metric
             value={`$${activity.spend_today_usd.toFixed(2)}`}
             label="Model spend today"
@@ -88,7 +88,7 @@ export default async function ActivityPage() {
             of ${activity.daily_budget_usd.toFixed(2)} daily budget
           </p>
         </div>
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-sand)] p-5">
           <Metric
             value={String(activity.open_circuits.length)}
             label="Open circuits"

@@ -28,10 +28,10 @@ function renderIntel(competitors: typeof PREVIEW_COMPETITORS, signals: typeof PR
     <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-2">
-          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
             Intel
           </h1>
-          <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
+          <p className="max-w-xl text-sm leading-relaxed text-ink-secondary">
             Raw collected evidence, still labeled by source. Filter the trail before you ask
             research chat to interpret it.
           </p>
@@ -51,7 +51,7 @@ function renderIntel(competitors: typeof PREVIEW_COMPETITORS, signals: typeof PR
       </div>
       <IntelFilters competitors={competitors} />
       <DataCoverage dates={signals.map((signal) => signal.collected_at)} />
-      <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-5 sm:p-6">
+      <div className="rounded-[10px] border border-line bg-surface p-5 sm:p-6">
         <SignalFeed signals={signals} competitorIds={competitors.map((competitor) => competitor.id)} />
       </div>
     </div>

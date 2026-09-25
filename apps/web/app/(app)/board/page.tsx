@@ -44,10 +44,10 @@ export default async function Page() {
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
-        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+        <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
           Board
         </h1>
-        <p className="text-sm font-semibold text-studio-muted">
+        <p className="text-sm font-semibold text-ink-secondary">
           Drag cards to arrange your own view. Competitors without a score aren&apos;t shown here.
         </p>
       </div>

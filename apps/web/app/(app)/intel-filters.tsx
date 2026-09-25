@@ -4,7 +4,17 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Competitor } from "@/lib/api";
 
-const SOURCES = ["reddit", "hn", "jobs", "changelog", "pricing", "github"] as const;
+const SOURCES = [
+  "reddit",
+  "hn",
+  "jobs",
+  "changelog",
+  "pricing",
+  "github",
+  "website",
+  "community",
+  "postings",
+] as const;
 
 export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
   const router = useRouter();
@@ -19,12 +29,12 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
 
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
+      <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
         Source
         <select
           value={searchParams.get("source") ?? ""}
           onChange={(event) => updateParam("source", event.target.value)}
-          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
+          className="rounded-full border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
         >
           <option value="">All sources</option>
           {SOURCES.map((source) => (
@@ -34,12 +44,12 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
+      <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
         Competitor
         <select
           value={searchParams.get("competitor_id") ?? ""}
           onChange={(event) => updateParam("competitor_id", event.target.value)}
-          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
+          className="rounded-full border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
         >
           <option value="">All competitors</option>
           {competitors.map((competitor) => (
@@ -49,22 +59,22 @@ export function IntelFilters({ competitors }: { competitors: Competitor[] }) {
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
+      <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
         From
         <input
           type="date"
           value={searchParams.get("from") ?? ""}
           onChange={(event) => updateParam("from", event.target.value)}
-          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
+          className="rounded-full border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
         />
       </label>
-      <label className="flex flex-col gap-1 text-xs font-medium text-studio-muted">
+      <label className="flex flex-col gap-1 text-xs font-medium text-ink-secondary">
         To
         <input
           type="date"
           value={searchParams.get("to") ?? ""}
           onChange={(event) => updateParam("to", event.target.value)}
-          className="rounded-full border border-studio-line bg-studio-paper px-3 py-2 text-sm outline-none focus:border-studio-action"
+          className="rounded-full border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
         />
       </label>
     </div>

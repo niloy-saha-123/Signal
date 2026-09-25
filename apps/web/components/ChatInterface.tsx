@@ -327,7 +327,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
   return (
     <div className="flex h-full min-h-0">
       {showThreads && (
-        <div className="w-64 shrink-0 border-r border-studio-line bg-studio-paper">
+        <div className="w-64 shrink-0 border-r border-line bg-surface">
           <ThreadList
             threads={threads}
             activeThreadId={activeThreadId}
@@ -343,10 +343,10 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
         <div className="flex-1 overflow-y-auto px-4 py-6">
           {messages.length === 0 && !submitting ? (
             <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center text-center">
-              <h2 className="font-display text-2xl font-semibold tracking-tight text-studio-ink">
+              <h2 className=" text-2xl font-semibold tracking-tight text-ink">
                 Ask Signal a question
               </h2>
-              <p className="mt-2 text-sm leading-relaxed text-studio-muted">
+              <p className="mt-2 text-sm leading-relaxed text-ink-secondary">
                 Answers are grounded in your collected competitor evidence, with citations.
               </p>
             </div>
@@ -355,13 +355,13 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               {messages.map((message) =>
                 message.role === "user" ? (
                   <div key={message.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-[10px] rounded-br-lg bg-studio-action-soft px-4 py-3">
+                    <div className="max-w-[85%] rounded-[10px] rounded-br-lg bg-accent-tint px-4 py-3">
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mb-2 flex flex-wrap gap-1.5">
                           {message.attachments.map((a) => (
                             <span
                               key={a.name}
-                              className="inline-flex items-center gap-1 rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold text-studio-ink"
+                              className="inline-flex items-center gap-1 rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold text-ink"
                             >
                               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
@@ -371,7 +371,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                           ))}
                         </div>
                       )}
-                      <p className="text-sm text-studio-ink">{message.text}</p>
+                      <p className="text-sm text-ink">{message.text}</p>
                     </div>
                   </div>
                 ) : (
@@ -393,15 +393,15 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                       ) : message.pending ? (
                         <div className="flex items-center gap-2 px-1 py-2">
                           <span className="flex gap-1">
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-studio-action [animation-delay:0ms]" />
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-studio-action [animation-delay:150ms]" />
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-studio-action [animation-delay:300ms]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:0ms]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:150ms]" />
+                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:300ms]" />
                           </span>
-                          <span className="text-xs text-studio-muted">Signal is responding…</span>
+                          <span className="text-xs text-ink-secondary">Signal is responding…</span>
                         </div>
                       ) : (
                         <>
-                          <p className="whitespace-pre-wrap text-sm leading-relaxed text-studio-ink">
+                          <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink">
                             {message.text}
                           </p>
                           {message.citations && message.citations.length > 0 && (
@@ -410,7 +410,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                                 <span
                                   key={citation.chunk_id}
                                   title={citation.claim}
-                                  className="inline-flex items-center gap-1 rounded-full border border-studio-line bg-white px-2 py-0.5 text-xs text-studio-muted"
+                                  className="inline-flex items-center gap-1 rounded-full border border-line bg-white px-2 py-0.5 text-xs text-ink-secondary"
                                 >
                                   <span
                                     className="h-1.5 w-1.5 rounded-full"
@@ -426,12 +426,12 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                       {message.confirmation && (
                         <div
                           data-testid="confirm-card"
-                          className="mt-2 rounded-[10px] border border-studio-line bg-white p-3"
+                          className="mt-2 rounded-[10px] border border-line bg-white p-3"
                         >
-                          <p className="text-xs font-medium text-studio-muted">
+                          <p className="text-xs font-medium text-ink-secondary">
                             Signal wants to run this action
                           </p>
-                          <p className="mt-1 text-sm font-semibold text-studio-ink">
+                          <p className="mt-1 text-sm font-semibold text-ink">
                             {message.confirmation.description}
                           </p>
                           {message.confirmation.status === "pending" ? (
@@ -439,20 +439,20 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "approve")}
-                                className="rounded-[10px] bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                                className="rounded-[10px] bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover"
                               >
                                 Confirm
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "deny")}
-                                className="rounded-[10px] border border-studio-line bg-studio-paper px-3 py-1.5 text-xs font-semibold text-studio-muted hover:text-studio-ink"
+                                className="rounded-[10px] border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-ink-secondary hover:text-ink"
                               >
                                 Cancel
                               </button>
                             </div>
                           ) : (
-                            <p className="mt-2 text-xs text-studio-muted">
+                            <p className="mt-2 text-xs text-ink-secondary">
                               {message.confirmation.status === "approved" ? "Action approved." : "Action cancelled."}
                             </p>
                           )}
@@ -464,7 +464,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                         type="button"
                         onClick={() => handleRegenerate(message)}
                         title="Regenerate"
-                        className="shrink-0 rounded-full p-1 text-studio-muted opacity-0 transition-opacity hover:bg-studio-sky-soft hover:text-studio-ink group-hover:opacity-100"
+                        className="shrink-0 rounded-full p-1 text-ink-secondary opacity-0 transition-opacity hover:bg-surface-sunken hover:text-ink group-hover:opacity-100"
                       >
                         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -480,21 +480,21 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
         </div>
 
         {/* Composer */}
-        <div className="border-t border-studio-line bg-studio-paper px-4 py-3">
+        <div className="border-t border-line bg-surface px-4 py-3">
           {attachError && <p className="mb-2 text-xs text-red-600">{attachError}</p>}
           {attachments.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
               {attachments.map((a) => (
                 <span
                   key={a.id}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-studio-line bg-studio-sky-soft px-3 py-1 text-xs text-studio-muted"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-sunken px-3 py-1 text-xs text-ink-secondary"
                 >
                   {a.name} · {formatBytes(a.size)}
                   <button
                     type="button"
                     onClick={() => setAttachments((current) => current.filter((x) => x.id !== a.id))}
                     aria-label={`Remove ${a.name}`}
-                    className="text-studio-muted hover:text-studio-ink"
+                    className="text-ink-secondary hover:text-ink"
                   >
                     ✕
                   </button>
@@ -519,7 +519,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               onClick={openFilePicker}
               disabled={submitting}
               title="Attach a document or image for this message only (not saved to company knowledge)"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink disabled:opacity-30"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-30"
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
@@ -536,13 +536,13 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               }}
               placeholder="Ask Signal a question…"
               rows={1}
-              className="max-h-40 w-full resize-none rounded-[10px] border border-studio-line bg-studio-sky-soft px-4 py-2.5 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
+              className="max-h-40 w-full resize-none rounded-[10px] border border-line bg-surface-sunken px-4 py-2.5 text-sm text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none"
               disabled={submitting}
             />
             <button
               type="submit"
               disabled={submitting || (query.trim().length === 0 && attachments.length === 0)}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-studio-ink text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-opacity hover:opacity-90 disabled:opacity-30"
               title="Send"
               aria-label="Send message"
             >
@@ -558,7 +558,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
             </button>
           </form>
           {submitting && (
-            <p className="mt-2 text-xs text-studio-muted">Signal is responding — this chat is locked until it finishes.</p>
+            <p className="mt-2 text-xs text-ink-secondary">Signal is responding — this chat is locked until it finishes.</p>
           )}
         </div>
       </div>

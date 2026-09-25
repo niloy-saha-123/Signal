@@ -73,12 +73,12 @@ export function AppSidebar() {
                     <Link
                       href={item.href}
                       aria-current={active ? "page" : undefined}
-                      // Active is solid ink, not a tinted accent pill — the
-                      // accent marks what is interactive, ink marks what is
-                      // currently chosen.
+                      // Active gets a teal wash and a solid left marker. The
+                      // marker carries the state for anyone who cannot tell
+                      // the tint apart from the ground.
                       className={
                         active
-                          ? "block rounded-md bg-ink px-2 py-1.5 text-[13px] font-medium text-ink-inverse"
+                          ? "relative block rounded-md bg-accent-tint px-2 py-1.5 text-[13px] font-semibold text-accent before:absolute before:top-1.5 before:bottom-1.5 before:-left-3 before:w-[3px] before:rounded-r before:bg-accent"
                           : "block rounded-md px-2 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink"
                       }
                     >

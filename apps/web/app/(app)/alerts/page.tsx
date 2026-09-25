@@ -19,10 +19,10 @@ function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PR
     <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-2">
-          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
             Alerts
           </h1>
-          <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
+          <p className="max-w-xl text-sm leading-relaxed text-ink-secondary">
             Movements that crossed the confidence bar. Each one still points at the evidence
             that produced it.
           </p>
@@ -41,32 +41,32 @@ function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PR
         />
       </div>
       {alerts.length === 0 ? (
-        <div className="flex items-center justify-center rounded-[1.6rem] border border-studio-line bg-studio-paper px-8 py-16">
-          <p className="text-sm text-studio-muted">No alerts yet.</p>
+        <div className="flex items-center justify-center rounded-[10px] border border-line bg-surface px-8 py-16">
+          <p className="text-sm text-ink-secondary">No alerts yet.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-4">
           {alerts.map((alert) => (
             <div
               key={alert.id}
-              className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-6"
+              className="rounded-[10px] border border-line bg-surface p-6"
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">
-                  <p className="text-sm font-extrabold text-studio-ink">
+                  <p className="text-sm font-extrabold text-ink">
                     {names.get(alert.competitor_id) ?? "Unknown competitor"}
                   </p>
-                  <p className="mt-2 text-base leading-snug font-semibold text-studio-ink capitalize">
+                  <p className="mt-2 text-base leading-snug font-semibold text-ink capitalize">
                     {alert.pattern.replace(/_/g, " ")}
                   </p>
-                  <p className="mt-2 text-sm leading-relaxed text-studio-muted">
+                  <p className="mt-2 text-sm leading-relaxed text-ink-secondary">
                     {alert.interpretation}
                   </p>
-                  <p className="mt-3 text-xs text-studio-muted">
+                  <p className="mt-3 text-xs text-ink-secondary">
                     {new Date(alert.created_at).toLocaleString()}
                   </p>
                 </div>
-                <span className="shrink-0 rounded-full bg-studio-sky-soft px-3 py-1 text-xs font-bold text-studio-ink">
+                <span className="shrink-0 rounded-full bg-surface-sunken px-3 py-1 text-xs font-semibold text-ink">
                   {Math.round(alert.confidence * 100)}% confidence
                 </span>
               </div>

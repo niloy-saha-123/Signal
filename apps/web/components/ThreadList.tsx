@@ -1,5 +1,5 @@
 // Thread rail — list, select, new, and delete chat threads. Kept in the studio
-// token system (studio-*) to match the rest of the app.
+// token system to match the rest of the app.
 "use client";
 import type { ChatThreadSummary } from "../lib/api";
 
@@ -28,7 +28,7 @@ export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete 
     <div className="flex h-full flex-col">
       <button
         onClick={onNew}
-        className="m-3 inline-flex items-center justify-center gap-2 rounded-full bg-studio-ink px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#071625]"
+        className="m-3 inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
       >
         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m-7-7h14" />
@@ -45,8 +45,8 @@ export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete 
                 onClick={() => onSelect(thread.id)}
                 className={`w-full rounded-[10px] px-3 py-2.5 text-left text-sm transition-colors ${
                   isActive
-                    ? "bg-studio-action-soft text-studio-ink"
-                    : "text-studio-muted hover:bg-studio-sky-soft hover:text-studio-ink"
+                    ? "bg-accent-tint text-ink"
+                    : "text-ink-secondary hover:bg-surface-sunken hover:text-ink"
                 }`}
               >
                 <span className="block truncate font-semibold">
@@ -57,7 +57,7 @@ export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete 
               <button
                 onClick={() => onDelete(thread.id)}
                 aria-label="Delete chat"
-                className="absolute top-2 right-2 hidden rounded-full p-1 text-studio-muted hover:bg-studio-sky hover:text-studio-ink group-hover:block"
+                className="absolute top-2 right-2 hidden rounded-full p-1 text-ink-secondary hover:bg-accent-tint hover:text-ink group-hover:block"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -72,7 +72,7 @@ export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete 
           );
         })}
         {threads.length === 0 && (
-          <p className="px-3 py-4 text-xs text-studio-muted">No chats yet. Ask Signal something.</p>
+          <p className="px-3 py-4 text-xs text-ink-secondary">No chats yet. Ask Signal something.</p>
         )}
       </ul>
     </div>

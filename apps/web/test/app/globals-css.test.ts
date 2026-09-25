@@ -12,8 +12,8 @@ describe("globals.css", () => {
     expect(result.css.length).toBeGreaterThan(0);
     expect(result.css).toContain("::before");
     // Proves Tailwind's content detection reaches components/, not just app/ —
-    // this class only exists because the landing and dashboard use hover:bg-studio-sky-soft.
-    expect(result.css).toContain("hover\\:bg-studio-sky-soft");
+    // this class only exists because primitives and the landing use hover:bg-surface-sunken.
+    expect(result.css).toContain("hover\\:bg-surface-sunken");
   });
 
   it("emits the Part 4 semantic color tokens as CSS custom properties", async () => {

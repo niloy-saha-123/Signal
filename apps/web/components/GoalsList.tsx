@@ -86,25 +86,25 @@ export function GoalsList() {
   }
 
   return (
-    <section className="rounded-[1.6rem] bg-studio-paper p-6">
+    <section className="rounded-[10px] bg-surface p-6">
       <div className="flex items-baseline justify-between">
-        <h2 className="font-display text-xl font-semibold tracking-tight text-studio-ink">
+        <h2 className=" text-xl font-semibold tracking-tight text-ink">
           Goals &amp; plans
         </h2>
-        <span className="text-xs font-medium text-studio-muted">Editable by you and Signal</span>
+        <span className="text-xs font-medium text-ink-secondary">Editable by you and Signal</span>
       </div>
 
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
       {loading ? (
-        <p className="mt-4 text-sm text-studio-muted">Loading…</p>
+        <p className="mt-4 text-sm text-ink-secondary">Loading…</p>
       ) : (
         <ul className="mt-4 flex flex-col gap-2">
           {goals.map((goal) => (
             <li
               key={goal.id}
               data-testid={`goal-${goal.id}`}
-              className="flex items-start gap-2 rounded-[10px] border border-studio-line bg-studio-sky-soft px-3 py-2.5"
+              className="flex items-start gap-2 rounded-[10px] border border-line bg-surface-sunken px-3 py-2.5"
             >
               {editingId === goal.id ? (
                 <div className="flex w-full items-center gap-2">
@@ -115,22 +115,22 @@ export function GoalsList() {
                       if (e.key === "Enter") void handleSave(goal.id);
                       if (e.key === "Escape") setEditingId(null);
                     }}
-                    className="w-full rounded-[10px] border border-studio-line bg-white px-3 py-1.5 text-sm text-studio-ink focus:border-studio-action focus:outline-none"
+                    className="w-full rounded-[10px] border border-line bg-white px-3 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => void handleSave(goal.id)}
-                    className="shrink-0 rounded-[10px] bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                    className="shrink-0 rounded-[10px] bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover"
                   >
                     Save
                   </button>
                 </div>
               ) : (
                 <>
-                  <p className="flex-1 text-sm text-studio-ink">{goal.content}</p>
+                  <p className="flex-1 text-sm text-ink">{goal.content}</p>
                   <div className="flex shrink-0 items-center gap-1">
                     {goal.created_by === "agent" && (
-                      <span className="rounded-full bg-studio-action-soft px-2 py-0.5 text-[10px] font-semibold text-studio-action">
+                      <span className="rounded-full bg-accent-tint px-2 py-0.5 text-[10px] font-semibold text-accent">
                         Signal
                       </span>
                     )}
@@ -140,7 +140,7 @@ export function GoalsList() {
                         setEditingId(goal.id);
                         setEditingText(goal.content);
                       }}
-                      className="rounded-full p-1 text-studio-muted hover:bg-white hover:text-studio-ink"
+                      className="rounded-full p-1 text-ink-secondary hover:bg-white hover:text-ink"
                       aria-label="Edit goal"
                     >
                       ✎
@@ -148,7 +148,7 @@ export function GoalsList() {
                     <button
                       type="button"
                       onClick={() => void handleArchive(goal.id)}
-                      className="rounded-full p-1 text-studio-muted hover:bg-white hover:text-studio-ink"
+                      className="rounded-full p-1 text-ink-secondary hover:bg-white hover:text-ink"
                       aria-label="Archive goal"
                     >
                       ⌫
@@ -159,7 +159,7 @@ export function GoalsList() {
             </li>
           ))}
           {goals.length === 0 && (
-            <li className="rounded-[10px] border border-dashed border-studio-line px-3 py-4 text-sm text-studio-muted">
+            <li className="rounded-[10px] border border-dashed border-line px-3 py-4 text-sm text-ink-secondary">
               No goals yet — add one, or ask Signal in chat to draft one.
             </li>
           )}
@@ -171,12 +171,12 @@ export function GoalsList() {
           value={newGoal}
           onChange={(e) => setNewGoal(e.target.value)}
           placeholder="Add a goal or plan…"
-          className="w-full rounded-[10px] border border-studio-line bg-white px-3 py-2 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
+          className="w-full rounded-[10px] border border-line bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none"
         />
         <button
           type="submit"
           disabled={adding || newGoal.trim().length === 0}
-          className="shrink-0 rounded-[10px] bg-studio-ink px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+          className="shrink-0 rounded-[10px] bg-accent px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-30"
         >
           Add
         </button>
