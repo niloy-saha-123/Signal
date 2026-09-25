@@ -157,3 +157,6 @@ CLAUDE.md
 # Local scratch/debug scripts
 *.tmp.cjs
 *.tmp.js
+
+# Vitest JSON reporter output (local run artifacts)
+.vitest/
