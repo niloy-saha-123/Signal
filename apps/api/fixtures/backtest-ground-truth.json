@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "description": "Verified ground truth for backtesting Signal's forecaster against real devtool launches. Each case pairs a public pre-announcement artifact with the announcement that followed it. Every date and URL below was checked against the vendor's own blog — nothing here is inferred, and a case that could not be verified from a primary source was left out rather than estimated.",
+  "verification_method": "For each case: (1) locate the official announcement post and read its publication date from the vendor's own site; (2) locate the earliest public artifact that signalled the same work and read its date the same way; (3) record both URLs. Cases where step 2 could not be satisfied from a primary source are excluded.",
+  "known_gaps": [
+    "Two positive cases is far too few to produce a meaningful accuracy number. This file is a starting point, not a benchmark.",
+    "No control cases yet. A control is a window of routine activity where no launch followed, and asserting 'nothing happened' needs the same primary-source rigour as asserting something did. Fabricating controls would be worse than having none, because they would silently inflate any specificity figure computed from this file.",
+    "Both cases use blog posts as the pre-announcement artifact. The GitHub collector's real thesis is that branches, pull request titles and new repositories lead even those — cases resting on that evidence need repository archaeology that has not been done here."
+  ],
+  "cases": [
+    {
+      "id": "deno-2",
+      "subject": "Deno",
+      "title": "Deno 2.0 major release",
+      "pattern_type": "product_launch",
+      "pre_announcement": {
+        "observed_at": "2024-09-19T00:00:00.000Z",
+        "source_url": "https://deno.com/blog/v2.0-release-candidate",
+        "what_it_was": "Deno published a 2.0 release candidate describing it as the largest update since 1.0, naming the Node process global, deno add/deno remove, WebGPU and FFI stabilisation, and CommonJS support.",
+        "why_it_is_a_signal": "A release candidate enumerating breaking changes is a commitment to ship, not an exploration. The specific features named here are the ones the launch post led with."
+      },
+      "outcome": {
+        "occurred_at": "2024-10-09T00:00:00.000Z",
+        "source_url": "https://deno.com/blog/v2.0",
+        "what_happened": "Deno 2 was announced, with long-term support and Node/npm compatibility as the headline."
+      },
+      "lead_time_days": 20,
+      "resolution_criteria": {
+        "kind": "signal_match",
+        "all_of": ["deno 2"],
+        "sources": ["changelog", "hn", "github"]
+      }
+    },
+    {
+      "id": "tailwind-v4",
+      "subject": "Tailwind CSS",
+      "title": "Tailwind CSS v4.0 stable release",
+      "pattern_type": "product_launch",
+      "pre_announcement": {
+        "observed_at": "2024-03-06T00:00:00.000Z",
+        "source_url": "https://tailwindcss.com/blog/tailwindcss-v4-alpha",
+        "what_it_was": "Tailwind open-sourced its v4.0 progress and tagged the first public v4.0.0-alpha, describing the new engine previously codenamed Oxide.",
+        "why_it_is_a_signal": "A tagged public alpha with a named engine rewrite is the clearest possible statement of what the next major version will be, and it preceded the stable release by most of a year."
+      },
+      "outcome": {
+        "occurred_at": "2025-01-22T00:00:00.000Z",
+        "source_url": "https://tailwindcss.com/blog/tailwindcss-v4",
+        "what_happened": "Tailwind CSS v4.0 shipped stable, led by build-performance gains and a reimagined configuration model."
+      },
+      "lead_time_days": 322,
+      "resolution_criteria": {
+        "kind": "signal_match",
+        "all_of": ["tailwind", "v4"],
+        "sources": ["changelog", "hn", "github"]
+      }
+    }
+  ]
+}

@@ -280,7 +280,7 @@ Chat answers arrive as SSE frames: `token` frames stream the draft live, then a 
 
 Signal ships evaluation harnesses that run in CI and on demand, but no benchmark results are published here — the product hasn't yet been run against a verified dataset, so there are no claimed accuracy numbers.
 
-- **Backtesting** (`npm run backtest:full`): replays human-verified historical events against the pipeline and reports lead time, confidence, and correctness. The harness is built; results are published only once a verified case file is supplied.
+- **Backtesting** (`npm run backtest:full`): replays human-verified historical events against the pipeline and reports lead time, confidence, and correctness. The harness is built and a verified case file has been started (`apps/api/fixtures/backtest-ground-truth.json`) — two real devtool launches, every date and URL read from the vendor's own blog. It is deliberately not a benchmark yet: two positive cases and no controls would produce a number that is noise, and `apps/api/fixtures/README.md` states exactly what has to happen before one is published. No accuracy figure is claimed here until that work is done.
 - **Prompt versioning** (`npm run eval` / `npm run promote`): every prompt change is gated by a regression suite, and promotion requires a statistically significant improvement over the active version.
 - **Deduplication calibration** (`npm run dedup-calibration`): scores the dedup threshold against human-labeled pairs and recommends a value without ever editing the runtime threshold.
 - **RAG quality** (`npm run rag-eval`): runs curated Q&A pairs through the chat pipeline and scores faithfulness with an LLM judge. It runs in CI and fails the build below a configured threshold.
