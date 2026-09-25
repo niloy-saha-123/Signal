@@ -1,5 +1,6 @@
 // Typed Drizzle query functions used by the API routes and agents.
 import { eq, and, asc, desc, inArray, gte, lte, count, sql, type SQL } from "drizzle-orm";
+import { computeCalibration, type Calibration } from "../lib/calibration";
 import { z } from "zod";
 import type {
   AgentName,
@@ -1073,6 +1074,52 @@ export async function resolvePrediction(input: ResolvePredictionInput): Promise<
       brier_score: input.brier_score,
     })
     .where(and(eq(predictionsTable.id, input.id), eq(predictionsTable.status, "open")));
+}
+
+export interface CalibrationQuery {
+  competitorId?: string;
+  patternType?: PredictionPatternType;
+}
+
+// A workspace's forecasting track record. Only `hit` and `miss` are selected —
+// filtering in SQL rather than in JavaScript so an unscoreable row can never
+// reach computeCalibration, where an `unresolved` treated as a miss would let a
+// competitor going quiet damage the score, and a `void` would let a human's
+// bookkeeping move it.
+//
+// Returns brier: null for an empty track record. See lib/calibration.ts: zero is
+// a perfect score, so "nothing has resolved yet" must not render as flawless.
+export async function getCalibration(
+  workspaceId: string,
+  opts: CalibrationQuery = {}
+): Promise<Calibration> {
+  const conditions = [
+    eq(predictionsTable.workspace_id, workspaceId),
+    inArray(predictionsTable.status, ["hit", "miss"]),
+  ];
+  if (opts.competitorId) {
+    conditions.push(eq(predictionsTable.competitor_id, opts.competitorId));
+  }
+  if (opts.patternType) {
+    conditions.push(eq(predictionsTable.pattern_type, opts.patternType));
+  }
+
+  const rows = await db
+    .select({
+      probability: predictionsTable.probability,
+      status: predictionsTable.status,
+    })
+    .from(predictionsTable)
+    .where(and(...conditions));
+
+  return computeCalibration(
+    rows
+      .filter(
+        (row): row is { probability: number; status: "hit" | "miss" } =>
+          row.status === "hit" || row.status === "miss"
+      )
+      .map((row) => ({ probability: row.probability, status: row.status }))
+  );
 }
 
 // ── resolution windows ───────────────────────────────────────────────────
