@@ -9,8 +9,8 @@ export default async function ComparePage() {
   const token = await getOptionalAccessToken();
   if (!token) {
     return (
-      <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper px-6 py-12">
-        <p className="text-sm text-studio-muted">Sign in to see how you compare to competitors.</p>
+      <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+        <p className="text-sm text-ink-secondary">Sign in to see how you compare to competitors.</p>
       </div>
     );
   }
@@ -22,15 +22,15 @@ export default async function ComparePage() {
     return (
       <div className="flex flex-col gap-8">
         <div className="flex flex-col gap-1">
-          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
             Us vs. them
           </h1>
-          <p className="text-sm text-studio-muted">
+          <p className="text-sm text-ink-secondary">
             How your company&apos;s posture compares to the competitors you track.
           </p>
         </div>
-        <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper px-6 py-12">
-          <p className="max-w-md text-sm leading-relaxed text-studio-muted">
+        <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+          <p className="max-w-md text-sm leading-relaxed text-ink-secondary">
             Signal hasn&apos;t built your company&apos;s own profile yet. It runs after your weekly analysis
             sweep — check back once tracking is active.
           </p>
@@ -44,18 +44,18 @@ export default async function ComparePage() {
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
-        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+        <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
           Us vs. them
         </h1>
-        <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
+        <p className="max-w-xl text-sm leading-relaxed text-ink-secondary">
           Competitors did these things, you haven&apos;t — with Signal&apos;s read on why and what you
           might do. Advisory only; Signal never acts on these.
         </p>
       </div>
 
       {alerts.length === 0 ? (
-        <div className="rounded-[1.6rem] border border-studio-line bg-studio-paper px-6 py-12">
-          <p className="text-sm text-studio-muted">No comparison generated yet.</p>
+        <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+          <p className="text-sm text-ink-secondary">No comparison generated yet.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-4">
@@ -68,21 +68,21 @@ export default async function ComparePage() {
             return (
               <div
                 key={alert.id}
-                className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-6"
+                className="rounded-[10px] border border-line bg-surface p-6"
               >
-                <h2 className="text-lg font-extrabold text-studio-ink">{alert.pattern}</h2>
-                <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-studio-muted">
+                <h2 className="text-lg font-extrabold text-ink">{alert.pattern}</h2>
+                <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-secondary">
                   {alert.interpretation}
                 </p>
 
                 {observations.length > 0 && (
                   <div className="mt-4">
-                    <p className="text-xs font-bold uppercase tracking-wide text-studio-muted">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
                       They moved
                     </p>
                     <ul className="mt-2 flex flex-col gap-2">
                       {observations.map((observation, index) => (
-                        <li key={index} className="text-sm text-studio-ink">
+                        <li key={index} className="text-sm text-ink">
                           <span className="font-semibold">{observation.competitor_name ?? "A competitor"}</span>
                           {" — "}
                           {observation.what_they_did ?? ""}
@@ -94,12 +94,12 @@ export default async function ComparePage() {
 
                 {actions.length > 0 && (
                   <div className="mt-4">
-                    <p className="text-xs font-bold uppercase tracking-wide text-studio-muted">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-ink-secondary">
                       You could
                     </p>
                     <ul className="mt-2 flex flex-col gap-2">
                       {actions.map((action, index) => (
-                        <li key={index} className="text-sm text-studio-ink">
+                        <li key={index} className="text-sm text-ink">
                           {action.action ?? ""}
                         </li>
                       ))}
@@ -107,7 +107,7 @@ export default async function ComparePage() {
                   </div>
                 )}
 
-                <p className="mt-4 text-xs text-studio-muted">
+                <p className="mt-4 text-xs text-ink-secondary">
                   {new Date(alert.created_at).toLocaleString()}
                 </p>
               </div>
@@ -118,7 +118,7 @@ export default async function ComparePage() {
 
       <Link
         href="/company"
-        className="self-start text-sm font-semibold text-studio-action hover:underline"
+        className="self-start text-sm font-semibold text-accent hover:underline"
       >
         ← Back to company
       </Link>

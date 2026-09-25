@@ -70,7 +70,7 @@ export function CommandBar({ commands }: CommandBarProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/40 pt-24"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-ink/40 pt-24"
       role="dialog"
       aria-modal="true"
     >
@@ -81,7 +81,7 @@ export function CommandBar({ commands }: CommandBarProps) {
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={onInputKeyDown}
           placeholder="Type a command…"
-          className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm outline-none"
+          className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none"
         />
         <ul className="mt-2 flex flex-col">
           {filtered.map((command, index) => (
@@ -90,18 +90,18 @@ export function CommandBar({ commands }: CommandBarProps) {
                 type="button"
                 onClick={() => select(command)}
                 className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${
-                  index === activeIndex ? "bg-studio-sky-soft text-studio-ink" : "text-studio-muted"
+                  index === activeIndex ? "bg-surface-sunken text-ink" : "text-ink-secondary"
                 }`}
               >
                 <span>{command.label}</span>
                 {command.shortcut ? (
-                  <span className="text-xs text-slate-400">{command.shortcut}</span>
+                  <span className="text-xs text-ink-muted">{command.shortcut}</span>
                 ) : null}
               </button>
             </li>
           ))}
           {filtered.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-slate-400">No matching commands.</li>
+            <li className="px-3 py-2 text-sm text-ink-muted">No matching commands.</li>
           ) : null}
         </ul>
       </div>

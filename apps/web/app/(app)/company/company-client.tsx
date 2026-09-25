@@ -21,7 +21,7 @@ function splitList(value: string): string[] {
 
 const STATUS_BADGE: Record<string, string> = {
   structured: "bg-emerald-100 text-emerald-700",
-  embedded: "bg-studio-sky text-studio-ink",
+  embedded: "bg-accent-tint text-ink",
   pending: "bg-amber-100 text-amber-700",
   failed: "bg-red-100 text-red-700",
 };
@@ -151,16 +151,16 @@ export function CompanyClient({
     <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
             Company
           </h1>
-          <p className="text-sm text-studio-muted">
+          <p className="text-sm text-ink-secondary">
             The context Signal uses to decide what matters to you — plus the documents it learned from.
           </p>
         </div>
         <Link
           href="/company/compare"
-          className="inline-flex min-h-11 items-center rounded-full border border-studio-line bg-studio-paper px-5 text-sm font-bold text-studio-ink transition-colors hover:bg-studio-sky-soft"
+          className="inline-flex min-h-11 items-center rounded-full border border-line bg-surface px-5 text-sm font-semibold text-ink transition-colors hover:bg-surface-sunken"
         >
           Us vs. them
         </Link>
@@ -169,10 +169,10 @@ export function CompanyClient({
       {/* Signal goal */}
       <form
         onSubmit={handleSaveGoal}
-        className="flex max-w-2xl flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-8"
+        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
       >
-        <h2 className="text-sm font-bold text-studio-ink">Signal goal</h2>
-        <p className="text-xs leading-relaxed text-studio-muted">
+        <h2 className="text-sm font-semibold text-ink">Signal goal</h2>
+        <p className="text-xs leading-relaxed text-ink-secondary">
           What are you trying to do against your competitors? Signal judges every signal against
           this. &ldquo;Defend the enterprise tier&rdquo; reads very differently from
           &ldquo;catch up to Acme.&rdquo;
@@ -183,13 +183,13 @@ export function CompanyClient({
           rows={2}
           disabled={goalLoading}
           placeholder="e.g. Catch up to Acme in the mid-market"
-          className="rounded-[10px] bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky disabled:opacity-60"
+          className="rounded-[10px] bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint disabled:opacity-60"
         />
-        {goalMessage && <p className="text-sm text-studio-muted">{goalMessage}</p>}
+        {goalMessage && <p className="text-sm text-ink-secondary">{goalMessage}</p>}
         <button
           type="submit"
           disabled={goalSaving || goalLoading}
-          className="self-start rounded-full bg-studio-ink px-6 py-3 text-sm font-bold text-white hover:bg-[#071625] disabled:opacity-50"
+          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
         >
           Save goal
         </button>
@@ -198,84 +198,84 @@ export function CompanyClient({
       {/* Profile */}
       <form
         onSubmit={handleSave}
-        className="flex max-w-2xl flex-col gap-5 rounded-[1.6rem] border border-studio-line bg-studio-paper p-8"
+        className="flex max-w-2xl flex-col gap-5 rounded-[10px] border border-line bg-surface p-8"
       >
-        <h2 className="text-sm font-bold text-studio-ink">Company profile</h2>
+        <h2 className="text-sm font-semibold text-ink">Company profile</h2>
 
-        <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
           Product description
           <textarea
             value={productDescription}
             onChange={(e) => setProductDescription(e.target.value)}
             required
             rows={4}
-            className="rounded-[10px] bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+            className="rounded-[10px] bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
             placeholder="What your product does, and for whom."
           />
         </label>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+          <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
             ICP company size
             <input
               value={icpCompanySize}
               onChange={(e) => setIcpCompanySize(e.target.value)}
-              className="rounded-full bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+              className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
               placeholder="e.g. 50–250 employees"
             />
           </label>
-          <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+          <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
             ICP buyer role
             <input
               value={icpBuyerRole}
               onChange={(e) => setIcpBuyerRole(e.target.value)}
-              className="rounded-full bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+              className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
               placeholder="e.g. Head of Product"
             />
           </label>
         </div>
 
-        <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
           ICP industries (comma-separated)
           <input
             value={icpIndustries}
             onChange={(e) => setIcpIndustries(e.target.value)}
-            className="rounded-full bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
             placeholder="SaaS, fintech, healthcare"
           />
         </label>
 
-        <label className="flex flex-col gap-2 text-sm font-semibold text-studio-ink">
+        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
           Key differentiators (comma-separated)
           <input
             value={differentiators}
             onChange={(e) => setDifferentiators(e.target.value)}
-            className="rounded-full bg-studio-sky-soft px-4 py-3 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
             placeholder="Cheaper, faster onboarding, enterprise SSO"
           />
         </label>
 
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-semibold text-studio-ink">Pricing tiers</p>
+          <p className="text-sm font-semibold text-ink">Pricing tiers</p>
           {tiers.map((tier, index) => (
             <div key={index} className="flex gap-2">
               <input
                 value={tier.name}
                 onChange={(e) => updateTier(index, { name: e.target.value })}
                 placeholder="Tier name"
-                className="min-w-0 flex-1 rounded-full bg-studio-sky-soft px-4 py-2.5 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+                className="min-w-0 flex-1 rounded-full bg-surface-sunken px-4 py-2.5 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
               />
               <input
                 type="number"
                 value={Number.isFinite(tier.price) ? tier.price : ""}
                 onChange={(e) => updateTier(index, { price: Number(e.target.value) })}
                 placeholder="Price"
-                className="w-24 rounded-full bg-studio-sky-soft px-4 py-2.5 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+                className="w-24 rounded-full bg-surface-sunken px-4 py-2.5 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
               />
               <select
                 value={tier.billing}
                 onChange={(e) => updateTier(index, { billing: e.target.value as PricingTier["billing"] })}
-                className="rounded-full bg-studio-sky-soft px-3 py-2.5 text-sm font-normal text-studio-ink outline-none focus:bg-studio-sky"
+                className="rounded-full bg-surface-sunken px-3 py-2.5 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
               >
                 <option value="monthly">Monthly</option>
                 <option value="annual">Annual</option>
@@ -284,7 +284,7 @@ export function CompanyClient({
               <button
                 type="button"
                 onClick={() => setTiers((current) => current.filter((_, i) => i !== index))}
-                className="rounded-full px-3 text-studio-muted hover:text-studio-ink"
+                className="rounded-full px-3 text-ink-secondary hover:text-ink"
                 aria-label="Remove tier"
               >
                 ✕
@@ -294,16 +294,16 @@ export function CompanyClient({
           <button
             type="button"
             onClick={() => setTiers((current) => [...current, { name: "", price: 0, billing: "monthly" }])}
-            className="self-start rounded-full bg-studio-sky-soft px-4 py-2 text-sm font-semibold text-studio-action hover:bg-studio-sky"
+            className="self-start rounded-full bg-surface-sunken px-4 py-2 text-sm font-semibold text-accent hover:bg-accent-tint"
           >
             + Add tier
           </button>
         </div>
 
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-semibold text-studio-ink">Primary competitors</p>
+          <p className="text-sm font-semibold text-ink">Primary competitors</p>
           {competitors.length === 0 ? (
-            <p className="text-xs text-studio-muted">Add competitors first, then flag the primary ones.</p>
+            <p className="text-xs text-ink-secondary">Add competitors first, then flag the primary ones.</p>
           ) : (
             <div className="flex flex-wrap gap-2">
               {competitors.map((competitor) => {
@@ -313,8 +313,8 @@ export function CompanyClient({
                     key={competitor.id}
                     className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors ${
                       checked
-                        ? "border-studio-action bg-studio-action-soft text-studio-action"
-                        : "border-studio-line bg-studio-paper text-studio-muted"
+                        ? "border-accent bg-accent-tint text-accent"
+                        : "border-line bg-surface text-ink-secondary"
                     }`}
                   >
                     <input
@@ -331,20 +331,20 @@ export function CompanyClient({
           )}
         </div>
 
-        {message && <p className="text-sm text-studio-muted">{message}</p>}
+        {message && <p className="text-sm text-ink-secondary">{message}</p>}
         <button
           type="submit"
           disabled={saving}
-          className="self-start rounded-full bg-studio-ink px-6 py-3 text-sm font-bold text-white hover:bg-[#071625] disabled:opacity-50"
+          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
         >
           Save profile
         </button>
       </form>
 
       {/* Documents */}
-      <section className="flex max-w-2xl flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-8">
+      <section className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8">
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-sm font-bold text-studio-ink">Documents</h2>
+          <h2 className="text-sm font-semibold text-ink">Documents</h2>
           <input
             ref={fileInputRef}
             type="file"
@@ -359,35 +359,35 @@ export function CompanyClient({
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="rounded-full bg-studio-action px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-studio-action-hover disabled:opacity-50"
+            className="rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
           >
             {uploading ? "Uploading…" : "Upload documents"}
           </button>
         </div>
-        <p className="text-xs text-studio-muted">
+        <p className="text-xs text-ink-secondary">
           PDF, TXT, MD, DOC, DOCX, CSV, JSON, or RTF — up to {formatBytes(10 * 1024 * 1024)} each.
           Structured content merges into your profile; narrative text is embedded for retrieval.
         </p>
         {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
 
         {documents.length === 0 ? (
-          <p className="text-sm text-studio-muted">No documents yet.</p>
+          <p className="text-sm text-ink-secondary">No documents yet.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {documents.map((doc) => (
               <li
                 key={doc.id}
-                className="flex items-center justify-between gap-4 rounded-[10px] bg-studio-sky-soft px-4 py-3"
+                className="flex items-center justify-between gap-4 rounded-[10px] bg-surface-sunken px-4 py-3"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-studio-ink">{doc.filename}</p>
-                  <p className="text-xs text-studio-muted">
+                  <p className="truncate text-sm font-semibold text-ink">{doc.filename}</p>
+                  <p className="text-xs text-ink-secondary">
                     {doc.doc_type ?? "document"} · {new Date(doc.created_at).toLocaleDateString()}
                   </p>
                 </div>
                 <span
                   className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                    STATUS_BADGE[doc.extraction_status] ?? "bg-studio-sky-soft text-studio-muted"
+                    STATUS_BADGE[doc.extraction_status] ?? "bg-surface-sunken text-ink-secondary"
                   }`}
                 >
                   {doc.extraction_status}

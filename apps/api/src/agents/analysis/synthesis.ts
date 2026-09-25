@@ -40,6 +40,7 @@ import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { isLlmBudgetExhausted } from "./branch-node";
 import { AnalysisDecisionSchema } from "./contracts";
 import { deliverAlertToSlack } from "../../integrations/slack/delivery";
+import { guardedMessages } from "../chat/untrusted";
 
 const AGENT_NAME = "synthesis" as const;
 // "claude-sonnet" IS a DOWNGRADE_MAP key — selectModel can hand back either "claude-sonnet"
@@ -399,10 +400,7 @@ export async function synthesisNode(
     };
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
-        structuredModel.invoke([
-          ["system", systemPrompt],
-          ["human", contextText],
-        ])
+        structuredModel.invoke(guardedMessages(systemPrompt, contextText, "analysis branch findings"))
       )
     );
 

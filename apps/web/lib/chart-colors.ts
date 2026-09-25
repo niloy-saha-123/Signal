@@ -11,6 +11,9 @@ export const SOURCE_COLORS = {
   changelog: "#eda100",
   pricing: "#e87ba4",
   github: "#4b5563",
+  website: "#9a6a3a",
+  community: "#7a8b2e",
+  postings: "#1c9aa8",
 } as const;
 
 export const STATUS_COLORS = {

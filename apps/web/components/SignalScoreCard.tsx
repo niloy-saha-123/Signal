@@ -38,11 +38,11 @@ export function SignalScoreCard({ competitorName, score, delta7d, history }: Sig
   const mark = deltaMark(delta7d);
 
   return (
-    <div className="rounded-[10px] border border-studio-line bg-studio-paper p-4">
-      <p className="text-sm font-medium text-studio-muted">{competitorName}</p>
+    <div className="rounded-[10px] border border-line bg-surface p-4">
+      <p className="text-sm font-medium text-ink-secondary">{competitorName}</p>
       <div className="mt-1 flex items-baseline gap-2">
-        <span className="text-3xl font-semibold tabular-nums text-studio-ink">{score}</span>
-        <span className="flex items-baseline gap-1 text-sm tabular-nums text-studio-muted">
+        <span className="text-3xl font-semibold tabular-nums text-ink">{score}</span>
+        <span className="flex items-baseline gap-1 text-sm tabular-nums text-ink-secondary">
           <span style={{ color: mark.color }}>{mark.glyph}</span>
           <span>{mark.label}</span>
         </span>

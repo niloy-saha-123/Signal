@@ -5,12 +5,12 @@ import { OnboardingForm } from "./onboarding-form";
 
 export default function Page() {
   return (
-    <div className="mx-auto flex max-w-sm flex-col gap-6 py-16">
-      <div className="text-center">
-        <span className="text-lg font-semibold text-ink">Signal</span>
-        <h1 className="mt-2 text-xl font-semibold text-slate-900">Create your workspace</h1>
+    <div className="flex flex-col gap-7">
+      <div>
+        <h1 className="text-[28px] font-semibold tracking-[-0.025em] text-ink">Create your workspace</h1>
+        <p className="mt-1.5 text-[14px] text-ink-secondary">Name it. You can add competitors next.</p>
       </div>
-      <div className="rounded-[10px] border border-slate-200 bg-white p-6">
+      <div className="rounded-xl border border-line bg-surface p-6 shadow-[0_20px_50px_-30px_rgba(11,59,56,0.3)]">
         <OnboardingForm />
       </div>
     </div>

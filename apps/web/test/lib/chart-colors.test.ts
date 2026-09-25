@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CHART_CHROME,
@@ -9,7 +11,7 @@ import {
 } from "../../lib/chart-colors";
 
 describe("lib/chart-colors", () => {
-  it("exposes the six signal-source categorical colors in the dataviz palette's fixed order", () => {
+  it("exposes the nine signal-source categorical colors in the dataviz palette's fixed order", () => {
     expect(SOURCE_COLORS).toEqual({
       reddit: "#2a78d6",
       hn: "#eb6834",
@@ -19,6 +21,9 @@ describe("lib/chart-colors", () => {
       // GitHub's own mark is near-black; slate reads as the same family without
       // colliding with the five hues already assigned.
       github: "#4b5563",
+      website: "#9a6a3a",
+      community: "#7a8b2e",
+      postings: "#1c9aa8",
     });
   });
 
@@ -57,5 +62,12 @@ describe("lib/chart-colors", () => {
   it("maps Signal Score delta direction to the correct threat-semantics color (rising=critical, falling=good)", () => {
     expect(SCORE_DELTA_COLORS.rising).toBe(STATUS_COLORS.critical);
     expect(SCORE_DELTA_COLORS.falling).toBe(STATUS_COLORS.good);
+  });
+
+  it("keeps every source color identical to its CSS token, so charts and chips agree", () => {
+    const css = readFileSync(path.resolve(__dirname, "../../app/globals.css"), "utf-8");
+    for (const [source, hex] of Object.entries(SOURCE_COLORS)) {
+      expect(css).toContain(`--color-source-${source}: ${hex};`);
+    }
   });
 });

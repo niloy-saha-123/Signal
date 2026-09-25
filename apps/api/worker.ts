@@ -6,9 +6,11 @@ import { registerQueueSchedules } from "./src/queues/scheduler";
 import { initRedditWorker } from "./src/collectors/reddit";
 import { initHnWorker } from "./src/collectors/hn";
 import { initJobsWorker } from "./src/collectors/jobs";
-import { initChangelogWorker } from "./src/collectors/changelog";
+import { initChangelogWorker, initPostingsWorker } from "./src/collectors/changelog";
 import { initPricingWorker } from "./src/collectors/pricing";
 import { initGithubWorker } from "./src/collectors/github";
+import { initWebsiteWorker } from "./src/collectors/website";
+import { initCommunityWorker } from "./src/collectors/community";
 import { initEntityExtractorWorker } from "./src/pipeline/entity-extractor";
 import { initQualityScorerWorker } from "./src/pipeline/quality-scorer";
 import { initDeduplicatorWorker } from "./src/pipeline/deduplicator";
@@ -64,6 +66,9 @@ const defaultDeps: WorkerRuntimeDeps = {
         initChangelogWorker,
         initPricingWorker,
         initGithubWorker,
+        initWebsiteWorker,
+        initCommunityWorker,
+        initPostingsWorker,
         initEntityExtractorWorker,
         initQualityScorerWorker,
         initDeduplicatorWorker,

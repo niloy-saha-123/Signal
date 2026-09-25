@@ -24,6 +24,19 @@ function fakeDeps(overrides: Partial<ChatToolDeps> = {}): ChatToolDeps {
     enqueue: vi.fn().mockResolvedValue(undefined),
     enqueueDiscovery: vi.fn().mockResolvedValue(undefined),
     fetchUrlPage: vi.fn().mockResolvedValue("page text"),
+    listPredictionsForWorkspace: vi.fn().mockResolvedValue([]),
+    getPredictionForWorkspace: vi.fn().mockResolvedValue(undefined),
+    voidPredictionForWorkspace: vi.fn().mockResolvedValue(true),
+    getCalibration: vi
+      .fn()
+      .mockResolvedValue({ resolved_count: 0, brier: null, baseline_brier: 0.25, buckets: [] }),
+    listAlertFeed: vi.fn().mockResolvedValue([]),
+    getWorkspaceActivity: vi.fn().mockResolvedValue({
+      runs: [],
+      spend_today_usd: 0,
+      daily_budget_usd: 2,
+      open_circuits: [],
+    }),
     ...overrides,
   };
 }
@@ -33,10 +46,16 @@ function registry(deps: ChatToolDeps): Map<string, ChatTool> {
 }
 
 describe("agents/chat/tools — registry shape", () => {
-  it("exposes 9 tools with the expected mutating flags", () => {
+  it("exposes 15 tools with the expected mutating flags", () => {
     const tools = buildChatTools(WORKSPACE_ID, fakeDeps());
     expect(tools.map((t) => [t.name, t.mutating])).toEqual([
       ["list_competitors", false],
+      ["list_predictions", false],
+      ["get_prediction", false],
+      ["get_calibration", false],
+      ["list_alerts", false],
+      ["get_agent_activity", false],
+      ["void_prediction", true],
       ["get_competitor_score", false],
       ["get_competitor_trend", false],
       ["list_company_goals", false],
@@ -171,10 +190,11 @@ describe("agents/chat/tools — ENABLE_CHAT_MUTATING_TOOLS flag", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns 9 tools (4 mutating) by default with no env set", () => {
+  it("returns 15 tools (5 mutating) by default with no env set", () => {
     const tools = buildChatTools(WORKSPACE_ID, fakeDeps());
-    expect(tools).toHaveLength(9);
+    expect(tools).toHaveLength(15);
     expect(tools.filter((t) => t.mutating).map((t) => t.name)).toEqual([
+      "void_prediction",
       "create_competitor",
       "trigger_competitor_analysis",
       "update_company_goals",
@@ -182,16 +202,25 @@ describe("agents/chat/tools — ENABLE_CHAT_MUTATING_TOOLS flag", () => {
     ]);
   });
 
-  it("returns only the 5 read tools when ENABLE_CHAT_MUTATING_TOOLS is false", () => {
+  it("returns only the read tools when ENABLE_CHAT_MUTATING_TOOLS is false", () => {
+    // The kill switch must drop every writing tool, including the ones added
+    // later — a new mutating tool that survives the switch is the failure this
+    // assertion exists to catch.
     vi.stubEnv("ENABLE_CHAT_MUTATING_TOOLS", "false");
     const tools = buildChatTools(WORKSPACE_ID, fakeDeps());
     expect(tools.map((t) => t.name)).toEqual([
       "list_competitors",
+      "list_predictions",
+      "get_prediction",
+      "get_calibration",
+      "list_alerts",
+      "get_agent_activity",
       "get_competitor_score",
       "get_competitor_trend",
       "list_company_goals",
       "fetch_url",
     ]);
+    expect(tools.every((t) => !t.mutating)).toBe(true);
   });
 
   it("chatMutatingToolsEnabled is true by default and false only for exactly 'false'", () => {

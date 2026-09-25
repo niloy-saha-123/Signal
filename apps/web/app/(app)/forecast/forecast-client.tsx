@@ -182,20 +182,20 @@ export function ForecastClient({
       {/* The hero row leads with the track record, because a prediction is only
           worth reading if you know how often the thing making it is right. */}
       <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-4">
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-teal)] p-5">
           <Metric value={String(open.length)} label="Open" size="md" />
         </div>
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-sky)] p-5">
           <Metric value={String(calibration.resolved_count)} label="Resolved" size="md" />
         </div>
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-sage)] p-5">
           {scored ? (
             <Metric value={calibration.brier!.toFixed(3)} label="Brier score" size="md" />
           ) : (
             <Metric value="—" label="Brier score" size="md" tone="muted" />
           )}
         </div>
-        <div className="bg-surface p-5">
+        <div className="bg-[var(--color-tint-sand)] p-5">
           <Metric
             value={calibration.baseline_brier.toFixed(2)}
             label="Coin-flip baseline"
@@ -233,7 +233,7 @@ export function ForecastClient({
             aria-pressed={filter === value}
             className={
               filter === value
-                ? "rounded-md bg-ink px-3 py-1.5 text-[13px] font-medium text-ink-inverse"
+                ? "rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white"
                 : "rounded-md px-3 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink"
             }
           >

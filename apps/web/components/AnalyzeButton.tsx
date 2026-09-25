@@ -23,7 +23,7 @@ export function AnalyzeButton({ competitorId }: { competitorId: string }) {
     <button
       onClick={run}
       disabled={state === "running"}
-      className="inline-flex min-h-11 items-center gap-2 rounded-full bg-studio-ink px-5 text-sm font-bold text-white transition-colors hover:bg-[#071625] disabled:opacity-50"
+      className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-accent px-5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
     >
       {state === "queued" ? (
         <span className="h-2 w-2 rounded-full bg-emerald-400" />

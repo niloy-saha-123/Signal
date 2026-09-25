@@ -24,9 +24,9 @@ type Props = {
 
 function StatTile({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="flex flex-col gap-1 rounded-[1.4rem] border border-studio-line bg-studio-paper p-5">
-      <p className="text-sm font-semibold text-studio-muted">{label}</p>
-      <p className="font-display text-3xl font-semibold tabular-nums text-studio-ink">{value}</p>
+    <div className="flex flex-col gap-1 rounded-[10px] border border-line bg-surface p-5">
+      <p className="text-sm font-semibold text-ink-secondary">{label}</p>
+      <p className=" text-3xl font-semibold tabular-nums text-ink">{value}</p>
     </div>
   );
 }
@@ -52,23 +52,23 @@ export function BriefingClient({
     return (
       <div className="flex flex-col gap-8">
         <div className="flex flex-col gap-3">
-          <p className="text-sm font-semibold text-studio-muted">{dateStr}</p>
-          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+          <p className="text-sm font-semibold text-ink-secondary">{dateStr}</p>
+          <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
             Overnight briefing
           </h1>
         </div>
-        <section className="relative overflow-hidden rounded-[10px] border border-studio-line bg-studio-paper px-7 py-12 sm:px-12 sm:py-16">
-          <div className="absolute top-0 left-0 h-1 w-full bg-studio-action" />
-          <h2 className="max-w-xl font-display text-3xl font-bold tracking-[-0.035em] text-studio-ink">
+        <section className="relative overflow-hidden rounded-[10px] border border-line bg-surface px-7 py-12 sm:px-12 sm:py-16">
+          <div className="absolute top-0 left-0 h-1 w-full bg-accent" />
+          <h2 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-ink">
             Your briefing starts with a competitor.
           </h2>
-          <p className="mt-4 max-w-xl text-base leading-relaxed text-studio-muted">
+          <p className="mt-4 max-w-xl text-base leading-relaxed text-ink-secondary">
             Add the first company you want Signal to monitor. Once evidence arrives, this
             workspace will organize movements, scores, alerts, and source-backed analysis.
           </p>
           <Link
             href="/discovery"
-            className="mt-7 inline-flex min-h-11 items-center rounded-full bg-studio-ink px-5 text-sm font-bold text-white transition-colors hover:bg-[#071625]"
+            className="mt-7 inline-flex min-h-11 items-center rounded-lg bg-accent px-5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
           >
             Add your first competitor
           </Link>
@@ -79,11 +79,11 @@ export function BriefingClient({
 
   const getCategoryColor = (category: string) => {
     const colors: Record<string, string> = {
-      pricing: "bg-studio-action-soft text-studio-action",
-      product: "bg-[#fde8ee] text-[#9b3858]",
-      hiring: "bg-emerald-100 text-emerald-700",
-      content: "bg-studio-sky-soft text-studio-ink",
-      default: "bg-studio-sky-soft text-studio-muted",
+      pricing: "bg-accent-tint text-accent",
+      product: "bg-[var(--color-tint-sky)] text-ink",
+      hiring: "bg-[var(--color-tint-sage)] text-ink",
+      content: "bg-surface-sunken text-ink",
+      default: "bg-surface-sunken text-ink-secondary",
     };
     return colors[category] || colors.default;
   };
@@ -91,8 +91,8 @@ export function BriefingClient({
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-3">
-        <p className="text-sm font-semibold text-studio-muted">{dateStr}</p>
-        <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
+        <p className="text-sm font-semibold text-ink-secondary">{dateStr}</p>
+        <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
           Overnight briefing
         </h1>
       </div>
@@ -105,30 +105,30 @@ export function BriefingClient({
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
-        <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
-          <p className="text-sm font-bold text-studio-ink">Highest-signal movement</p>
+        <div className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6">
+          <p className="text-sm font-semibold text-ink">Highest-signal movement</p>
           {highestScore > 0 ? (
             <>
-              <p className="font-display text-5xl font-semibold tabular-nums text-studio-ink">
+              <p className=" text-5xl font-semibold tabular-nums text-ink">
                 {highestScore}
               </p>
-              <p className="text-sm font-bold text-studio-action">
+              <p className="text-sm font-semibold text-accent">
                 {highestScoreCompetitor} · {highestScoreDelta > 0 ? "+" : ""}
                 {highestScoreDelta} vs last week
               </p>
               {movements.length > 0 && (
-                <p className="text-sm leading-relaxed text-studio-muted">{movements[0].detail}</p>
+                <p className="text-sm leading-relaxed text-ink-secondary">{movements[0].detail}</p>
               )}
             </>
           ) : (
-            <p className="text-sm text-studio-muted">
+            <p className="text-sm text-ink-secondary">
               No signal data yet. Add competitors to start tracking.
             </p>
           )}
         </div>
 
-        <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
-          <p className="text-sm font-bold text-studio-ink">View</p>
+        <div className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6">
+          <p className="text-sm font-semibold text-ink">View</p>
           <div className="inline-flex w-fit gap-2">
             {[
               { value: "today" as const, label: "Today" },
@@ -138,17 +138,17 @@ export function BriefingClient({
               <button
                 key={option.value}
                 onClick={() => setTimeFilter(option.value)}
-                className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${
+                className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
                   timeFilter === option.value
-                    ? "bg-studio-ink text-white"
-                    : "bg-studio-paper text-studio-muted hover:bg-studio-sky-soft"
+                    ? "bg-accent text-white"
+                    : "bg-surface text-ink-secondary hover:bg-surface-sunken"
                 }`}
               >
                 {option.label}
               </button>
             ))}
           </div>
-          <p className="text-sm leading-relaxed text-studio-muted">
+          <p className="text-sm leading-relaxed text-ink-secondary">
             {movements.length === 0
               ? "No movements recorded in this window."
               : `${movements.length} movement${movements.length === 1 ? "" : "s"} across your tracked competitors.`}
@@ -157,17 +157,17 @@ export function BriefingClient({
       </div>
 
       {movements.length > 0 && (
-        <div className="flex flex-col gap-4 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
-          <h2 className="text-sm font-bold text-studio-ink">The other movements</h2>
-          <div className="flex flex-col divide-y divide-studio-line">
+        <div className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6">
+          <h2 className="text-sm font-semibold text-ink">The other movements</h2>
+          <div className="flex flex-col divide-y divide-line">
             {movements.slice(0, 4).map((movement) => (
               <div key={movement.id} className="flex gap-4 py-4 first:pt-0">
                 <div className="w-24 shrink-0">
-                  <p className="text-xs font-extrabold text-studio-ink">{movement.competitor}</p>
+                  <p className="text-xs font-extrabold text-ink">{movement.competitor}</p>
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-semibold text-studio-ink">{movement.title}</p>
-                  <p className="mt-1 text-sm leading-relaxed text-studio-muted">
+                  <p className="text-sm font-semibold text-ink">{movement.title}</p>
+                  <p className="mt-1 text-sm leading-relaxed text-ink-secondary">
                     {movement.detail}
                   </p>
                 </div>

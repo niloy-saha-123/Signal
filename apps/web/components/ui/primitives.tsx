@@ -147,8 +147,8 @@ export function Num({ children, className }: { children: ReactNode; className?: 
 
 /* --- Controls ----------------------------------------------------------- */
 
-// Solid ink for the primary action, not a tinted accent pill. The accent marks
-// what is interactive; ink marks what is chosen.
+// The primary action is solid teal — the one saturated control on any screen,
+// so the eye finds the next step without reading.
 export function Button({
   children,
   onClick,
@@ -165,7 +165,7 @@ export function Button({
   className?: string;
 }) {
   const variants = {
-    primary: "bg-ink text-ink-inverse hover:bg-[#33322e] disabled:bg-ink-muted",
+    primary: "bg-accent text-white hover:bg-accent-hover disabled:bg-ink-muted",
     secondary:
       "border border-line-strong bg-surface text-ink hover:bg-surface-sunken disabled:text-ink-muted",
     ghost: "text-ink-secondary hover:bg-surface-sunken hover:text-ink",

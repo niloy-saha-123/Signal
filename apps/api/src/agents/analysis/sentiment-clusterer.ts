@@ -12,6 +12,7 @@ import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
+import { guardedMessages } from "../chat/untrusted";
 
 const AGENT_NAME = "sentiment_clusterer" as const;
 // Same reasoning as pipeline/entity-extractor.ts calling selectModel(PREFERRED_MODEL, true) —
@@ -89,10 +90,7 @@ export async function sentimentClustererNode(
     };
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
-        structuredModel.invoke([
-          ["system", systemPrompt],
-          ["human", buildSignalsText(signals)],
-        ])
+        structuredModel.invoke(guardedMessages(systemPrompt, buildSignalsText(signals), "community and forum signals"))
       )
     );
 

@@ -47,25 +47,25 @@ export function OnboardingForm() {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1 text-sm text-slate-700">
+      <label className="flex flex-col gap-1 text-sm text-ink-secondary">
         Workspace name
         <input
           type="text"
           value={name}
           onChange={(event) => setName(event.target.value)}
           required
-          className="rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-accent"
+          className="rounded-lg border border-line-strong bg-surface px-3 py-2.5 text-[14px] text-ink outline-none transition-shadow focus:border-accent focus:ring-3 focus:ring-[var(--color-accent-tint)]"
         />
       </label>
       {error ? (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="text-[13px] text-[var(--color-status-critical)]">
           {error}
         </p>
       ) : null}
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-ink-inverse transition-colors hover:bg-[#33322e] disabled:bg-ink-muted"
+        className="rounded-lg bg-accent px-4 py-2.5 text-[14px] font-medium text-white transition-colors hover:bg-accent-hover disabled:bg-ink-muted"
       >
         Create workspace
       </button>

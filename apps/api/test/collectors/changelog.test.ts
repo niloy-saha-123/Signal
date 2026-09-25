@@ -68,7 +68,7 @@ vi.mock("rss-parser", () => ({
 }));
 
 import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
-import { changelogCollectorProcessor, initChangelogWorker } from "@/collectors/changelog";
+import { changelogCollectorProcessor, initChangelogWorker, postingsCollectorProcessor } from "@/collectors/changelog";
 
 const activeCompetitor = {
   id: "c1",
@@ -420,5 +420,62 @@ describe("collectors/changelog", () => {
     initChangelogWorker();
 
     expect(registerWorkerMock).toHaveBeenCalledWith("collect-changelog", changelogCollectorProcessor);
+  });
+});
+
+describe("postings collector (newsroom feeds)", () => {
+  it("reads postings_rss and stores items under the postings source, not changelog", async () => {
+    // Same parser, different evidence: a press release states intent, a
+    // changelog states fact, and the quality scorer weights them differently.
+    // Mixing the source labels would silently erase that distinction.
+    listCompetitorsMock.mockResolvedValue([
+      {
+        id: "comp-1",
+        name: "Kestrel",
+        is_active: true,
+        changelog_rss: null,
+        postings_rss: "https://kestrel.dev/newsroom/rss",
+      },
+    ]);
+    getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
+    signalExistsBySourceUrlMock.mockResolvedValue(false);
+    createSignalMock.mockResolvedValue({ id: "sig-1" });
+    safeFetchMock.mockResolvedValue({
+      status: 200,
+      headers: new Headers(),
+      text: async () => "<rss></rss>",
+    });
+    parseStringMock.mockResolvedValue({
+      items: [
+        {
+          link: "https://kestrel.dev/newsroom/managed-postgres",
+          title: "Kestrel announces managed Postgres",
+          isoDate: "2026-09-20T00:00:00.000Z",
+          "content:encoded": "<p>Today we are announcing managed Postgres.</p>",
+        },
+      ],
+    });
+
+    await postingsCollectorProcessor({} as never);
+
+    expect(safeFetchMock.mock.calls[0][0]).toBe("https://kestrel.dev/newsroom/rss");
+    expect(createSignalMock).toHaveBeenCalledTimes(1);
+    expect(createSignalMock.mock.calls[0][0].source).toBe("postings");
+  });
+
+  it("ignores competitors that only have a changelog feed", async () => {
+    listCompetitorsMock.mockResolvedValue([
+      {
+        id: "comp-1",
+        name: "Kestrel",
+        is_active: true,
+        changelog_rss: "https://kestrel.dev/changelog/rss",
+        postings_rss: null,
+      },
+    ]);
+
+    await postingsCollectorProcessor({} as never);
+
+    expect(safeFetchMock).not.toHaveBeenCalled();
   });
 });

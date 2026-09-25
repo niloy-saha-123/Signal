@@ -27,9 +27,18 @@ import { ensureSignalPipelineJob } from "./recovery";
 // than an arbitrary PR; split the key into github_release/github_pr if the blend hurts.
 const SOURCE_AUTHORITY: Record<Signal["source"], number> = {
   pricing: 1.0,
-  github: 0.8,
   changelog: 0.85,
+  github: 0.8,
+  // First-party and load-bearing: a homepage rewrite is a positioning decision
+  // someone signed off on, not commentary about one.
+  website: 0.8,
+  // First-party but promotional. A press release states what a company wants
+  // believed, which is useful evidence of intent and weak evidence of fact.
+  postings: 0.7,
   jobs: 0.6,
+  // A company's own forum: real users, real complaints, but unverifiable
+  // individual claims — same tier as the third-party community venues.
+  community: 0.4,
   hn: 0.3,
   reddit: 0.3,
 };

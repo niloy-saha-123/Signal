@@ -22,13 +22,13 @@ export function DataCoverage({ dates }: { dates: string[] }) {
   const last = days.map((d) => d.active).lastIndexOf(true);
 
   return (
-    <div className="flex flex-col gap-3 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
+    <div className="flex flex-col gap-3 rounded-[10px] border border-line bg-surface p-6">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-bold text-studio-ink">Data coverage</h2>
+        <h2 className="text-sm font-semibold text-ink">Data coverage</h2>
         {first === -1 ? (
-          <span className="text-xs text-studio-muted">No signals in the last 30 days</span>
+          <span className="text-xs text-ink-secondary">No signals in the last 30 days</span>
         ) : (
-          <span className="text-xs text-studio-muted">
+          <span className="text-xs text-ink-secondary">
             {days[first].label} — {days[last].label}
           </span>
         )}
@@ -38,11 +38,11 @@ export function DataCoverage({ dates }: { dates: string[] }) {
           <div key={index} className="flex flex-1 flex-col items-center gap-1.5">
             <div
               className={`h-10 w-full rounded-md ${
-                day.active ? "bg-studio-action" : "bg-studio-sky"
+                day.active ? "bg-accent" : "bg-accent-tint"
               }`}
               title={day.active ? "Has signals" : "No signals"}
             />
-            <span className="text-[10px] text-studio-muted">{index % 5 === 0 ? day.label : ""}</span>
+            <span className="text-[10px] text-ink-secondary">{index % 5 === 0 ? day.label : ""}</span>
           </div>
         ))}
       </div>
