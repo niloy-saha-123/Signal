@@ -9,13 +9,16 @@ import {
 } from "../../lib/chart-colors";
 
 describe("lib/chart-colors", () => {
-  it("exposes the five signal-source categorical colors in the dataviz palette's fixed order", () => {
+  it("exposes the six signal-source categorical colors in the dataviz palette's fixed order", () => {
     expect(SOURCE_COLORS).toEqual({
       reddit: "#2a78d6",
       hn: "#eb6834",
       jobs: "#1baf7a",
       changelog: "#eda100",
       pricing: "#e87ba4",
+      // GitHub's own mark is near-black; slate reads as the same family without
+      // colliding with the five hues already assigned.
+      github: "#4b5563",
     });
   });
 
