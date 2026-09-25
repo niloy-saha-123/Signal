@@ -11,8 +11,8 @@
 //     --> synthesis
 //            (addEdge(N[], target) fan-in — waits for ALL 5 listed sources, runs synthesis
 //            exactly once)
-//   synthesis --> comparativeSynthesis (only when is_own_company_run) --> END
-//   synthesis --> END (normal competitor run)
+//   synthesis --> comparativeSynthesis (only when is_own_company_run) --> forecaster --> END
+//   synthesis --> forecaster --> END (normal competitor run)
 //
 // Why changeDetector is unconditional (changed in Part 10): the earlier wiring used
 // `addConditionalEdges(START, has_pricing_diff ? "changeDetector" : "synthesis")`. That routed
@@ -31,12 +31,21 @@ import { patternDetectorNode } from "../agents/analysis/pattern-detector";
 import { vulnerabilityDetectorNode } from "../agents/analysis/vulnerability-detector";
 import { synthesisNode } from "../agents/analysis/synthesis";
 import { comparativeSynthesisNode } from "../agents/analysis/comparative-synthesis";
+import { forecasterNode } from "../agents/analysis/forecaster";
 import type { AnalysisGraphStateType } from "./state";
 
-// synthesis → comparativeSynthesis only on an own-company run, else straight to END. The flag
-// is caller-seeded (analysis-worker.ts) and read here, never re-queried inside the graph.
-function afterSynthesis(state: AnalysisGraphStateType): "comparativeSynthesis" | typeof END {
-  return state.is_own_company_run ? "comparativeSynthesis" : END;
+// synthesis → comparativeSynthesis only on an own-company run, else straight to the
+// forecaster. The flag is caller-seeded (analysis-worker.ts) and read here, never
+// re-queried inside the graph.
+//
+// The forecaster is the tail of both paths rather than a sixth parallel branch: it
+// is the only node that needs the run's own conclusion, so running it alongside the
+// branch nodes would have it forecasting without the decision and score in hand.
+// Both paths converge on it through a single edge each, so one invocation forecasts
+// exactly once — duplicating it would cost a model call and, worse, write a second
+// row that later resolves separately and double-counts in the Brier score.
+function afterSynthesis(state: AnalysisGraphStateType): "comparativeSynthesis" | "forecaster" {
+  return state.is_own_company_run ? "comparativeSynthesis" : "forecaster";
 }
 
 const builder = new StateGraph(AnalysisGraphState)
@@ -47,6 +56,7 @@ const builder = new StateGraph(AnalysisGraphState)
   .addNode("changeDetector", changeDetectorNode)
   .addNode("synthesis", synthesisNode)
   .addNode("comparativeSynthesis", comparativeSynthesisNode)
+  .addNode("forecaster", forecasterNode)
   .addEdge(START, "intentAnalyzer")
   .addEdge(START, "sentimentClusterer")
   .addEdge(START, "patternDetector")
@@ -58,8 +68,9 @@ const builder = new StateGraph(AnalysisGraphState)
   )
   .addConditionalEdges("synthesis", afterSynthesis, {
     comparativeSynthesis: "comparativeSynthesis",
-    [END]: END,
+    forecaster: "forecaster",
   })
-  .addEdge("comparativeSynthesis", END);
+  .addEdge("comparativeSynthesis", "forecaster")
+  .addEdge("forecaster", END);
 
 export const analysisGraph = builder.compile();
