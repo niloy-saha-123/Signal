@@ -51,7 +51,7 @@ function renderIntel(competitors: typeof PREVIEW_COMPETITORS, signals: typeof PR
       </div>
       <IntelFilters competitors={competitors} />
       <DataCoverage dates={signals.map((signal) => signal.collected_at)} />
-      <div className="rounded-[10px] border border-line bg-surface p-5 sm:p-6">
+      <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-5 sm:p-6">
         <SignalFeed signals={signals} competitorIds={competitors.map((competitor) => competitor.id)} />
       </div>
     </div>

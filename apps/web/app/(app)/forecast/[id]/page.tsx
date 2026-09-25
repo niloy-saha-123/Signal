@@ -87,7 +87,7 @@ export default async function PredictionDetailPage({
         {prediction.statement}
       </h1>
 
-      <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-4">
+      <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
         <div className="bg-surface p-5">
           <Metric
             value={`${Math.round(prediction.probability * 100)}%`}
@@ -182,7 +182,7 @@ export default async function PredictionDetailPage({
                     className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
                     style={{
                       backgroundColor:
-                        SOURCE_COLORS[signal.source as keyof typeof SOURCE_COLORS] ?? "#8a8780",
+                        SOURCE_COLORS[signal.source as keyof typeof SOURCE_COLORS] ?? "var(--color-ink-muted)",
                     }}
                     aria-label={signal.source}
                   />

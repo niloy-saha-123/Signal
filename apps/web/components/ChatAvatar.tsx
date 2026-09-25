@@ -17,28 +17,27 @@ export function ChatAvatar({ onOpen }: { onOpen: () => void }) {
       className="group fixed right-4 bottom-5 z-40 flex items-center gap-2 lg:top-1/2 lg:bottom-auto lg:-translate-y-1/2"
     >
       {/* Label slides out on hover so the resting state stays a quiet circle. */}
-      <span className="pointer-events-none max-w-0 overflow-hidden rounded-full bg-ink py-1.5 text-[12px] font-medium whitespace-nowrap text-ink-inverse opacity-0 transition-all duration-200 group-hover:max-w-[140px] group-hover:px-3 group-hover:opacity-100">
+      <span className="pointer-events-none max-w-0 overflow-hidden rounded-full bg-midnight py-1.5 text-[12px] font-medium whitespace-nowrap text-white opacity-0 shadow-[var(--shadow-popover)] transition-all duration-200 group-hover:max-w-[140px] group-hover:px-3 group-hover:opacity-100">
         Ask Signal
       </span>
 
-      <span className="relative flex h-11 w-11 items-center justify-center rounded-full border border-line bg-surface transition-colors group-hover:bg-surface-sunken">
+      <span className="relative flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#2b61cc_0%,#0f2150_60%,#061436_100%)] shadow-[var(--shadow-float)] ring-4 ring-white/70 transition-transform duration-200 group-hover:-translate-y-0.5">
         <svg viewBox="0 0 32 32" className="h-6 w-6" aria-hidden="true">
-          {/* The signal trace from the product mark, reduced to its essential
-              gesture — a line that does something worth noticing. */}
+          {/* The product mark's trace and flare peak, at avatar scale. */}
           <path
-            d="M6 19h3.6l2-6 3.5 11 2.4-7.7h4"
+            d="M6 19h3.6l2-6 3.5 11 2.4-7.7"
             fill="none"
-            stroke="var(--color-ink, #1a1a18)"
-            strokeWidth="2"
+            stroke="#ffffff"
+            strokeWidth="2.2"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          <circle cx="24.5" cy="16.3" r="2" fill="var(--color-accent, #0f6e68)" />
+          <circle cx="23.6" cy="16.3" r="2.6" fill="#f96e31" />
         </svg>
         {/* Availability dot. Static — a pulsing indicator would imply activity
             that is not happening. */}
         <span
-          className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-surface bg-accent"
+          className="absolute -right-0.5 -bottom-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-[var(--color-status-good)]"
           aria-hidden="true"
         />
       </span>

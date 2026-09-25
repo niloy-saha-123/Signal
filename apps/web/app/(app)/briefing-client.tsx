@@ -24,7 +24,7 @@ type Props = {
 
 function StatTile({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="flex flex-col gap-1 rounded-[10px] border border-line bg-surface p-5">
+    <div className="flex flex-col gap-1 rounded-xl bg-surface shadow-[var(--shadow-card)] p-5">
       <p className="text-sm font-semibold text-ink-secondary">{label}</p>
       <p className=" text-3xl font-semibold tabular-nums text-ink">{value}</p>
     </div>
@@ -57,7 +57,7 @@ export function BriefingClient({
             Overnight briefing
           </h1>
         </div>
-        <section className="relative overflow-hidden rounded-[10px] border border-line bg-surface px-7 py-12 sm:px-12 sm:py-16">
+        <section className="relative overflow-hidden rounded-xl bg-surface shadow-[var(--shadow-card)] px-7 py-12 sm:px-12 sm:py-16">
           <div className="absolute top-0 left-0 h-1 w-full bg-accent" />
           <h2 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-ink">
             Your briefing starts with a competitor.
@@ -80,7 +80,7 @@ export function BriefingClient({
   const getCategoryColor = (category: string) => {
     const colors: Record<string, string> = {
       pricing: "bg-accent-tint text-accent",
-      product: "bg-[var(--color-tint-sky)] text-ink",
+      product: "bg-[var(--color-tint-mist)] text-ink",
       hiring: "bg-[var(--color-tint-sage)] text-ink",
       content: "bg-surface-sunken text-ink",
       default: "bg-surface-sunken text-ink-secondary",
@@ -105,7 +105,7 @@ export function BriefingClient({
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
-        <div className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6">
+        <div className="flex flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
           <p className="text-sm font-semibold text-ink">Highest-signal movement</p>
           {highestScore > 0 ? (
             <>
@@ -127,7 +127,7 @@ export function BriefingClient({
           )}
         </div>
 
-        <div className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6">
+        <div className="flex flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
           <p className="text-sm font-semibold text-ink">View</p>
           <div className="inline-flex w-fit gap-2">
             {[
@@ -157,7 +157,7 @@ export function BriefingClient({
       </div>
 
       {movements.length > 0 && (
-        <div className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6">
+        <div className="flex flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
           <h2 className="text-sm font-semibold text-ink">The other movements</h2>
           <div className="flex flex-col divide-y divide-line">
             {movements.slice(0, 4).map((movement) => (

@@ -14,7 +14,7 @@ export default async function CompanyPage() {
   const token = await getOptionalAccessToken();
   if (!token) {
     return (
-      <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+      <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] px-6 py-12">
         <p className="text-sm text-ink-secondary">Sign in to manage your company profile.</p>
       </div>
     );

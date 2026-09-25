@@ -114,7 +114,7 @@ export function SettingsClient() {
 
       {message && (
         <p
-          className={`max-w-2xl rounded-[10px] px-4 py-3 text-sm ${
+          className={`max-w-2xl rounded-lg px-4 py-3 text-sm ${
             message.kind === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
           }`}
         >
@@ -125,7 +125,7 @@ export function SettingsClient() {
       {/* Account */}
       <form
         onSubmit={saveName}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
+        className="flex max-w-2xl flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8"
       >
         <h2 className="text-sm font-semibold text-ink">Account</h2>
         <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
@@ -156,7 +156,7 @@ export function SettingsClient() {
       {/* Workspace / company name */}
       <form
         onSubmit={saveWorkspaceName}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
+        className="flex max-w-2xl flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8"
       >
         <h2 className="text-sm font-semibold text-ink">Company</h2>
         <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
@@ -179,7 +179,7 @@ export function SettingsClient() {
       {/* Security */}
       <form
         onSubmit={savePassword}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
+        className="flex max-w-2xl flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8"
       >
         <h2 className="text-sm font-semibold text-ink">Security</h2>
         <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
@@ -211,7 +211,7 @@ export function SettingsClient() {
       </form>
 
       {/* Session */}
-      <div className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8">
+      <div className="flex max-w-2xl flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8">
         <h2 className="text-sm font-semibold text-ink">Session</h2>
         <button
           onClick={signOut}

@@ -4,84 +4,45 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { SignalMark } from "@/components/landing/SignalMark";
+import { Icon } from "@/components/ui/icons";
+import { NAV_GROUPS, isActive } from "@/lib/nav";
 
-// Navigation grouped by the question each surface answers, not by data model.
-// "Forecast" and "Scorecard" lead because they are what makes this product
-// different from a feed; the feed itself sits under Evidence, where a reader
-// goes to check a claim rather than to browse.
-const NAV_GROUPS: Array<{
-  label: string;
-  items: Array<{ href: string; label: string; hint: string }>;
-}> = [
-  {
-    label: "Today",
-    items: [
-      { href: "/briefing", label: "Briefing", hint: "What moved overnight" },
-      { href: "/alerts", label: "Alerts", hint: "Things that already happened" },
-    ],
-  },
-  {
-    label: "Forecast",
-    items: [
-      { href: "/forecast", label: "Predictions", hint: "What Signal expects next" },
-      { href: "/scorecard", label: "Scorecard", hint: "How often it has been right" },
-    ],
-  },
-  {
-    label: "Evidence",
-    items: [
-      { href: "/intel", label: "Signal feed", hint: "Everything collected" },
-      { href: "/board", label: "Competitors", hint: "Scores and trends" },
-      { href: "/discovery", label: "Discovery", hint: "Candidates to confirm" },
-    ],
-  },
-  {
-    label: "Workspace",
-    items: [
-      { href: "/chat", label: "Chat", hint: "Ask the evidence" },
-      { href: "/company", label: "Company", hint: "Your context" },
-      { href: "/activity", label: "Agent activity", hint: "What the system is doing" },
-      { href: "/settings", label: "Settings", hint: "Budget, cadence, Slack" },
-    ],
-  },
-];
-
+// Midnight rail, white canvas. The brand is present on every screen without
+// tinting the work itself, and the active item is the only place the flare
+// appears in the app chrome — a small marker that says "you are here".
 export function AppSidebar() {
   const pathname = usePathname();
 
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-line bg-surface lg:flex"
+      className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col bg-midnight text-midnight-ink lg:flex"
     >
-      <Link
-        href="/briefing"
-        className="flex items-center gap-2.5 border-b border-line px-5 py-4 text-ink"
-      >
-        <SignalMark />
+      <Link href="/briefing" className="flex h-16 items-center px-5">
+        <SignalMark tone="dark" />
       </Link>
 
-      <div className="flex-1 overflow-y-auto px-3 py-4">
+      <div className="flex-1 overflow-y-auto px-3 pt-2 pb-4">
         {NAV_GROUPS.map((group) => (
           <div key={group.label} className="mb-5 last:mb-0">
-            <h2 className="px-2 pb-1.5 text-[11px] font-semibold text-ink-muted">{group.label}</h2>
-            <ul>
+            <h2 className="px-2.5 pb-1.5 font-sans text-[11px] font-medium tracking-normal text-midnight-muted">
+              {group.label}
+            </h2>
+            <ul className="space-y-0.5">
               {group.items.map((item) => {
-                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const active = isActive(pathname, item.href);
                 return (
                   <li key={item.href}>
                     <Link
                       href={item.href}
                       aria-current={active ? "page" : undefined}
-                      // Active gets a teal wash and a solid left marker. The
-                      // marker carries the state for anyone who cannot tell
-                      // the tint apart from the ground.
                       className={
                         active
-                          ? "relative block rounded-md bg-accent-tint px-2 py-1.5 text-[13px] font-semibold text-accent before:absolute before:top-1.5 before:bottom-1.5 before:-left-3 before:w-[3px] before:rounded-r before:bg-accent"
-                          : "block rounded-md px-2 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink"
+                          ? "relative flex items-center gap-2.5 rounded-lg bg-white/[0.09] px-2.5 py-2 text-[13px] font-medium text-white before:absolute before:top-2 before:bottom-2 before:-left-3 before:w-[3px] before:rounded-r before:bg-flare"
+                          : "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-midnight-muted transition-colors hover:bg-white/[0.05] hover:text-white"
                       }
                     >
+                      <Icon name={item.icon} className="h-4 w-4 shrink-0" />
                       {item.label}
                     </Link>
                   </li>
@@ -92,9 +53,10 @@ export function AppSidebar() {
         ))}
       </div>
 
-      <div className="border-t border-line px-5 py-3">
-        <p className="text-[11px] text-ink-muted">
-          Signal states probabilities, never certainties.
+      <div className="m-3 rounded-xl border border-midnight-line bg-midnight-raised px-3.5 py-3">
+        <p className="text-[12px] font-medium text-white">Probabilities, never certainties.</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-midnight-muted">
+          Every forecast is dated and scored when it resolves.
         </p>
       </div>
     </nav>

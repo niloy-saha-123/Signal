@@ -181,11 +181,11 @@ export function ForecastClient({
 
       {/* The hero row leads with the track record, because a prediction is only
           worth reading if you know how often the thing making it is right. */}
-      <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-4">
-        <div className="bg-[var(--color-tint-teal)] p-5">
+      <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
+        <div className="bg-[var(--color-tint-blue)] p-5">
           <Metric value={String(open.length)} label="Open" size="md" />
         </div>
-        <div className="bg-[var(--color-tint-sky)] p-5">
+        <div className="bg-[var(--color-tint-mist)] p-5">
           <Metric value={String(calibration.resolved_count)} label="Resolved" size="md" />
         </div>
         <div className="bg-[var(--color-tint-sage)] p-5">
@@ -195,7 +195,7 @@ export function ForecastClient({
             <Metric value="—" label="Brier score" size="md" tone="muted" />
           )}
         </div>
-        <div className="bg-[var(--color-tint-sand)] p-5">
+        <div className="bg-[var(--color-tint-flare)] p-5">
           <Metric
             value={calibration.baseline_brier.toFixed(2)}
             label="Coin-flip baseline"
@@ -206,7 +206,7 @@ export function ForecastClient({
       </div>
 
       {!scored ? (
-        <p className="mb-8 rounded-[10px] border border-line bg-surface-sunken px-4 py-3 text-[13px] text-ink-secondary">
+        <p className="mb-8 rounded-lg border border-line bg-surface-sunken px-4 py-3 text-[13px] text-ink-secondary">
           No score yet — predictions have to resolve before an accuracy number means anything.
           The first one resolves{" "}
           {open.length > 0 ? (

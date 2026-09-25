@@ -74,7 +74,7 @@ export function CommandBar({ commands }: CommandBarProps) {
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-md rounded-[10px] bg-white p-2">
+      <div className="w-full max-w-md rounded-lg bg-white p-2">
         <input
           autoFocus
           value={query}

@@ -23,17 +23,19 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <p className="text-[12px] text-ink-muted">Probabilities, never certainties.</p>
       </div>
 
-      <div className="relative hidden overflow-hidden border-l border-line bg-[var(--color-tint-teal)] lg:block">
-        <div aria-hidden="true" className="grid-backdrop absolute inset-0" />
-        <SignalTrace className="absolute inset-x-0 top-1/2 h-[520px] w-full -translate-y-1/2" />
+      <div className="relative m-3 hidden overflow-hidden rounded-[28px] bg-[linear-gradient(150deg,#2b61cc_0%,#0f2150_52%,#061436_100%)] lg:block">
+        <SignalTrace
+          id="auth-trace"
+          tone="dark"
+          className="absolute inset-x-0 top-[42%] h-[520px] w-full -translate-y-1/2 opacity-80"
+        />
         <div className="absolute inset-x-12 bottom-12">
-          <p className="max-w-md text-[26px] leading-tight font-semibold tracking-[-0.025em] text-ink">
-            Know what your competitors ship{" "}
-            <span className="text-ink-muted">before they announce it.</span>
+          <p className="max-w-md font-display text-[30px] leading-[1.08] font-semibold tracking-[-0.03em] text-white">
+            See what competitors ship <span className="text-midnight-muted">before they announce it.</span>
           </p>
-          <p className="mt-4 max-w-sm text-[14px] leading-relaxed text-ink-secondary">
-            Every prediction is dated, carries a probability, and is scored when it resolves
-            &mdash; whether it was right or not.
+          <p className="mt-4 max-w-sm text-[14.5px] leading-relaxed text-white/75">
+            Every prediction is dated, carries a probability, and is scored when it resolves &mdash; whether it was
+            right or not.
           </p>
         </div>
       </div>

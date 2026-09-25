@@ -19,11 +19,18 @@ describe("AppCommandBar", () => {
     expect(pushMock).toHaveBeenCalledWith("/chat");
   });
 
-  it("navigates to /briefing when 'Add competitor' is selected", () => {
+  it("sends 'Add competitor' to Discovery, where the add form lives", () => {
     render(<AppCommandBar />);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.click(screen.getByText("Add competitor"));
-    expect(pushMock).toHaveBeenCalledWith("/briefing");
+    expect(pushMock).toHaveBeenCalledWith("/discovery");
+  });
+
+  it("can jump to any page in the navigation", () => {
+    render(<AppCommandBar />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.click(screen.getByText("Go to Predictions"));
+    expect(pushMock).toHaveBeenCalledWith("/forecast");
   });
 
   it("only ships the two commands with a real backend", () => {

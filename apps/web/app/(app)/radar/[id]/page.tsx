@@ -73,7 +73,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       </div>
 
       {score ? (
-        <div className="rounded-[10px] border border-line bg-surface p-6">
+        <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
           <SignalScoreCard
             competitorName={competitor.name}
             score={score.score}
@@ -82,16 +82,16 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           />
         </div>
       ) : (
-        <div className="rounded-[10px] border border-line bg-surface p-12 text-center">
+        <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-12 text-center">
           <p className="text-sm text-ink-secondary">No score yet.</p>
         </div>
       )}
 
-      <div className="rounded-[10px] border border-line bg-surface p-6">
+      <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
         <TrendChart data={trend} />
       </div>
 
-      <div className="rounded-[10px] border border-line bg-surface p-6">
+      <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
         <HiringChart data={hiring} />
       </div>
     </div>
