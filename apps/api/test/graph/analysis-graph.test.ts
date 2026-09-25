@@ -197,6 +197,21 @@ const { withCircuitBreakerMock } = vi.hoisted(() => ({
   withCircuitBreakerMock: vi.fn((_service: string, fn: () => unknown) => fn()),
 }));
 
+// The forecaster is mocked at the module boundary rather than through its LLM
+// client: these tests are about where it sits in the DAG and what state it is
+// handed, not about what it forecasts. Its own behavior is covered in
+// test/agents/analysis/forecaster.test.ts.
+const { forecasterNodeMock } = vi.hoisted(() => ({
+  // Typed with its state parameter so the placement assertions can read what the
+  // node was actually handed — a zero-arg mock makes mock.calls[0][0] unsound.
+  forecasterNodeMock: vi.fn(async (_state: Record<string, unknown>) => ({ forecasts: [] })),
+}));
+
+vi.mock("@/agents/analysis/forecaster", () => ({
+  forecasterNode: forecasterNodeMock,
+  EVIDENCE_FLOOR: 5,
+}));
+
 vi.mock("@/reliability/circuit-breaker", () => ({
   withCircuitBreaker: withCircuitBreakerMock,
 }));
@@ -381,5 +396,49 @@ describe("analysisGraph — compiled DAG", () => {
     expect(createAlertMock).toHaveBeenCalledWith(
       expect.objectContaining({ competitor_id: "competitor-own", run_id: "run-own" })
     );
+  });
+});
+
+describe("analysisGraph — forecaster placement", () => {
+  it("reaches the forecaster after synthesis on a normal run", async () => {
+    // The forecaster runs last because it is the only node that can read what
+    // synthesis decided. Wiring it in parallel with the branch nodes would have
+    // it forecasting without the run's own conclusion in hand.
+    const result = await analysisGraph.invoke({
+      competitor_id: "11111111-1111-4111-8111-111111111111",
+      workspace_id: "22222222-2222-4222-8222-222222222222",
+      run_id: "33333333-3333-4333-8333-333333333333",
+    });
+
+    expect(result).toHaveProperty("forecasts");
+    expect(forecasterNodeMock).toHaveBeenCalledTimes(1);
+    // Synthesis must already have produced its decision by the time the
+    // forecaster is handed the state.
+    expect(forecasterNodeMock.mock.calls[0][0]).toHaveProperty("decision");
+  });
+
+  it("still reaches the forecaster on an own-company run, after comparativeSynthesis", async () => {
+    const result = await analysisGraph.invoke({
+      competitor_id: "11111111-1111-4111-8111-111111111111",
+      workspace_id: "22222222-2222-4222-8222-222222222222",
+      run_id: "33333333-3333-4333-8333-333333333333",
+      is_own_company_run: true,
+    });
+
+    expect(result).toHaveProperty("forecasts");
+    expect(forecasterNodeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run the forecaster more than once per graph invocation", async () => {
+    await analysisGraph.invoke({
+      competitor_id: "11111111-1111-4111-8111-111111111111",
+      workspace_id: "22222222-2222-4222-8222-222222222222",
+      run_id: "33333333-3333-4333-8333-333333333333",
+      has_pricing_diff: true,
+    });
+
+    // Every prediction costs a model call and occupies a row that must later be
+    // resolved; a fan-in mistake here would duplicate both.
+    expect(forecasterNodeMock).toHaveBeenCalledTimes(1);
   });
 });

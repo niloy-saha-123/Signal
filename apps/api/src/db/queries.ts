@@ -3,6 +3,9 @@ import { eq, and, asc, desc, inArray, gte, count, sql, type SQL } from "drizzle-
 import { z } from "zod";
 import type {
   AgentName,
+  PredictionPatternType,
+  PredictionStatus,
+  ResolutionCriteria,
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
@@ -24,6 +27,7 @@ import {
   signalsTable,
   signalClustersTable,
   competitorSignalScoresTable,
+  predictionsTable,
   agentLatenciesTable,
   agentRunsTable,
   companyProfileTable,
@@ -1032,6 +1036,47 @@ export type CreateSignalScoreInput = {
 
 // SynthesisAgent's write — retries replace the same competitor's UTC-day row
 // instead of appending a duplicate score.
+// ── predictions ──────────────────────────────────────────────────────────
+
+export interface CreatePredictionInput {
+  workspace_id: string;
+  competitor_id: string;
+  run_id: string | null;
+  statement: string;
+  pattern_type: PredictionPatternType;
+  probability: number;
+  resolution_criteria: ResolutionCriteria;
+  horizon_days: number;
+  resolves_at: Date;
+  evidence_signal_ids: string[];
+  evidence_count: number;
+  status: PredictionStatus;
+}
+
+export async function createPrediction(
+  input: CreatePredictionInput
+): Promise<typeof predictionsTable.$inferSelect> {
+  const [row] = await db.insert(predictionsTable).values(input).returning();
+  return row;
+}
+
+// The duplicate gate's input: this competitor's still-open predictions, with only
+// the two fields that decide whether a new forecast repeats one of them.
+export async function listOpenPredictions(
+  competitorId: string
+): Promise<Array<{ id: string; pattern_type: PredictionPatternType; resolves_at: Date }>> {
+  return db
+    .select({
+      id: predictionsTable.id,
+      pattern_type: predictionsTable.pattern_type,
+      resolves_at: predictionsTable.resolves_at,
+    })
+    .from(predictionsTable)
+    .where(
+      and(eq(predictionsTable.competitor_id, competitorId), eq(predictionsTable.status, "open"))
+    );
+}
+
 export async function createSignalScore(input: CreateSignalScoreInput): Promise<SignalScore> {
   const [row] = await db
     .insert(competitorSignalScoresTable)

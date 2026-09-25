@@ -3,6 +3,8 @@ import {
   AlertDetailSchema,
   AnalysisDecisionSchema,
   ComparativeSynthesisSchema,
+  ForecastOutputSchema,
+  ForecastSchema,
 } from "@/agents/analysis/contracts";
 
 function validDetail(overrides: Partial<Record<string, unknown>> = {}) {
@@ -190,5 +192,69 @@ describe("agents/analysis/contracts ComparativeSynthesisSchema", () => {
         valid({ gaps: [{ gap: "g", possible_reasons: [], possible_responses: [] }] })
       ).success
     ).toBe(true);
+  });
+});
+
+describe("ForecastSchema", () => {
+  const base = {
+    statement: "Acme ships a first-party Postgres adapter in the next quarter",
+    pattern_type: "product_launch" as const,
+    horizon_days: 90,
+    resolution_criteria: {
+      kind: "github_release" as const,
+      repo: "acme/next",
+      mentions: ["postgres"],
+    },
+    reasoning: "Three open pull requests reference a pg driver.",
+  };
+
+  it("refuses a forecast that claims certainty", () => {
+    // A model emitting 0 or 1 is asserting it knows the future. Accepting that
+    // would let the product state a guarantee it cannot honour, and would make
+    // the resulting Brier score uninformative.
+    expect(ForecastSchema.safeParse({ ...base, probability: 1 }).success).toBe(false);
+    expect(ForecastSchema.safeParse({ ...base, probability: 0 }).success).toBe(false);
+    expect(ForecastSchema.safeParse({ ...base, probability: 0.72 }).success).toBe(true);
+  });
+
+  it("requires a statement specific enough to settle later", () => {
+    expect(ForecastSchema.safeParse({ ...base, probability: 0.6, statement: "big move" }).success).toBe(
+      false
+    );
+  });
+
+  it("refuses a horizon outside the resolvable window", () => {
+    expect(ForecastSchema.safeParse({ ...base, probability: 0.6, horizon_days: 3 }).success).toBe(false);
+    expect(ForecastSchema.safeParse({ ...base, probability: 0.6, horizon_days: 400 }).success).toBe(
+      false
+    );
+  });
+
+  it("refuses a forecast whose resolution criteria have no checkable predicate", () => {
+    expect(
+      ForecastSchema.safeParse({
+        ...base,
+        probability: 0.6,
+        resolution_criteria: { kind: "vibes", note: "they'll ship soon" },
+      }).success
+    ).toBe(false);
+  });
+
+  it("allows an empty forecast list carrying a reason to abstain", () => {
+    const parsed = ForecastOutputSchema.safeParse({
+      forecasts: [],
+      abstained_reason: "Only 2 clustered signals in the window.",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("caps how many forecasts one run may emit", () => {
+    const one = { ...base, probability: 0.6 };
+    expect(
+      ForecastOutputSchema.safeParse({
+        forecasts: [one, one, one, one],
+        abstained_reason: null,
+      }).success
+    ).toBe(false);
   });
 });

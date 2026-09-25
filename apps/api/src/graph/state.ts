@@ -21,6 +21,7 @@ import type { z } from "zod";
 import type {
   AnalysisDecisionSchema,
   ComparativeSynthesisSchema,
+  ForecastSchema,
 } from "../agents/analysis/contracts";
 
 // intent-analyzer.ts: "infers competitor hiring intent from recent job postings".
@@ -68,6 +69,11 @@ export type AnalysisDecision = z.infer<typeof AnalysisDecisionSchema>;
 // Inferred from ComparativeSynthesisSchema so it can never drift from that LLM contract.
 export type ComparativeSynthesis = z.infer<typeof ComparativeSynthesisSchema>;
 
+// forecaster.ts: "the dated, resolvable predictions this run actually stored".
+// Only the ones that survived the duplicate gate and persisted appear here — the
+// field reports what reached the ledger, not what the model proposed.
+export type Forecast = z.infer<typeof ForecastSchema>;
+
 // Overwrite-on-write reducer: a node's returned value simply replaces the prior one. Paired
 // with `default` below to give these optional fields a defined initial value at invocation.
 const overwrite = <T>(_left: T, right: T): T => right;
@@ -98,6 +104,12 @@ export const AnalysisGraphState = Annotation.Root({
   // competitor_id is the workspace's own-company row. Drives the synthesis -> conditional
   // edge. Default false so a normal competitor run never reaches comparativeSynthesis.
   is_own_company_run: Annotation<boolean>({ reducer: overwrite, default: () => false }),
+  // The predictions the forecaster actually wrote to the ledger this run. Empty is
+  // the common, correct case: the node abstains below the evidence floor, when the
+  // model declines, and when every proposed forecast duplicates an open one. An
+  // empty array here means "ran, said nothing"; the node returns `{}` instead when
+  // it failed or was skipped on budget, leaving the default in place.
+  forecasts: Annotation<Forecast[]>({ reducer: overwrite, default: () => [] }),
 });
 
 export type AnalysisGraphStateType = typeof AnalysisGraphState.State;

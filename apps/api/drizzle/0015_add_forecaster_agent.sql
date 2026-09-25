@@ -1,0 +1,2 @@
+ALTER TABLE "agent_latencies" DROP CONSTRAINT "agent_latencies_agent_name_check";--> statement-breakpoint
+ALTER TABLE "agent_latencies" ADD CONSTRAINT "agent_latencies_agent_name_check" CHECK ("agent_latencies"."agent_name" IN ('intent_analyzer', 'sentiment_clusterer', 'change_detector', 'pattern_detector', 'vulnerability_detector', 'synthesis', 'chat_agent', 'quality_scorer', 'deduplicator', 'entity_extractor', 'comparative_synthesis', 'forecaster'));

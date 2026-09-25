@@ -19,7 +19,12 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import type { SignalSource } from "@signal/shared";
+import type {
+  PredictionPatternType,
+  PredictionStatus,
+  ResolutionCriteria,
+  SignalSource,
+} from "@signal/shared";
 
 // ── competitors ──────────────────────────────────────────────────────────
 // Entities being monitored. One row per `POST /api/competitors` call — the
@@ -300,7 +305,7 @@ export const agentLatenciesTable = pgTable(
   (table) => [
     check(
       "agent_latencies_agent_name_check",
-      sql`${table.agent_name} IN ('intent_analyzer', 'sentiment_clusterer', 'change_detector', 'pattern_detector', 'vulnerability_detector', 'synthesis', 'chat_agent', 'quality_scorer', 'deduplicator', 'entity_extractor', 'comparative_synthesis')`
+      sql`${table.agent_name} IN ('intent_analyzer', 'sentiment_clusterer', 'change_detector', 'pattern_detector', 'vulnerability_detector', 'synthesis', 'chat_agent', 'quality_scorer', 'deduplicator', 'entity_extractor', 'comparative_synthesis', 'forecaster')`
     ),
     check("agent_latencies_status_check", sql`${table.status} IN ('success', 'failed', 'skipped')`),
     check(
@@ -472,6 +477,90 @@ export const competitorSignalScoresTable = pgTable(
       table.competitor_id,
       table.day
     ),
+  ]
+);
+
+// ── predictions ──────────────────────────────────────────────────────────
+// The prediction ledger. One row per dated, falsifiable claim Signal makes about
+// a competitor, written by the forecaster node and settled later by the daily
+// resolver sweep.
+//
+// Why this table exists rather than more columns on `alerts`: an alert describes
+// something that already happened and is finished when it is read. A prediction
+// is a claim about the future that stays open, comes due, and is then scored
+// against what actually occurred. Those are different lifecycles, and giving the
+// prediction its own row is what makes "resolve everything due today" a single
+// indexed query instead of a scan over alert JSON.
+//
+// `resolution_criteria` is a ResolutionCriteriaSchema discriminated union, not
+// free text, so the resolver can settle a prediction without a human reading it.
+// `brier_score` stays null until resolution and is only ever set for hit/miss —
+// `unresolved` and `void` carry no information about accuracy and must not drag
+// the score in either direction.
+export const predictionsTable = pgTable(
+  "predictions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    competitor_id: uuid("competitor_id")
+      .notNull()
+      .references(() => competitorsTable.id, { onDelete: "cascade" }),
+    // Durable artifact — the prediction outlives the run that produced it, same
+    // reasoning as alerts.run_id.
+    run_id: uuid("run_id").references(() => agentRunsTable.id, { onDelete: "set null" }),
+    statement: text("statement").notNull(),
+    pattern_type: text("pattern_type").$type<PredictionPatternType>().notNull(),
+    probability: real("probability").notNull(),
+    resolution_criteria: jsonb("resolution_criteria").$type<ResolutionCriteria>().notNull(),
+    horizon_days: integer("horizon_days").notNull(),
+    resolves_at: timestamp("resolves_at", { withTimezone: true }).notNull(),
+    // uuid[] can't carry a real FK constraint in Postgres — app-enforced, same as
+    // alerts.supporting_cluster_ids.
+    evidence_signal_ids: uuid("evidence_signal_ids")
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
+    evidence_count: integer("evidence_count").notNull(),
+    status: text("status").$type<PredictionStatus>().notNull().default("open"),
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+    resolution_note: text("resolution_note"),
+    resolution_evidence_urls: text("resolution_evidence_urls")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    brier_score: real("brier_score"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Mirrors PREDICTION_PROBABILITY_MIN/MAX. A stored 0 or 1 would be the
+    // database recording a certainty the product promises never to claim.
+    check(
+      "predictions_probability_check",
+      sql`${table.probability} >= 0.05 AND ${table.probability} <= 0.95`
+    ),
+    check("predictions_horizon_days_check", sql`${table.horizon_days} > 0`),
+    check("predictions_evidence_count_check", sql`${table.evidence_count} >= 0`),
+    check(
+      "predictions_status_check",
+      sql`${table.status} IN ('open', 'hit', 'miss', 'unresolved', 'void')`
+    ),
+    check(
+      "predictions_brier_score_check",
+      sql`${table.brier_score} IS NULL OR (${table.brier_score} >= 0 AND ${table.brier_score} <= 1)`
+    ),
+    // The resolver sweep's exact query: this workspace's open predictions that
+    // are now due.
+    index("predictions_workspace_status_resolves_idx").on(
+      table.workspace_id,
+      table.status,
+      table.resolves_at
+    ),
+    // The per-competitor ledger view, newest first.
+    index("predictions_competitor_created_idx").on(table.competitor_id, table.created_at),
+    // The calibration aggregate: every resolved prediction in a workspace.
+    index("predictions_workspace_status_idx").on(table.workspace_id, table.status),
   ]
 );
 
