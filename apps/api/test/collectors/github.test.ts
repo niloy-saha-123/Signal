@@ -250,6 +250,36 @@ describe("github collector", () => {
     expect(createSignalMock).not.toHaveBeenCalled();
   });
 
+  it("treats a secondary rate limit as quota, not as a dependency failure", async () => {
+    // GitHub's abuse/secondary limit also answers 403, but with
+    // x-ratelimit-remaining still non-zero. Classifying it as a real failure
+    // trips the shared circuit breaker, and the mid-run recheck then abandons
+    // every remaining competitor in the sweep for a condition that clears in
+    // about a minute.
+    safeFetchMock.mockResolvedValue({
+      status: 403,
+      headers: new Headers({ "x-ratelimit-remaining": "42", "retry-after": "60" }),
+      text: async () => "",
+    });
+
+    await githubCollectorProcessor(job);
+
+    expect(recordFailure).not.toHaveBeenCalled();
+    expect(createSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("still records a failure for a genuine error like a deleted org", async () => {
+    safeFetchMock.mockResolvedValue({
+      status: 404,
+      headers: new Headers(),
+      text: async () => "",
+    });
+
+    await githubCollectorProcessor(job);
+
+    expect(recordFailure).toHaveBeenCalled();
+  });
+
   it("records a failure for a competitor whose org returns an error, and keeps going", async () => {
     listCompetitorsMock.mockResolvedValue([
       { id: "comp-1", name: "Gone", is_active: true, github_org: "gone" },

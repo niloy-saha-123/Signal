@@ -8,6 +8,7 @@ import { notFound } from "next/navigation";
 import { getPrediction } from "@/lib/api";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 import { Badge, Card, CardBody, CardHeader, Metric, Num } from "@/components/ui/primitives";
+import type { ResolutionCriteria } from "@/lib/api";
 import { SOURCE_COLORS } from "@/lib/chart-colors";
 
 const DATE = new Intl.DateTimeFormat("en-US", {
@@ -26,18 +27,25 @@ const PATTERN_LABEL: Record<string, string> = {
   deprecation: "Deprecation",
 };
 
-function criteriaSummary(criteria: Record<string, unknown>): string {
+// Typed as the real union so TypeScript narrows on `kind` and the exhaustive
+// check below fails to compile if a variant is ever added. Casting this to
+// Record<string, unknown> and re-deriving field shapes with `as string[]` threw
+// away exactly the safety the shared schema exists to provide.
+function criteriaSummary(criteria: ResolutionCriteria): string {
   switch (criteria.kind) {
     case "signal_match":
-      return `Resolves as a hit if every one of these appears in collected signal: ${(criteria.all_of as string[]).join(", ")} — searching ${(criteria.sources as string[]).join(", ")}.`;
+      return `Resolves as a hit if every one of these appears in collected signal: ${criteria.all_of.join(", ")} — searching ${criteria.sources.join(", ")}.`;
     case "github_release":
-      return `Resolves as a hit if ${criteria.repo} publishes a release mentioning ${(criteria.mentions as string[]).join(" or ")}.`;
+      return `Resolves as a hit if ${criteria.repo} publishes a release mentioning ${criteria.mentions.join(" or ")}.`;
     case "pricing_change":
       return criteria.direction === "any"
         ? "Resolves as a hit if any pricing change is recorded in the window."
         : `Resolves as a hit if a pricing ${criteria.direction} is recorded in the window.`;
-    default:
+    default: {
+      const exhaustive: never = criteria;
+      void exhaustive;
       return "Resolution criteria are not recognised by this version of the app.";
+    }
   }
 }
 
@@ -146,7 +154,7 @@ export default async function PredictionDetailPage({
           <CardHeader title="How this gets settled" />
           <CardBody>
             <p className="text-[14px] text-ink">
-              {criteriaSummary(prediction.resolution_criteria as Record<string, unknown>)}
+              {criteriaSummary(prediction.resolution_criteria)}
             </p>
             <p className="mt-2 text-[13px] text-ink-secondary">
               Checked automatically on the resolution date by matching collected evidence — no

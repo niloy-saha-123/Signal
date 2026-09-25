@@ -14,7 +14,7 @@
 // signal-to-noise is the worst of any GitHub artifact, and anything a commit
 // stream would reveal about direction shows up in a PR title first.
 import type { Job } from "bullmq";
-import { withRetry } from "../lib/retry";
+import { withRetry as baseWithRetry } from "../lib/retry";
 import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
@@ -149,10 +149,22 @@ async function githubGet<T>(path: string): Promise<T> {
     maxBytes: MAX_GITHUB_BYTES,
   });
 
-  // 403 and 429 both carry rate-limit exhaustion; only x-ratelimit-remaining
-  // distinguishes it from a genuine permission error on a private resource.
+  // GitHub throttles two different ways and both answer 403/429.
+  //
+  //   primary    the hourly quota, signalled by x-ratelimit-remaining: 0
+  //   secondary  abuse detection — "you are going too fast" — which leaves
+  //              x-ratelimit-remaining non-zero and usually sets retry-after
+  //
+  // Only the primary case was recognised before, so a secondary limit fell
+  // through to the generic error path, counted as a dependency failure, and
+  // after five of them opened the shared circuit. The mid-run recheck then
+  // abandoned every remaining competitor in the sweep, for a condition that
+  // clears in about a minute. Both are quota; neither is GitHub being
+  // unhealthy, so both end the run without tripping the breaker.
   if (response.status === 429 || response.status === 403) {
-    if (response.headers.get("x-ratelimit-remaining") === "0") {
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    const retryAfter = response.headers.get("retry-after");
+    if (remaining === "0" || retryAfter !== null || response.status === 429) {
       throw new GitHubRateLimitError(parseResetHeader(response.headers));
     }
   }
@@ -167,6 +179,15 @@ async function githubGet<T>(path: string): Promise<T> {
   }
 
   return JSON.parse(await response.text()) as T;
+}
+
+// A quota resets on GitHub's clock, not ours, so retrying inside the same run
+// buys nothing and spends seconds of backoff at exactly the moment the
+// collector is trying to fail fast and hand the rest of the hour back.
+function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  return baseWithRetry(fn, {
+    shouldRetry: (error) => !(error instanceof GitHubRateLimitError),
+  });
 }
 
 function truncateBody(body: string | null): string {

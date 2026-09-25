@@ -632,4 +632,68 @@ describe("agents/discovery/competitor-discovery — SSRF guard", () => {
       error_message: expect.stringContaining("exceeded 2000000 bytes"),
     });
   });
+
+
+  describe("github org confirmation", () => {
+    it("accepts an org whose profile links back to the competitor's domain", async () => {
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url === "https://api.github.com/orgs/acme") {
+          return response({ json: { login: "acme", blog: "https://acme.com", type: "Organization" } });
+        }
+        return response({ status: 404 });
+      });
+
+      const result = await discoverCompetitor({
+        competitor_id: "comp-1",
+        name: "Acme",
+        domain: "acme.com",
+        existing: { ...emptyExisting, github_org: null },
+      });
+
+      expect(result.github_org).toBe("acme");
+    });
+
+    it("refuses a squatted personal account whose login merely matches the domain slug", async () => {
+      // GitHub logins are first-come-first-served and unrelated to domain
+      // ownership. Accepting a bare slug match would attribute a squatter's repo
+      // activity to this competitor and feed fabricated evidence into the
+      // prediction ledger — the exact thing the ledger exists to prevent.
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url === "https://api.github.com/orgs/acme") return response({ status: 404 });
+        if (url === "https://api.github.com/users/acme") {
+          return response({ json: { login: "acme", blog: "https://someone-else.example", type: "User" } });
+        }
+        return response({ status: 404 });
+      });
+
+      const result = await discoverCompetitor({
+        competitor_id: "comp-1",
+        name: "Acme",
+        domain: "acme.com",
+        existing: { ...emptyExisting, github_org: null },
+      });
+
+      expect(result.github_org).toBeNull();
+    });
+
+    it("accepts an organization whose login matches the domain slug exactly", async () => {
+      // github.com/vercel for vercel.com. An org handle matching the domain slug
+      // is a far higher bar than a user handle, so it stands on its own.
+      fetchMock.mockImplementation(async (url: string) => {
+        if (url === "https://api.github.com/orgs/acme") {
+          return response({ json: { login: "acme", blog: "", type: "Organization" } });
+        }
+        return response({ status: 404 });
+      });
+
+      const result = await discoverCompetitor({
+        competitor_id: "comp-1",
+        name: "Acme",
+        domain: "acme.com",
+        existing: { ...emptyExisting, github_org: null },
+      });
+
+      expect(result.github_org).toBe("acme");
+    });
+  });
 });

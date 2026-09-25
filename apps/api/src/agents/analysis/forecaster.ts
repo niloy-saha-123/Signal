@@ -40,6 +40,7 @@ import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
+import { withRetry } from "../../lib/retry";
 
 const AGENT_NAME = "forecaster" as const;
 const PREFERRED_MODEL = "claude-sonnet";
@@ -239,20 +240,26 @@ export async function forecasterNode(
       // One forecast failing to persist must not cost the others in this batch —
       // same per-item isolation the collectors apply.
       try {
-        await createPrediction({
-          workspace_id: state.workspace_id,
-          competitor_id: state.competitor_id,
-          run_id: state.run_id,
-          statement: forecast.statement,
-          pattern_type: forecast.pattern_type,
-          probability: forecast.probability,
-          resolution_criteria: forecast.resolution_criteria,
-          horizon_days: forecast.horizon_days,
-          resolves_at: resolvesAt,
-          evidence_signal_ids: evidenceSignalIds,
-          evidence_count: evidenceCount,
-          status: "open",
-        });
+        // Retried before being given up on. This row already cost a model call,
+        // and the LLM is stochastic — a transient pool exhaustion here loses a
+        // prediction that tomorrow's run has no obligation to reproduce, and
+        // the only trace would be a log line.
+        await withRetry(() =>
+          createPrediction({
+            workspace_id: state.workspace_id,
+            competitor_id: state.competitor_id,
+            run_id: state.run_id,
+            statement: forecast.statement,
+            pattern_type: forecast.pattern_type,
+            probability: forecast.probability,
+            resolution_criteria: forecast.resolution_criteria,
+            horizon_days: forecast.horizon_days,
+            resolves_at: resolvesAt,
+            evidence_signal_ids: evidenceSignalIds,
+            evidence_count: evidenceCount,
+            status: "open",
+          })
+        );
         stored.push(forecast);
         open.push({ pattern_type: forecast.pattern_type, resolves_at: resolvesAt });
 

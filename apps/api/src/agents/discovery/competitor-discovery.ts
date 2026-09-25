@@ -504,6 +504,18 @@ function isConfirmedAccount(
   domain: string | null
 ): boolean {
   if (blogMatchesDomain(account.blog, domain)) return true;
+  // A bare login match is NOT proof of anything on its own. GitHub handles are
+  // first-come-first-served and unrelated to domain ownership, so accepting one
+  // would let whoever squats github.com/<company-slug> have their repository
+  // activity attributed to this competitor — fabricated evidence flowing
+  // straight into the prediction ledger, which is the one thing the ledger
+  // exists to prevent.
+  //
+  // An *organization* whose login is exactly the domain slug is a far higher
+  // bar than a personal account: orgs are rarer, harder to squat, and are what
+  // a real company account looks like (github.com/vercel for vercel.com). That
+  // still stands on its own; a user account does not.
+  if (account.type !== "Organization") return false;
   return domain !== null && slug === domainSlug(domain);
 }
 

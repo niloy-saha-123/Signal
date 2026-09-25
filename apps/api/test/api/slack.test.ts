@@ -216,3 +216,109 @@ describe("POST /api/slack/events", () => {
     expect(res.status).toBe(200);
   });
 });
+
+
+// body-parser sets req._body on the first parse and every later express.json()
+// short-circuits on it. So a Slack router mounted BEHIND the app's global JSON
+// parser never gets its `verify` hook called, never captures the raw bytes, and
+// silently 401s every genuine Slack request. The bug is undiagnosable from the
+// outside — a correct signature and a forged one both return 401.
+function appWithGlobalJsonParser(router: express.Router) {
+  const app = express();
+  app.use(express.json({ limit: "1mb" }));
+  app.use("/api/slack", router);
+  return app;
+}
+
+describe("POST /api/slack/events raw-body capture", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("verifies a correctly signed request when mounted ahead of the JSON parser", async () => {
+    const body = JSON.stringify({ type: "url_verification", challenge: "abc123" });
+    const app = appWith(createSlackRouter(makeDeps()));
+
+    const res = await post(app, "/api/slack/events", body, signedHeaders(body));
+
+    expect(res.status).toBe(200);
+    expect(res.body.challenge).toBe("abc123");
+  });
+
+  it("fails loudly, not silently, when mounted behind a body parser", async () => {
+    // Misordered middleware is a deployment mistake, and it must not look like
+    // a signature failure. A 401 here would send whoever debugs it hunting for
+    // a wrong signing secret forever.
+    const enqueueSlackQuestion = vi.fn();
+    const body = JSON.stringify({ type: "url_verification", challenge: "abc123" });
+    const app = appWithGlobalJsonParser(
+      createSlackRouter(makeDeps({ enqueueSlackQuestion }))
+    );
+
+    const res = await post(app, "/api/slack/events", body, signedHeaders(body));
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("slack_raw_body_unavailable");
+    expect(enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/slack/events resilience", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("acks instead of hanging when the installation lookup fails", async () => {
+    // An unhandled rejection means no response at all. Slack waits 3s, gives
+    // up, and redelivers — and each redelivery runs the agent again and posts
+    // another answer into the same thread.
+    const getSlackInstallation = vi.fn().mockRejectedValue(new Error("pool exhausted"));
+    const body = JSON.stringify({
+      type: "event_callback",
+      team_id: TEAM_ID,
+      event: { type: "app_mention", text: "<@U0BOT> hi", channel: "C1", user: "U1", ts: "1.0" },
+    });
+    const app = appWith(createSlackRouter(makeDeps({ getSlackInstallation })));
+
+    const res = await post(app, "/api/slack/events", body, signedHeaders(body));
+
+    expect(res.status).toBe(200);
+  });
+
+  it("ignores a Slack retry delivery rather than answering twice", async () => {
+    const enqueueSlackQuestion = vi.fn().mockResolvedValue(undefined);
+    const body = JSON.stringify({
+      type: "event_callback",
+      team_id: TEAM_ID,
+      event: { type: "app_mention", text: "<@U0BOT> hi", channel: "C1", user: "U1", ts: "1.0" },
+    });
+    const app = appWith(createSlackRouter(makeDeps({ enqueueSlackQuestion })));
+
+    const res = await post(app, "/api/slack/events", body, {
+      ...signedHeaders(body),
+      "x-slack-retry-num": "1",
+    });
+
+    expect(res.status).toBe(200);
+    expect(enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("carries a stable dedupe key derived from the event", async () => {
+    // Second line of defence: even if a retry gets through, a deterministic job
+    // id collapses the duplicate instead of running the agent twice.
+    const enqueueSlackQuestion = vi.fn().mockResolvedValue(undefined);
+    const body = JSON.stringify({
+      type: "event_callback",
+      team_id: TEAM_ID,
+      event: {
+        type: "app_mention",
+        text: "<@U0BOT> hi",
+        channel: "C1",
+        user: "U1",
+        ts: "1700000000.000100",
+      },
+    });
+    const app = appWith(createSlackRouter(makeDeps({ enqueueSlackQuestion })));
+
+    await post(app, "/api/slack/events", body, signedHeaders(body));
+
+    const [payload] = enqueueSlackQuestion.mock.calls[0];
+    expect(payload.dedupe_key).toBe(`${TEAM_ID}:1700000000.000100`);
+  });
+});
