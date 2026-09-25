@@ -24,6 +24,7 @@ vi.mock("@/queues/registry", () => ({
     "own-company-analysis-sweep": {},
     "daily-analysis-sweep": {},
     "pending-confirmation-expiry": {},
+    "resolve-predictions": {},
   },
   queues: {
     "collect-reddit": { upsertJobScheduler: upsertJobSchedulerMock },
@@ -35,6 +36,7 @@ vi.mock("@/queues/registry", () => ({
     "own-company-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
     "daily-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
     "pending-confirmation-expiry": { upsertJobScheduler: upsertJobSchedulerMock },
+    "resolve-predictions": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -53,6 +55,8 @@ import {
   DAILY_ANALYSIS_SWEEP_SCHEDULER_ID,
   CONFIRMATION_EXPIRY_CRON,
   CONFIRMATION_EXPIRY_SCHEDULER_ID,
+  PREDICTION_RESOLVER_CRON,
+  PREDICTION_RESOLVER_SCHEDULER_ID,
 } from "@/queues/scheduler";
 
 describe("queues/scheduler", () => {
@@ -176,7 +180,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(9);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(10);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
@@ -234,4 +238,24 @@ describe("queues/scheduler", () => {
       { name: "pending-confirmation-expiry", data: {} }
     );
   });
+
+  it("registers the daily prediction-resolution sweep an hour after the analysis sweep", async () => {
+    delete process.env.COLLECT_INTERVAL_HOURS;
+    upsertJobSchedulerMock.mockClear();
+
+    await registerQueueSchedules();
+
+    // 01:00 rather than 00:00 on purpose: the day's collection and scoring have
+    // to land first, or a prediction gets judged on evidence that exists but had
+    // not been fetched yet — turning a hit into a recorded miss.
+    expect(PREDICTION_RESOLVER_CRON).toBe("0 1 * * *");
+    expect(DAILY_ANALYSIS_SWEEP_CRON).toBe("0 0 * * *");
+    expect(PREDICTION_RESOLVER_SCHEDULER_ID).toBe("signal:resolve-predictions:v1");
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      PREDICTION_RESOLVER_SCHEDULER_ID,
+      { pattern: PREDICTION_RESOLVER_CRON },
+      { name: "resolve-predictions", data: {} }
+    );
+  });
+
 });

@@ -75,7 +75,8 @@ export type QueueName =
   | "discovery-search"
   | "own-company-analysis-sweep"
   | "daily-analysis-sweep"
-  | "pending-confirmation-expiry";
+  | "pending-confirmation-expiry"
+  | "resolve-predictions";
 
 export interface QueueConfig {
   concurrency: number;
@@ -209,6 +210,11 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // One at a time; no retry (a missed tick is corrected by the next one, and a
   // double-run would just re-check the same threads idempotently).
   "pending-confirmation-expiry": { concurrency: 1, attempts: 1 },
+  // Daily sweep that settles every prediction whose date has passed. One at a
+  // time; no retry. A missed tick is corrected by the next day's run, and
+  // resolvePrediction is guarded on status "open" so a double-run cannot
+  // overwrite a verdict already recorded.
+  "resolve-predictions": { concurrency: 1, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds

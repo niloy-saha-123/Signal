@@ -364,6 +364,7 @@ describe("queues/registry", () => {
     "own-company-analysis-sweep",
     "daily-analysis-sweep",
     "pending-confirmation-expiry",
+    "resolve-predictions",
     ...OTHER_QUEUES,
   ];
     expect(Object.keys(queues).sort()).toEqual(allNames.sort());

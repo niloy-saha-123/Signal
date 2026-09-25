@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     initAnalysis: makeInit(),
     initDiscovery: makeInit(),
     initConfirmationExpiry: makeInit(),
+    initPredictionResolver: makeInit(),
     registerSchedules: vi.fn().mockResolvedValue(undefined),
     closeQueue: vi.fn().mockResolvedValue(undefined),
     closeRedis: vi.fn().mockResolvedValue(undefined),
@@ -41,6 +42,9 @@ vi.mock("@/collectors/jobs", () => ({ initJobsWorker: mocks.initJobs }));
 vi.mock("@/collectors/changelog", () => ({ initChangelogWorker: mocks.initChangelog }));
 vi.mock("@/collectors/pricing", () => ({ initPricingWorker: mocks.initPricing }));
 vi.mock("@/collectors/github", () => ({ initGithubWorker: mocks.initGithub }));
+vi.mock("@/agents/resolver/resolver-worker", () => ({
+  initPredictionResolverWorker: mocks.initPredictionResolver,
+}));
 vi.mock("@/pipeline/entity-extractor", () => ({ initEntityExtractorWorker: mocks.initEntity }));
 vi.mock("@/pipeline/quality-scorer", () => ({ initQualityScorerWorker: mocks.initQuality }));
 vi.mock("@/pipeline/deduplicator", () => ({ initDeduplicatorWorker: mocks.initDedup }));
@@ -76,7 +80,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 16 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 17 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -95,10 +99,11 @@ describe("standalone worker runtime", () => {
     expect(mocks.initAnalysis).toHaveBeenCalledTimes(1);
     expect(mocks.initDiscovery).toHaveBeenCalledTimes(1);
     expect(mocks.initConfirmationExpiry).toHaveBeenCalledTimes(1);
+    expect(mocks.initPredictionResolver).toHaveBeenCalledTimes(1);
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(16);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(17);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);

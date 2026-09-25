@@ -1036,6 +1036,45 @@ export type CreateSignalScoreInput = {
 
 // SynthesisAgent's write — retries replace the same competitor's UTC-day row
 // instead of appending a duplicate score.
+// Every open prediction whose resolution date has passed, across all workspaces.
+// Backed by predictions_workspace_status_resolves_idx.
+export async function listDuePredictions(
+  now: Date
+): Promise<Array<typeof predictionsTable.$inferSelect>> {
+  return db
+    .select()
+    .from(predictionsTable)
+    .where(and(eq(predictionsTable.status, "open"), lte(predictionsTable.resolves_at, now)))
+    .orderBy(asc(predictionsTable.resolves_at));
+}
+
+export interface ResolvePredictionInput {
+  id: string;
+  status: PredictionStatus;
+  resolved_at: Date;
+  resolution_note: string;
+  resolution_evidence_urls: string[];
+  // null for `unresolved` — a window that produced no evidence says nothing
+  // about accuracy and must not be averaged into the workspace's score.
+  brier_score: number | null;
+}
+
+export async function resolvePrediction(input: ResolvePredictionInput): Promise<void> {
+  // Guarded on status "open": the daily sweep and a manual re-run can overlap,
+  // and re-resolving a settled prediction would overwrite a recorded outcome
+  // with a fresh verdict computed over a different window.
+  await db
+    .update(predictionsTable)
+    .set({
+      status: input.status,
+      resolved_at: input.resolved_at,
+      resolution_note: input.resolution_note,
+      resolution_evidence_urls: input.resolution_evidence_urls,
+      brier_score: input.brier_score,
+    })
+    .where(and(eq(predictionsTable.id, input.id), eq(predictionsTable.status, "open")));
+}
+
 // ── resolution windows ───────────────────────────────────────────────────
 // The resolver asks a different question than the analysis nodes do: not "what
 // happened recently" but "what happened between these two instants". A relative
