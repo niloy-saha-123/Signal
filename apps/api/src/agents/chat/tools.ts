@@ -9,7 +9,7 @@
 //   - wraps existing route/query logic rather than reimplementing it.
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
-import { CompetitorCreateInputSchema } from "@signal/shared";
+import { CompetitorCreateInputSchema, type PredictionStatus } from "@signal/shared";
 import * as queries from "../../db/queries";
 import { type QueueName } from "../../queues/registry";
 
@@ -296,10 +296,16 @@ export function buildChatTools(workspaceId: string, deps: ChatToolDeps = default
   // ── prediction ledger ──────────────────────────────────────────────────
 
   const listPredictions = tool(
-    async ({ status, competitor_id }: { status?: string; competitor_id?: string }) => {
+    async ({
+      status,
+      competitor_id,
+    }: {
+      status?: PredictionStatus;
+      competitor_id?: string;
+    }) => {
       const rows = await deps.listPredictionsForWorkspace({
         workspace_id: workspaceId,
-        status: status as never,
+        status,
         competitor_id,
         limit: 50,
       });
