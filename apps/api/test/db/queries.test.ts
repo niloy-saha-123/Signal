@@ -2053,6 +2053,7 @@ describe("db/queries — competitor discovery write-back", () => {
     lever_token: null,
     pricing_url: "https://acme.com/pricing",
     changelog_rss: null,
+    github_org: null,
     logs: [
       {
         field_name: "subreddits",
@@ -2096,6 +2097,7 @@ describe("db/queries — competitor discovery write-back", () => {
       lever_token: null,
       pricing_url: "https://acme.com/pricing",
       changelog_rss: null,
+      github_org: null,
       discovery_status: "complete",
       discovered_at: expect.any(Date),
       updated_at: expect.any(Date),
@@ -2124,6 +2126,7 @@ describe("db/queries — competitor discovery write-back", () => {
       lever_token: null,
       pricing_url: null,
       changelog_rss: null,
+      github_org: null,
       logs: mixedResult.logs.map((l) => ({
         ...l,
         status: l.status === "found" ? "not_found" : l.status,
@@ -2144,6 +2147,7 @@ describe("db/queries — competitor discovery write-back", () => {
       lever_token: null,
       pricing_url: null,
       changelog_rss: null,
+      github_org: null,
       logs: [
         {
           field_name: "greenhouse",
@@ -2167,6 +2171,7 @@ describe("db/queries — competitor discovery write-back", () => {
       lever_token: null,
       pricing_url: "https://acme.com/pricing",
       changelog_rss: null,
+      github_org: null,
       logs: [],
     });
 

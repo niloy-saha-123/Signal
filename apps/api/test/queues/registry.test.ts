@@ -169,6 +169,7 @@ const OTHER_QUEUES: QueueName[] = [
   "collect-jobs",
   "collect-changelog",
   "collect-pricing",
+  "collect-github",
   "pipeline-entity-extraction",
   "pipeline-quality-scoring",
   "pipeline-deduplication",

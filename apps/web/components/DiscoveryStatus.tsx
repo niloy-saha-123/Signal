@@ -19,6 +19,7 @@ const FIELD_LABELS: Record<DiscoveryLog["field_name"], string> = {
   lever: "Lever",
   pricing_url: "Pricing URL",
   rss_url: "RSS feed",
+  github_org: "GitHub org",
 };
 
 const SETTLED_STATUSES = new Set(["complete", "failed"]);

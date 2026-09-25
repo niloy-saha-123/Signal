@@ -43,6 +43,11 @@ export const competitorsTable = pgTable(
     lever_token: text("lever_token"),
     pricing_url: text("pricing_url"),
     changelog_rss: text("changelog_rss"),
+    // GitHub org/user login (e.g. "vercel"), not a URL. The github collector reads
+    // releases, pull requests and new repositories under it — the earliest public
+    // evidence of what a technical competitor is actually building, typically weeks
+    // ahead of the changelog entry or launch post that describes it.
+    github_org: text("github_org"),
     // Pause monitoring without losing history — hard delete would orphan
     // every signal/alert/score row a RESTRICT/CASCADE choice below depends on.
     is_active: boolean("is_active").notNull().default(true),
@@ -95,7 +100,7 @@ export const signalsTable = pgTable(
   (table) => [
     check(
       "signals_source_check",
-      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing')`
+      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github')`
     ),
     check(
       "signals_quality_score_check",

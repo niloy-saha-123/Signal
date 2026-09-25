@@ -39,6 +39,14 @@
 //        <link rel="alternate" type="application/rss+xml">
 //     3. First candidate that parses as valid RSS/Atom XML wins
 //
+//   GITHUB ORG
+//     1. GET api.github.com/orgs/{slug} for each slug variant, then /users/{slug}
+//     2. Confirm identity before accepting: the account's `blog` URL must resolve
+//        to the competitor's own domain, or its login must equal the domain slug
+//        exactly. An unconfirmed match is discarded rather than stored — a wrong
+//        org silently poisons every signal, prediction and score downstream, and
+//        a null here only costs one collector.
+//
 // Every attempt (URL tried, outcome) is written as one competitor_discovery_log
 // row per field — a 'failed' discovery is diagnosable and manually fixable from
 // that log, not a silent gap. On completion, the agent updates the competitors
@@ -65,7 +73,14 @@ const RUN_DEADLINE_MS = 45_000;
 // and a redirect can move it again) — cap what cheerio/xml2js are handed.
 const MAX_BODY_BYTES = 2_000_000;
 const RETRY = { maxAttempts: 2 } as const;
-const FIELD_ORDER: FieldName[] = ["subreddits", "greenhouse", "lever", "pricing_url", "rss_url"];
+const FIELD_ORDER: FieldName[] = [
+  "subreddits",
+  "greenhouse",
+  "lever",
+  "pricing_url",
+  "rss_url",
+  "github_org",
+];
 
 const PRICING_PATHS = ["/pricing", "/plans", "/price", "/pricing-plans", "/en/pricing", "/en/plans"];
 const RSS_PATHS = [
@@ -452,6 +467,114 @@ async function discoverRss(
   }
 }
 
+// --- GITHUB ORG -----------------------------------------------------------
+
+interface GithubAccount {
+  login?: unknown;
+  blog?: unknown;
+  name?: unknown;
+  type?: unknown;
+}
+
+// True when the account's stated website is the competitor's own domain.
+// Compared on the host with a leading "www." stripped, so
+// "https://www.vercel.com/" matches "vercel.com".
+function blogMatchesDomain(blog: unknown, domain: string | null): boolean {
+  if (!domain || typeof blog !== "string" || !blog.trim()) return false;
+  try {
+    const host = new URL(blog.includes("://") ? blog : `https://${blog}`).hostname.toLowerCase();
+    const normalizedHost = host.replace(/^www\./, "");
+    const normalizedDomain = domain.toLowerCase().replace(/^www\./, "");
+    return normalizedHost === normalizedDomain || normalizedHost.endsWith(`.${normalizedDomain}`);
+  } catch {
+    return false;
+  }
+}
+
+// Identity confirmation, not just existence. github.com/signal exists and has
+// nothing to do with a company called Signal — accepting an unverified slug match
+// would attribute another project's releases and pull requests to this competitor
+// and corrupt every signal, score and prediction derived from them. Two accepted
+// proofs: the account links back to the competitor's domain, or its login is
+// exactly the domain slug (github.com/vercel for vercel.com), which is too
+// specific to be coincidence.
+function isConfirmedAccount(
+  account: GithubAccount,
+  slug: string,
+  domain: string | null
+): boolean {
+  if (blogMatchesDomain(account.blog, domain)) return true;
+  return domain !== null && slug === domainSlug(domain);
+}
+
+async function discoverGithubOrg(
+  domain: string | null,
+  name: string,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string | null>> {
+  const attempted: string[] = [];
+  // Unauthenticated GitHub allows 60 requests/hour per IP. Discovery runs once
+  // per competitor so it can share that budget, but the token is still sent when
+  // present so discovery and the collector are not competing for the same quota.
+  const token = process.env.GITHUB_TOKEN?.trim();
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "signal-competitive-intelligence",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  try {
+    for (const slug of slugVariants(domain, name)) {
+      // Orgs before users: a company account is an org far more often than a
+      // user, so this ordering usually costs one request instead of two.
+      for (const kind of ["orgs", "users"] as const) {
+        const url = `https://api.github.com/${kind}/${encodeURIComponent(slug)}`;
+        attempted.push(url);
+        const res = await probe(url, runSignal, { headers });
+        if (!isOk(res)) continue;
+
+        const account = (await res.json()) as GithubAccount;
+        if (typeof account.login !== "string" || !account.login) continue;
+        if (!isConfirmedAccount(account, slug, domain)) continue;
+
+        return {
+          value: account.login,
+          log: {
+            field_name: "github_org",
+            attempted_urls: attempted,
+            discovered_value: account.login,
+            status: "found",
+            error_message: null,
+          },
+        };
+      }
+    }
+
+    return {
+      value: null,
+      log: {
+        field_name: "github_org",
+        attempted_urls: attempted,
+        discovered_value: null,
+        status: "not_found",
+        error_message: null,
+      },
+    };
+  } catch (err) {
+    return {
+      value: null,
+      log: {
+        field_name: "github_org",
+        attempted_urls: attempted,
+        discovered_value: null,
+        status: "error",
+        error_message: errText(err, runSignal),
+      },
+    };
+  }
+}
+
 // --- orchestration --------------------------------------------------------
 
 export async function discoverCompetitor(input: {
@@ -464,6 +587,7 @@ export async function discoverCompetitor(input: {
     lever_token: string | null;
     pricing_url: string | null;
     changelog_rss: string | null;
+    github_org: string | null;
   };
 }, opts: { signal?: AbortSignal } = {}): Promise<CompetitorDiscoveryResult> {
   // One deadline for the whole run, threaded into every probe. A strategy still
@@ -485,6 +609,7 @@ export async function discoverCompetitor(input: {
     lever_token: ex.lever_token,
     pricing_url: ex.pricing_url,
     changelog_rss: ex.changelog_rss,
+    github_org: ex.github_org,
     logs,
   };
 
@@ -531,6 +656,13 @@ export async function discoverCompetitor(input: {
     tasks.push(
       discoverRss(probeDomain, runSignal).then(
         record<string | null>((v) => (result.changelog_rss = v))
+      )
+    );
+  }
+  if (!isSet(ex.github_org)) {
+    tasks.push(
+      discoverGithubOrg(probeDomain, input.name, runSignal).then(
+        record<string | null>((v) => (result.github_org = v))
       )
     );
   }

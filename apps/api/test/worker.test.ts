@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     initJobs: makeInit(),
     initChangelog: makeInit(),
     initPricing: makeInit(),
+    initGithub: makeInit(),
     initEntity: makeInit(),
     initQuality: makeInit(),
     initDedup: makeInit(),
@@ -39,6 +40,7 @@ vi.mock("@/collectors/hn", () => ({ initHnWorker: mocks.initHn }));
 vi.mock("@/collectors/jobs", () => ({ initJobsWorker: mocks.initJobs }));
 vi.mock("@/collectors/changelog", () => ({ initChangelogWorker: mocks.initChangelog }));
 vi.mock("@/collectors/pricing", () => ({ initPricingWorker: mocks.initPricing }));
+vi.mock("@/collectors/github", () => ({ initGithubWorker: mocks.initGithub }));
 vi.mock("@/pipeline/entity-extractor", () => ({ initEntityExtractorWorker: mocks.initEntity }));
 vi.mock("@/pipeline/quality-scorer", () => ({ initQualityScorerWorker: mocks.initQuality }));
 vi.mock("@/pipeline/deduplicator", () => ({ initDeduplicatorWorker: mocks.initDedup }));
@@ -74,7 +76,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 15 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 16 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -85,6 +87,7 @@ describe("standalone worker runtime", () => {
     expect(mocks.initJobs).toHaveBeenCalledTimes(1);
     expect(mocks.initChangelog).toHaveBeenCalledTimes(1);
     expect(mocks.initPricing).toHaveBeenCalledTimes(1);
+    expect(mocks.initGithub).toHaveBeenCalledTimes(1);
     expect(mocks.initEntity).toHaveBeenCalledTimes(1);
     expect(mocks.initQuality).toHaveBeenCalledTimes(1);
     expect(mocks.initDedup).toHaveBeenCalledTimes(1);
@@ -95,7 +98,7 @@ describe("standalone worker runtime", () => {
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(15);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(16);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);

@@ -10,6 +10,7 @@ export const SOURCE_COLORS = {
   jobs: "#1baf7a",
   changelog: "#eda100",
   pricing: "#e87ba4",
+  github: "#4b5563",
 } as const;
 
 export const STATUS_COLORS = {
