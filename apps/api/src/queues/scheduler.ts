@@ -113,6 +113,13 @@ export const DAILY_ANALYSIS_SWEEP_SCHEDULER_ID = "signal:daily-analysis-sweep:v1
 export const CONFIRMATION_EXPIRY_CRON = "0 0 * * *";
 export const CONFIRMATION_EXPIRY_SCHEDULER_ID = "signal:pending-confirmation-expiry:v1";
 
+// Daily prediction-resolution sweep, 01:00 UTC — an hour after the daily analysis
+// sweep so the day's collection and scoring have already landed. A prediction
+// resolved against a half-collected day would be judged on evidence that exists
+// but had not been fetched yet, which turns a hit into a recorded miss.
+export const PREDICTION_RESOLVER_CRON = "0 1 * * *";
+export const PREDICTION_RESOLVER_SCHEDULER_ID = "signal:resolve-predictions:v1";
+
 // Upserts every collector's schedule plus pipeline-recovery's and the weekly
 // own-company analysis sweep's — kept in one function because all three are the
 // same "idempotent upsertJobScheduler at worker startup" operation, not separate
@@ -125,6 +132,7 @@ export async function registerQueueSchedules(
     | "own-company-analysis-sweep"
     | "daily-analysis-sweep"
     | "pending-confirmation-expiry"
+    | "resolve-predictions"
   > = queues
 ): Promise<void> {
   const config = getCollectorScheduleConfig();
@@ -168,6 +176,14 @@ export async function registerQueueSchedules(
     CONFIRMATION_EXPIRY_SCHEDULER_ID,
     { pattern: CONFIRMATION_EXPIRY_CRON },
     { name: "pending-confirmation-expiry", data: {} }
+  );
+  // Daily prediction-resolution sweep — settles every prediction whose date has
+  // passed. Without it the ledger never closes anything, and the product becomes
+  // the thing it was built to replace: forward-looking claims nobody revisits.
+  await queueMap["resolve-predictions"].upsertJobScheduler(
+    PREDICTION_RESOLVER_SCHEDULER_ID,
+    { pattern: PREDICTION_RESOLVER_CRON },
+    { name: "resolve-predictions", data: {} }
   );
   // No discovery-search schedule here: a weekly sweep would be a poison job as
   // written (DiscoveryJobDataSchema requires a workspace_id, but a repeat job

@@ -1,5 +1,6 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, gte, count, sql, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, gte, lte, count, sql, type SQL } from "drizzle-orm";
+import { computeCalibration, type Calibration } from "../lib/calibration";
 import { z } from "zod";
 import type {
   AgentName,
@@ -1036,6 +1037,142 @@ export type CreateSignalScoreInput = {
 
 // SynthesisAgent's write — retries replace the same competitor's UTC-day row
 // instead of appending a duplicate score.
+// Every open prediction whose resolution date has passed, across all workspaces.
+// Backed by predictions_workspace_status_resolves_idx.
+export async function listDuePredictions(
+  now: Date
+): Promise<Array<typeof predictionsTable.$inferSelect>> {
+  return db
+    .select()
+    .from(predictionsTable)
+    .where(and(eq(predictionsTable.status, "open"), lte(predictionsTable.resolves_at, now)))
+    .orderBy(asc(predictionsTable.resolves_at));
+}
+
+export interface ResolvePredictionInput {
+  id: string;
+  status: PredictionStatus;
+  resolved_at: Date;
+  resolution_note: string;
+  resolution_evidence_urls: string[];
+  // null for `unresolved` — a window that produced no evidence says nothing
+  // about accuracy and must not be averaged into the workspace's score.
+  brier_score: number | null;
+}
+
+export async function resolvePrediction(input: ResolvePredictionInput): Promise<void> {
+  // Guarded on status "open": the daily sweep and a manual re-run can overlap,
+  // and re-resolving a settled prediction would overwrite a recorded outcome
+  // with a fresh verdict computed over a different window.
+  await db
+    .update(predictionsTable)
+    .set({
+      status: input.status,
+      resolved_at: input.resolved_at,
+      resolution_note: input.resolution_note,
+      resolution_evidence_urls: input.resolution_evidence_urls,
+      brier_score: input.brier_score,
+    })
+    .where(and(eq(predictionsTable.id, input.id), eq(predictionsTable.status, "open")));
+}
+
+export interface CalibrationQuery {
+  competitorId?: string;
+  patternType?: PredictionPatternType;
+}
+
+// A workspace's forecasting track record. Only `hit` and `miss` are selected —
+// filtering in SQL rather than in JavaScript so an unscoreable row can never
+// reach computeCalibration, where an `unresolved` treated as a miss would let a
+// competitor going quiet damage the score, and a `void` would let a human's
+// bookkeeping move it.
+//
+// Returns brier: null for an empty track record. See lib/calibration.ts: zero is
+// a perfect score, so "nothing has resolved yet" must not render as flawless.
+export async function getCalibration(
+  workspaceId: string,
+  opts: CalibrationQuery = {}
+): Promise<Calibration> {
+  const conditions = [
+    eq(predictionsTable.workspace_id, workspaceId),
+    inArray(predictionsTable.status, ["hit", "miss"]),
+  ];
+  if (opts.competitorId) {
+    conditions.push(eq(predictionsTable.competitor_id, opts.competitorId));
+  }
+  if (opts.patternType) {
+    conditions.push(eq(predictionsTable.pattern_type, opts.patternType));
+  }
+
+  const rows = await db
+    .select({
+      probability: predictionsTable.probability,
+      status: predictionsTable.status,
+    })
+    .from(predictionsTable)
+    .where(and(...conditions));
+
+  return computeCalibration(
+    rows
+      .filter(
+        (row): row is { probability: number; status: "hit" | "miss" } =>
+          row.status === "hit" || row.status === "miss"
+      )
+      .map((row) => ({ probability: row.probability, status: row.status }))
+  );
+}
+
+// ── resolution windows ───────────────────────────────────────────────────
+// The resolver asks a different question than the analysis nodes do: not "what
+// happened recently" but "what happened between these two instants". A relative
+// NOW() - INTERVAL window cannot express that, because a prediction's window is
+// anchored to when it was made, not to when the sweep runs.
+
+export interface SignalWindowQuery {
+  from: Date;
+  to: Date;
+  sources?: SignalSource[];
+}
+
+export async function listSignalsInWindow(
+  competitorId: string,
+  window: SignalWindowQuery
+): Promise<Signal[]> {
+  const conditions = [
+    eq(signalsTable.competitor_id, competitorId),
+    gte(signalsTable.collected_at, window.from),
+    lte(signalsTable.collected_at, window.to),
+  ];
+  if (window.sources && window.sources.length > 0) {
+    conditions.push(inArray(signalsTable.source, window.sources));
+  }
+
+  return db
+    .select()
+    .from(signalsTable)
+    .where(and(...conditions))
+    .orderBy(desc(signalsTable.collected_at))
+    .limit(analysisInputLimit(500));
+}
+
+export async function listPricingDiffsInWindow(
+  competitorId: string,
+  window: { from: Date; to: Date }
+): Promise<PricingDiff[]> {
+  return db
+    .select()
+    .from(pricingDiffsTable)
+    .where(
+      and(
+        eq(pricingDiffsTable.competitor_id, competitorId),
+        gte(pricingDiffsTable.detected_at, window.from),
+        lte(pricingDiffsTable.detected_at, window.to)
+      )
+    )
+    .orderBy(desc(pricingDiffsTable.detected_at))
+    .limit(analysisInputLimit(500));
+}
+
 // ── predictions ──────────────────────────────────────────────────────────
 
 export interface CreatePredictionInput {

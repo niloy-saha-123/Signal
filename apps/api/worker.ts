@@ -16,6 +16,7 @@ import { initPipelineRecoveryWorker } from "./src/pipeline/recovery";
 import { initAnalysisWorker } from "./src/agents/analysis/analysis-worker";
 import { initDiscoveryWorker } from "./src/agents/discovery-search/discovery-worker";
 import { initConfirmationExpiryWorker } from "./src/queues/confirmation-expiry-worker";
+import { initPredictionResolverWorker } from "./src/agents/resolver/resolver-worker";
 import { closeRedisConnections } from "./src/lib/redis-client";
 import { closeDatabase } from "./src/db/client";
 import { logger } from "./src/lib/logger";
@@ -69,6 +70,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initAnalysisWorker,
         initDiscoveryWorker,
         initConfirmationExpiryWorker,
+        initPredictionResolverWorker,
       ]) {
         initialized.push(initialize());
       }
