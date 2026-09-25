@@ -7,7 +7,7 @@ export default async function Page() {
 
   if (!token) {
     return (
-      <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+      <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] px-6 py-12">
         <p className="max-w-md text-sm leading-relaxed text-ink-secondary">
           Sign in to ask follow-up questions against collected evidence. The preview workspace
           shows the briefing, intel, and alerts without a live research thread.
@@ -20,7 +20,7 @@ export default async function Page() {
   const competitorIds = competitors.filter((competitor) => competitor.is_active).map((c) => c.id);
 
   return (
-    <div className="h-[calc(100vh-9rem)] overflow-hidden rounded-[10px] border border-line bg-surface">
+    <div className="h-[calc(100vh-9rem)] overflow-hidden rounded-xl bg-surface shadow-[var(--shadow-card)]">
       <ChatInterface competitorIds={competitorIds} />
     </div>
   );

@@ -122,7 +122,7 @@ export function ScorecardClient({
         />
       ) : (
         <>
-          <div className="mb-8 grid gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-3">
+          <div className="mb-8 grid gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-3">
             <div className="bg-surface p-6">
               <Metric value={calibration.brier!.toFixed(3)} label="Brier score" />
               <p className="mt-2 text-[12px] text-ink-muted">Lower is better. 0 is perfect.</p>

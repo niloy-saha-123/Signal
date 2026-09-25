@@ -28,7 +28,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           {isPreview && (
             <p
               role="status"
-              className="mb-6 rounded-lg border border-line bg-[var(--color-tint-sand)] px-4 py-2.5 text-[13px] text-ink-secondary"
+              className="mb-6 rounded-lg border border-line bg-[var(--color-tint-flare)] px-4 py-2.5 text-[13px] text-ink-secondary"
             >
               Preview &mdash; example data with fictional companies.{" "}
               <Link href="/login" className="font-medium text-accent hover:underline">

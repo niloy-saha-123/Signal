@@ -38,7 +38,7 @@ export function SignalScoreCard({ competitorName, score, delta7d, history }: Sig
   const mark = deltaMark(delta7d);
 
   return (
-    <div className="rounded-[10px] border border-line bg-surface p-4">
+    <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-4">
       <p className="text-sm font-medium text-ink-secondary">{competitorName}</p>
       <div className="mt-1 flex items-baseline gap-2">
         <span className="text-3xl font-semibold tabular-nums text-ink">{score}</span>

@@ -25,7 +25,7 @@ const COLUMNS: Column[] = [
 
 const RELATIONSHIP_TINT: Record<string, string> = {
   competitor: "bg-accent-tint text-accent",
-  aspirational: "bg-[var(--color-tint-sand)] text-ink",
+  aspirational: "bg-[var(--color-tint-flare)] text-ink",
   other: "bg-surface-sunken text-ink-secondary",
 };
 
@@ -148,7 +148,7 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
       {manualOpen && (
         <form
           onSubmit={addManually}
-          className="flex flex-col gap-4 rounded-[10px] border border-line bg-surface p-6"
+          className="flex flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-6"
         >
           <label className="flex flex-col gap-1 text-sm font-semibold text-ink">
             Company name or domain
@@ -162,7 +162,7 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
           </label>
 
           {(resolvedName || resolvedDomain) && (
-            <div className="flex items-center gap-3 p-3 rounded-[10px] bg-surface-sunken text-sm text-ink-secondary">
+            <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-sunken text-sm text-ink-secondary">
               {resolving ? (
                 <span className="flex items-center gap-2">
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
@@ -194,7 +194,7 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
         {columns.map((column) => (
           <div
             key={column.key}
-            className="flex flex-col gap-3 rounded-[10px] border border-line bg-surface-sunken p-4"
+            className="flex flex-col gap-3 rounded-lg border border-line bg-surface-sunken p-4"
           >
             <div className="flex items-baseline justify-between">
               <h2 className="text-sm font-semibold text-ink">{column.title}</h2>
@@ -206,14 +206,14 @@ export function DiscoveryBoard({ entities }: { entities: DiscoveryEntity[] }) {
 
             <div className="flex flex-col gap-3">
               {column.entities.length === 0 ? (
-                <div className="rounded-[10px] border border-dashed border-line px-4 py-8 text-center">
+                <div className="rounded-lg border border-dashed border-line px-4 py-8 text-center">
                   <p className="text-xs text-ink-secondary">Nothing here yet.</p>
                 </div>
               ) : (
                 column.entities.map((entity) => (
                   <div
                     key={entity.id}
-                    className="flex flex-col gap-3 rounded-[10px] bg-surface p-4"
+                    className="flex flex-col gap-3 rounded-lg bg-surface p-4"
                   >
                     <div className="flex items-center gap-2">
                       <span

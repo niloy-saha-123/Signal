@@ -41,7 +41,7 @@ export function Board({ initialCards }: { initialCards: BoardCardState[] }) {
       data-testid="board-canvas"
       onDragOver={(event) => event.preventDefault()}
       onDrop={onDrop}
-      className="relative h-[600px] w-full rounded-[10px] border border-dashed border-line bg-surface-sunken"
+      className="relative h-[600px] w-full rounded-lg border border-dashed border-line bg-surface-sunken"
     >
       {cards.map((card) => (
         <div

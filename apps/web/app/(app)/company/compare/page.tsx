@@ -9,7 +9,7 @@ export default async function ComparePage() {
   const token = await getOptionalAccessToken();
   if (!token) {
     return (
-      <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+      <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] px-6 py-12">
         <p className="text-sm text-ink-secondary">Sign in to see how you compare to competitors.</p>
       </div>
     );
@@ -29,7 +29,7 @@ export default async function ComparePage() {
             How your company&apos;s posture compares to the competitors you track.
           </p>
         </div>
-        <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+        <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] px-6 py-12">
           <p className="max-w-md text-sm leading-relaxed text-ink-secondary">
             Signal hasn&apos;t built your company&apos;s own profile yet. It runs after your weekly analysis
             sweep — check back once tracking is active.
@@ -54,7 +54,7 @@ export default async function ComparePage() {
       </div>
 
       {alerts.length === 0 ? (
-        <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
+        <div className="rounded-xl bg-surface shadow-[var(--shadow-card)] px-6 py-12">
           <p className="text-sm text-ink-secondary">No comparison generated yet.</p>
         </div>
       ) : (
@@ -68,7 +68,7 @@ export default async function ComparePage() {
             return (
               <div
                 key={alert.id}
-                className="rounded-[10px] border border-line bg-surface p-6"
+                className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-6"
               >
                 <h2 className="text-lg font-extrabold text-ink">{alert.pattern}</h2>
                 <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-secondary">

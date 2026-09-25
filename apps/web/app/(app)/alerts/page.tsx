@@ -41,7 +41,7 @@ function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PR
         />
       </div>
       {alerts.length === 0 ? (
-        <div className="flex items-center justify-center rounded-[10px] border border-line bg-surface px-8 py-16">
+        <div className="flex items-center justify-center rounded-xl bg-surface shadow-[var(--shadow-card)] px-8 py-16">
           <p className="text-sm text-ink-secondary">No alerts yet.</p>
         </div>
       ) : (
@@ -49,7 +49,7 @@ function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PR
           {alerts.map((alert) => (
             <div
               key={alert.id}
-              className="rounded-[10px] border border-line bg-surface p-6"
+              className="rounded-xl bg-surface shadow-[var(--shadow-card)] p-6"
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1">

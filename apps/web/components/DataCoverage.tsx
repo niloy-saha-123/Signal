@@ -22,7 +22,7 @@ export function DataCoverage({ dates }: { dates: string[] }) {
   const last = days.map((d) => d.active).lastIndexOf(true);
 
   return (
-    <div className="flex flex-col gap-3 rounded-[10px] border border-line bg-surface p-6">
+    <div className="flex flex-col gap-3 rounded-xl bg-surface shadow-[var(--shadow-card)] p-6">
       <div className="flex items-baseline justify-between">
         <h2 className="text-sm font-semibold text-ink">Data coverage</h2>
         {first === -1 ? (

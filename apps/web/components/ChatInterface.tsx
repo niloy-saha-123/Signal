@@ -355,7 +355,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               {messages.map((message) =>
                 message.role === "user" ? (
                   <div key={message.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-[10px] rounded-br-lg bg-accent-tint px-4 py-3">
+                    <div className="max-w-[85%] rounded-lg rounded-br-lg bg-accent-tint px-4 py-3">
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mb-2 flex flex-wrap gap-1.5">
                           {message.attachments.map((a) => (
@@ -378,11 +378,11 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                   <div key={message.id} className="group flex items-start gap-2">
                     <div className="flex-1">
                       {message.error ? (
-                        <p className="rounded-[10px] bg-red-50 px-4 py-3 text-sm text-red-700">
+                        <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
                           {message.error}
                         </p>
                       ) : message.refused ? (
-                        <div className="rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
                           <p className="text-sm text-amber-900">{message.refused.reason}</p>
                           {message.refused.suggestedQuery && (
                             <p className="mt-1 text-xs text-amber-800">
@@ -414,7 +414,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                                 >
                                   <span
                                     className="h-1.5 w-1.5 rounded-full"
-                                    style={{ backgroundColor: SOURCE_COLORS[citation.source as keyof typeof SOURCE_COLORS] ?? "#94a3b8" }}
+                                    style={{ backgroundColor: SOURCE_COLORS[citation.source as keyof typeof SOURCE_COLORS] ?? "var(--color-ink-muted)" }}
                                   />
                                   {citation.source}
                                 </span>
@@ -426,7 +426,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                       {message.confirmation && (
                         <div
                           data-testid="confirm-card"
-                          className="mt-2 rounded-[10px] border border-line bg-white p-3"
+                          className="mt-2 rounded-lg border border-line bg-white p-3"
                         >
                           <p className="text-xs font-medium text-ink-secondary">
                             Signal wants to run this action
@@ -439,14 +439,14 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "approve")}
-                                className="rounded-[10px] bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover"
+                                className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover"
                               >
                                 Confirm
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "deny")}
-                                className="rounded-[10px] border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-ink-secondary hover:text-ink"
+                                className="rounded-xl bg-surface shadow-[var(--shadow-card)] px-3 py-1.5 text-xs font-semibold text-ink-secondary hover:text-ink"
                               >
                                 Cancel
                               </button>
@@ -536,7 +536,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               }}
               placeholder="Ask Signal a question…"
               rows={1}
-              className="max-h-40 w-full resize-none rounded-[10px] border border-line bg-surface-sunken px-4 py-2.5 text-sm text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none"
+              className="max-h-40 w-full resize-none rounded-lg border border-line bg-surface-sunken px-4 py-2.5 text-sm text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none"
               disabled={submitting}
             />
             <button

@@ -29,7 +29,7 @@ export function AlertBanner() {
       {alerts.map((alert) => (
         <div
           key={alert.id}
-          className="pointer-events-auto flex items-center justify-between gap-3 rounded-[10px] border border-line bg-surface px-4 py-3 shadow-[0_12px_32px_-16px_rgba(10,32,51,0.4)]"
+          className="pointer-events-auto flex items-center justify-between gap-3 rounded-xl bg-surface shadow-[var(--shadow-card)] px-4 py-3 shadow-[0_12px_32px_-16px_rgba(10,32,51,0.4)]"
         >
           <div className="flex items-center gap-2.5">
             <span className="h-2 w-2 shrink-0 rounded-full bg-accent" />

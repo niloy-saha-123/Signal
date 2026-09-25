@@ -13,49 +13,49 @@ import {
 describe("lib/chart-colors", () => {
   it("exposes the nine signal-source categorical colors in the dataviz palette's fixed order", () => {
     expect(SOURCE_COLORS).toEqual({
-      reddit: "#2a78d6",
-      hn: "#eb6834",
-      jobs: "#1baf7a",
-      changelog: "#eda100",
-      pricing: "#e87ba4",
+      reddit: "#d06454",
+      hn: "#cf7b00",
+      jobs: "#3ca059",
+      changelog: "#366bd3",
+      pricing: "#c3639c",
       // GitHub's own mark is near-black; slate reads as the same family without
       // colliding with the five hues already assigned.
-      github: "#4b5563",
-      website: "#9a6a3a",
-      community: "#7a8b2e",
-      postings: "#1c9aa8",
+      github: "#49566c",
+      website: "#9773d0",
+      community: "#86962c",
+      postings: "#009ca9",
     });
   });
 
   it("exposes the fixed status palette", () => {
     expect(STATUS_COLORS).toEqual({
-      good: "#0ca30c",
-      warning: "#fab219",
-      serious: "#ec835a",
-      critical: "#d03b3b",
+      good: "#008039",
+      warning: "#f3b01d",
+      serious: "#e97125",
+      critical: "#cc3148",
     });
   });
 
   it("exposes the diverging pair", () => {
     expect(DIVERGING_COLORS).toEqual({
-      positive: "#2a78d6",
-      negative: "#e34948",
-      neutral: "#f0efec",
+      positive: "#2b61cc",
+      negative: "#cc3148",
+      neutral: "#f2f4f9",
     });
   });
 
   it("exposes the sequential hue", () => {
-    expect(SEQUENTIAL_COLOR).toBe("#2a78d6");
+    expect(SEQUENTIAL_COLOR).toBe("#2b61cc");
   });
 
   it("exposes chart chrome/ink tokens", () => {
     expect(CHART_CHROME).toEqual({
-      surface: "#fcfcfb",
-      inkPrimary: "#0b0b0b",
-      inkSecondary: "#52514e",
-      inkMuted: "#898781",
-      gridline: "#e1e0d9",
-      baseline: "#c3c2b7",
+      surface: "#ffffff",
+      inkPrimary: "#0e1d3a",
+      inkSecondary: "#485366",
+      inkMuted: "#677181",
+      gridline: "#e0e4eb",
+      baseline: "#cad0d9",
     });
   });
 

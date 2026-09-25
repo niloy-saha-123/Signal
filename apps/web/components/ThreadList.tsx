@@ -43,7 +43,7 @@ export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete 
             <li key={thread.id} className="group relative">
               <button
                 onClick={() => onSelect(thread.id)}
-                className={`w-full rounded-[10px] px-3 py-2.5 text-left text-sm transition-colors ${
+                className={`w-full rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
                   isActive
                     ? "bg-accent-tint text-ink"
                     : "text-ink-secondary hover:bg-surface-sunken hover:text-ink"

@@ -169,7 +169,7 @@ export function CompanyClient({
       {/* Signal goal */}
       <form
         onSubmit={handleSaveGoal}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
+        className="flex max-w-2xl flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8"
       >
         <h2 className="text-sm font-semibold text-ink">Signal goal</h2>
         <p className="text-xs leading-relaxed text-ink-secondary">
@@ -183,7 +183,7 @@ export function CompanyClient({
           rows={2}
           disabled={goalLoading}
           placeholder="e.g. Catch up to Acme in the mid-market"
-          className="rounded-[10px] bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint disabled:opacity-60"
+          className="rounded-lg bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint disabled:opacity-60"
         />
         {goalMessage && <p className="text-sm text-ink-secondary">{goalMessage}</p>}
         <button
@@ -198,7 +198,7 @@ export function CompanyClient({
       {/* Profile */}
       <form
         onSubmit={handleSave}
-        className="flex max-w-2xl flex-col gap-5 rounded-[10px] border border-line bg-surface p-8"
+        className="flex max-w-2xl flex-col gap-5 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8"
       >
         <h2 className="text-sm font-semibold text-ink">Company profile</h2>
 
@@ -209,7 +209,7 @@ export function CompanyClient({
             onChange={(e) => setProductDescription(e.target.value)}
             required
             rows={4}
-            className="rounded-[10px] bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
+            className="rounded-lg bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
             placeholder="What your product does, and for whom."
           />
         </label>
@@ -342,7 +342,7 @@ export function CompanyClient({
       </form>
 
       {/* Documents */}
-      <section className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8">
+      <section className="flex max-w-2xl flex-col gap-4 rounded-xl bg-surface shadow-[var(--shadow-card)] p-8">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-sm font-semibold text-ink">Documents</h2>
           <input
@@ -377,7 +377,7 @@ export function CompanyClient({
             {documents.map((doc) => (
               <li
                 key={doc.id}
-                className="flex items-center justify-between gap-4 rounded-[10px] bg-surface-sunken px-4 py-3"
+                className="flex items-center justify-between gap-4 rounded-lg bg-surface-sunken px-4 py-3"
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-ink">{doc.filename}</p>
