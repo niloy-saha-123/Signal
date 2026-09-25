@@ -1,49 +1,59 @@
 @import "tailwindcss";
 
-/* Signal v3 design tokens. Rationale, references and the audit that motivated
-   the rebuild live in docs/v3-design-direction.md.
+/* Signal v4 design tokens. DESIGN.md is the contract; the research behind the
+   palette is in docs/superpowers/plans/2026-09-25-signal-v4-brand-redesign.md.
 
-   Three rules govern everything below:
-
-   1. Depth is borders, not shadow. A static card never casts one. Shadow is
-      reserved for things that genuinely float above the page.
-   2. Colour is scarce. Status and categorical hues carry meaning; the accent
-      marks interactivity; everything else is ground and ink.
-   3. Numbers are the signature. Tabular mono at real size is the one place
-      this interface raises its voice. */
+   The palette is complementary on a tinted-neutral base, derived in OKLCH:
+   every neutral carries a trace of the brand hue (262), the ink is a deep
+   navy instead of black, and the one warm colour — flare, hue 42, the
+   complement of the brand blue — is reserved for the signal itself. Every
+   text pairing below was checked against WCAG AA by script. */
 
 @theme {
   /* --- Type ------------------------------------------------------------ */
-  /* Instrument Sans for UI, a monospace for every number that means something.
-     Fraunces is deliberately gone: a display serif reads editorial, and the
-     reader here is a product lead checking a forecast, not a magazine. */
-  --font-sans: var(--font-instrument-sans);
-  --font-mono: var(--font-jetbrains-mono);
+  /* Funnel Display carries headlines: geometric, confident, rare on B2B
+     sites. Geist carries the interface. Geist Mono carries every number
+     that means something — probabilities, Brier scores, dates, counts. */
+  --font-display: var(--font-funnel-display);
+  --font-sans: var(--font-geist);
+  --font-mono: var(--font-geist-mono);
 
-  /* --- Ground and ink -------------------------------------------------- */
-  /* Warm off-white, not slate-50. The warmth IS the second colour — it lets
-     the accent stay scarce instead of carrying the whole personality. */
-  --color-ground: #faf9f7;
+  /* --- Ground and ink (hue 262 tinted neutrals) ------------------------ */
+  --color-ground: #f9fafd;
   --color-surface: #ffffff;
-  --color-surface-sunken: #f5f4f1;
-  --color-line: #e7e5e0;
-  --color-line-strong: #d6d3cc;
+  --color-surface-sunken: #f2f4f9;
+  --color-line: #e0e4eb;
+  --color-line-strong: #cad0d9;
 
-  --color-ink: #1a1a18;
-  --color-ink-secondary: #5c5a55;
-  --color-ink-muted: #8a8780;
-  --color-ink-inverse: #faf9f7;
+  --color-ink: #0e1d3a;
+  --color-ink-secondary: #485366;
+  --color-ink-muted: #677181;
+  --color-ink-inverse: #f9fafd;
 
-  /* --- Accent ---------------------------------------------------------- */
-  /* Deep teal. Green, amber, orange and red are all spoken for by status and
-     hit/miss semantics; indigo and purple are banned. Teal is the one hue left
-     that cannot be misread as a status. */
-  --color-accent: #0f6e68;
-  --color-accent-hover: #0b5651;
-  --color-accent-tint: #e6f2f1;
-  --color-accent-line: #9cc9c5;
+  /* --- Brand ------------------------------------------------------------ */
+  /* Signal blue is the interactive colour: links, selection, focus, app
+     primary buttons. 5.7:1 on white. */
+  --color-accent: #2b61cc;
+  --color-accent-hover: #1f50b2;
+  --color-accent-tint: #e8f1ff;
+  --color-accent-line: #b9cdf3;
 
+  /* Midnight is the brand's dark: logo tile, sidebar, the dark band. */
+  --color-midnight: #061436;
+  --color-midnight-raised: #0f2150;
+  --color-midnight-line: #22335f;
+  --color-midnight-ink: #eef2fb;
+  --color-midnight-muted: #9aa7c4;
 
+  /* Flare is the 10%: the signal. Used for the logo's peak, the marketing
+     CTA (with midnight text — white on orange fails AA), and the moment a
+     forecast is made. Never a status colour. */
+  --color-flare: #f96e31;
+  --color-flare-hover: #ff8249;
+  --color-flare-deep: #c94a00;
+  --color-flare-tint: #fff0e3;
+
+  /* Legacy aliases still referenced by older components. */
   --color-bg-page: var(--color-ground);
   --color-bg-card: var(--color-surface);
   --color-bg-card-hover: var(--color-surface-sunken);
@@ -55,83 +65,62 @@
   --color-brand-hover: var(--color-accent-hover);
   --color-brand-tint: var(--color-accent-tint);
 
-  /* --- Data palettes --------------------------------------------------- */
-  /* Unchanged from v2. These were validated against the dataviz reference and
-     they carry meaning rather than style, so they are not a look to revisit. */
-  --color-source-reddit: #2a78d6;
-  --color-source-hn: #eb6834;
-  --color-source-jobs: #1baf7a;
-  --color-source-changelog: #eda100;
-  --color-source-pricing: #e87ba4;
-  --color-source-github: #4b5563;
-  --color-source-website: #9a6a3a;
-  --color-source-community: #7a8b2e;
-  --color-source-postings: #1c9aa8;
+  /* --- Light tints (L≈0.955, no status meaning) ------------------------- */
+  --color-tint-blue: #e8f1ff;
+  --color-tint-flare: #fff0e3;
+  --color-tint-mist: #e5f2fb;
+  --color-tint-lilac: #efeefd;
+  --color-tint-sage: #e6f7ed;
+  --color-tint-stone: #f0f2f6;
 
-  --color-status-good: #0ca30c;
-  --color-status-warning: #fab219;
-  --color-status-serious: #ec835a;
-  --color-status-critical: #d03b3b;
+  /* --- Data palettes ---------------------------------------------------- */
+  /* Nine sources at matched OKLCH lightness and chroma, hues spread for
+     separation. Mirrored in lib/chart-colors.ts; a test keeps them equal. */
+  --color-source-reddit: #d06454;
+  --color-source-hn: #cf7b00;
+  --color-source-jobs: #3ca059;
+  --color-source-changelog: #366bd3;
+  --color-source-pricing: #c3639c;
+  --color-source-github: #49566c;
+  --color-source-website: #9773d0;
+  --color-source-community: #86962c;
+  --color-source-postings: #009ca9;
 
-  --color-diverging-positive: #2a78d6;
-  --color-diverging-negative: #e34948;
-  --color-diverging-neutral: #f0efec;
+  --color-status-good: #008039;
+  --color-status-warning: #f3b01d;
+  --color-status-serious: #e97125;
+  --color-status-critical: #cc3148;
 
-  --color-sequential: #2a78d6;
+  --color-diverging-positive: #2b61cc;
+  --color-diverging-negative: #cc3148;
+  --color-diverging-neutral: #f2f4f9;
+
+  --color-sequential: #2b61cc;
 
   /* --- Prediction outcomes --------------------------------------------- */
-  /* A resolved prediction is the product's most load-bearing piece of colour,
-     so it gets its own named tokens rather than borrowing status green/red.
-     `unresolved` is deliberately a neutral, not a muted red: a window that
-     closed with no evidence is not a failure, and colouring it like one would
-     make the ledger lie. */
-  --color-outcome-hit: #0ca30c;
-  --color-outcome-miss: #d03b3b;
-  --color-outcome-unresolved: #8a8780;
-  --color-outcome-open: #0f6e68;
+  --color-outcome-hit: #008039;
+  --color-outcome-miss: #cc3148;
+  --color-outcome-unresolved: #677181;
+  --color-outcome-open: #2b61cc;
 
-  /* --- Decorative tints ------------------------------------------------ */
-  /* Soft, low-saturation washes for surfaces that carry NO status meaning —
-     section grounds, step cards, source tiles. Kept deliberately separate from
-     the status and outcome palettes above: those hues mean something specific
-     (hit, miss, critical, warning) and must never be spent on decoration, or a
-     reader learns to ignore the colour that matters.
-
-     Low chroma on purpose. These sit under dense type all day; a saturated
-     panel is tiring and starts competing with the data. */
-  --color-tint-teal: #e9f4f2;
-  --color-tint-sand: #faf1e6;
-  --color-tint-sky: #ecf3fa;
-  --color-tint-sage: #eef4ec;
-  --color-tint-clay: #fbeeea;
-  --color-tint-stone: #f2f1ee;
-
-  /* --- The signal trace ------------------------------------------------ */
-  /* The one saturated colour moment on public pages: the logo's line motif,
-     drawn as flowing gradient strokes. Teal is the accent; sky and sand warm it
-     without touching the status hues. Never used inside the app, where colour
-     has to mean something. */
-  --color-trace-a: #0f6e68;
-  --color-trace-b: #3f9fc4;
-  --color-trace-c: #8cc9d6;
-  --color-trace-d: #efc79a;
-
-  /* A deeper teal for the one dark band on the landing page — colour with
-     weight, rather than the black slab most sites reach for. */
-  --color-deep: #0b3b38;
-  --color-deep-ink: #e8f3f1;
-  --color-deep-muted: #a6c9c4;
+  /* --- The signal trace (public pages) --------------------------------- */
+  --color-trace-a: #2b61cc;
+  --color-trace-b: #6f93e6;
+  --color-trace-c: #b9cdf3;
+  --color-trace-d: #f96e31;
 
   /* --- Radius ---------------------------------------------------------- */
-  /* Four values with distinct jobs. One value everywhere is a slop tell. */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 18px;
 
   /* --- Elevation ------------------------------------------------------- */
-  /* Only for things that float. A static card uses a border. */
-  --shadow-popover: 0 4px 16px rgba(26, 26, 24, 0.1), 0 0 0 1px rgba(26, 26, 24, 0.06);
-  --shadow-modal: 0 16px 48px rgba(26, 26, 24, 0.18);
+  /* Tinted with the ink hue so shadows read as depth, not dirt. */
+  --shadow-card: 0 1px 2px rgba(14, 29, 58, 0.04), 0 0 0 1px rgba(14, 29, 58, 0.06);
+  --shadow-float: 0 24px 60px -24px rgba(14, 29, 58, 0.28), 0 0 0 1px rgba(14, 29, 58, 0.06);
+  --shadow-popover: 0 8px 24px rgba(14, 29, 58, 0.12), 0 0 0 1px rgba(14, 29, 58, 0.06);
+  --shadow-modal: 0 24px 64px rgba(14, 29, 58, 0.22);
 }
 
 /* Tabular figures wherever a number sits in a column or updates in place. A
@@ -153,8 +142,8 @@
 }
 
 ::selection {
-  background: var(--color-accent);
-  color: #ffffff;
+  background: var(--color-flare-tint);
+  color: var(--color-ink);
 }
 
 :focus-visible {
@@ -213,10 +202,31 @@ html {
    rather than ending at a hard edge. */
 .grid-backdrop {
   background-image:
-    linear-gradient(to right, rgba(26, 26, 24, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(26, 26, 24, 0.045) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, #000 35%, transparent 75%);
+    linear-gradient(to right, rgba(14, 29, 58, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(14, 29, 58, 0.05) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 75% 65% at 50% 0%, #000 30%, transparent 72%);
+}
+
+/* Dot field behind product frames — quieter than the grid. */
+.dot-field {
+  background-image: radial-gradient(rgba(14, 29, 58, 0.12) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* The brand glow: a wash of the three light tints, never a saturated
+   gradient behind text. */
+.brand-glow {
+  background:
+    radial-gradient(40% 55% at 22% 30%, var(--color-tint-lilac), transparent 70%),
+    radial-gradient(38% 50% at 78% 28%, var(--color-tint-flare), transparent 70%),
+    radial-gradient(55% 60% at 50% 80%, var(--color-tint-mist), transparent 70%);
+}
+
+/* Display type: Funnel Display with tight tracking. */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.035em;
 }
 
 /* Trace strokes draw in once on load. Reduced-motion users get the finished
@@ -248,11 +258,12 @@ html {
   animation: rise-in 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* Negative tracking above 18px — the reason dense screens still scan. */
+/* Headings use the display face; tight tracking keeps large type composed. */
 h1,
 h2,
 h3 {
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
 }
 
 @keyframes slide-in-right {

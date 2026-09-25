@@ -2,8 +2,9 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/font/google", () => ({
-  Instrument_Sans: () => ({ variable: "font-instrument-sans-test" }),
-  JetBrains_Mono: () => ({ variable: "font-jetbrains-mono-test" }),
+  Funnel_Display: () => ({ variable: "font-funnel-display-test" }),
+  Geist: () => ({ variable: "font-geist-test" }),
+  Geist_Mono: () => ({ variable: "font-geist-mono-test" }),
 }));
 
 import RootLayout, { viewport } from "../../app/layout";
@@ -23,7 +24,7 @@ describe("RootLayout", () => {
     expect(viewport).toEqual({
       width: "device-width",
       initialScale: 1,
-      themeColor: "#faf9f7",
+      themeColor: "#f9fafd",
     });
   });
 });

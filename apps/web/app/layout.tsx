@@ -1,25 +1,28 @@
 import type { Metadata, Viewport } from "next";
-import { Instrument_Sans, JetBrains_Mono } from "next/font/google";
+import { Funnel_Display, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-// Two families, both doing real work. Instrument Sans carries display and UI —
-// a contemporary grotesk with slightly compressed proportions that holds up at
-// hero sizes and stays legible at 13px in a dense table. The mono carries every
-// number that means something: probabilities, Brier scores, dates, counts. In a
-// product whose content is measurements, the numerals are the interface, so
-// they get a typeface chosen for them.
-const instrumentSans = Instrument_Sans({
+// Three faces, each with one job. Funnel Display sets headlines: geometric
+// and confident, rare enough on B2B sites to be recognisable. Geist sets the
+// interface, built for dense product text. Geist Mono sets every number that
+// means something, so probabilities and dates read as measurements.
+const funnelDisplay = Funnel_Display({
   subsets: ["latin"],
-  variable: "--font-instrument-sans",
+  variable: "--font-funnel-display",
   display: "swap",
-  weight: ["400", "500", "600", "700"],
+  weight: ["500", "600", "700"],
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const geist = Geist({
   subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
+  variable: "--font-geist",
   display: "swap",
-  weight: ["400", "500", "600"],
+});
+
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-geist-mono",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -31,12 +34,12 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#faf9f7",
+  themeColor: "#f9fafd",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${instrumentSans.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${funnelDisplay.variable} ${geist.variable} ${geistMono.variable}`}>
       <body className="min-h-screen bg-ground font-sans text-[15px] leading-normal text-ink antialiased">
         {children}
       </body>
