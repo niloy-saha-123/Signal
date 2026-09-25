@@ -42,7 +42,20 @@ const [PEAK_X, PEAK_Y] = LINE_POINTS[HERO_LINE].reduce((best, point) =>
   point[1] < best[1] ? point : best
 );
 
-export function SignalTrace({ className }: { className?: string }) {
+// `id` keeps gradient references unique when the trace appears more than once
+// on a page; `tone="dark"` swaps the strokes for use on midnight surfaces.
+export function SignalTrace({
+  className,
+  id = "trace",
+  tone = "light",
+}: {
+  className?: string;
+  id?: string;
+  tone?: "light" | "dark";
+}) {
+  const stroke = `${id}-stroke`;
+  const glow = `${id}-glow`;
+  const dark = tone === "dark";
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -51,16 +64,16 @@ export function SignalTrace({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <defs>
-        <linearGradient id="trace-stroke" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0" stopColor="var(--color-trace-a)" stopOpacity="0.15" />
-          <stop offset="0.35" stopColor="var(--color-trace-a)" />
-          <stop offset="0.6" stopColor="var(--color-trace-b)" />
-          <stop offset="0.8" stopColor="var(--color-trace-c)" />
-          <stop offset="1" stopColor="var(--color-trace-d)" stopOpacity="0.4" />
+        <linearGradient id={stroke} x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor={dark ? "#ffffff" : "var(--color-trace-a)"} stopOpacity="0.1" />
+          <stop offset="0.35" stopColor={dark ? "#9fbaf5" : "var(--color-trace-a)"} />
+          <stop offset="0.62" stopColor={dark ? "#6f93e6" : "var(--color-trace-b)"} />
+          <stop offset="0.82" stopColor={dark ? "#b9cdf3" : "var(--color-trace-c)"} />
+          <stop offset="1" stopColor="var(--color-trace-d)" stopOpacity="0.5" />
         </linearGradient>
-        <radialGradient id="trace-glow">
-          <stop offset="0" stopColor="var(--color-trace-b)" stopOpacity="0.45" />
-          <stop offset="1" stopColor="var(--color-trace-b)" stopOpacity="0" />
+        <radialGradient id={glow}>
+          <stop offset="0" stopColor="var(--color-flare)" stopOpacity={dark ? 0.55 : 0.4} />
+          <stop offset="1" stopColor="var(--color-flare)" stopOpacity="0" />
         </radialGradient>
       </defs>
 
@@ -69,26 +82,20 @@ export function SignalTrace({ className }: { className?: string }) {
           key={i}
           d={d}
           fill="none"
-          stroke="url(#trace-stroke)"
+          stroke={`url(#${stroke})`}
           strokeWidth={i === HERO_LINE ? 2.6 : 1.2}
-          strokeOpacity={i === HERO_LINE ? 1 : 0.28 + (i % 5) * 0.08}
+          strokeOpacity={i === HERO_LINE ? 1 : (dark ? 0.18 : 0.26) + (i % 5) * 0.07}
           strokeLinecap="round"
           className="trace-draw"
           style={{ animationDelay: `${i * 45}ms` }}
         />
       ))}
 
-      {/* The moment the line does something worth noticing. */}
-      <circle cx={PEAK_X} cy={PEAK_Y} r="46" fill="url(#trace-glow)" />
-      <circle cx={PEAK_X} cy={PEAK_Y} r="6" fill="var(--color-accent)" />
-      <circle
-        cx={PEAK_X}
-        cy={PEAK_Y}
-        r="11"
-        fill="none"
-        stroke="var(--color-accent)"
-        strokeOpacity="0.35"
-      />
+      {/* The moment the line does something worth noticing — in flare, the
+          brand's one warm colour. */}
+      <circle cx={PEAK_X} cy={PEAK_Y} r="52" fill={`url(#${glow})`} />
+      <circle cx={PEAK_X} cy={PEAK_Y} r="6.5" fill="var(--color-flare)" />
+      <circle cx={PEAK_X} cy={PEAK_Y} r="12" fill="none" stroke="var(--color-flare)" strokeOpacity="0.45" />
     </svg>
   );
 }

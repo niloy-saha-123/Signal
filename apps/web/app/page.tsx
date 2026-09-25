@@ -1,80 +1,105 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { SignalMark } from "@/components/landing/SignalMark";
-import { SiteFooter } from "@/components/landing/SiteFooter";
+import { Calibration } from "@/components/landing/Calibration";
+import { HeroProduct } from "@/components/landing/HeroProduct";
+import { LeadTimeline } from "@/components/landing/LeadTimeline";
+import { ProductTour } from "@/components/landing/ProductTour";
 import { SignalTrace } from "@/components/landing/SignalTrace";
-import { ProductWindow } from "@/components/landing/ProductWindow";
-import { Bento } from "@/components/landing/Bento";
+import { SiteFooter } from "@/components/landing/SiteFooter";
+import { SiteHeader } from "@/components/landing/SiteHeader";
 
 export const metadata: Metadata = {
-  title: "Signal — Know what your competitors ship before they announce it",
+  title: "Signal — See what competitors ship before they announce it",
   description:
     "Signal reads the public trail competitors leave — code, hiring, pricing, their own site and community — writes down what it expects them to do next, and scores itself when the date arrives.",
 };
 
-// Every claim on this page is one the product actually makes. No customer
-// logos, no testimonials, no user counts, no accuracy figures — none exist yet,
-// and a forecasting product caught overstating its own record on its own
-// homepage has destroyed the only thing it sells. Product views use fictional
-// companies and are labelled as examples.
+// Signal v4 landing. Brand system and rules: DESIGN.md. Nothing on this page
+// claims a number Signal has not measured — no customer counts, no accuracy
+// figure — and every product view uses fictional companies under an
+// "illustrative" label. test/app/landing-page.test.tsx pins both.
 
-const PIPELINE = [
+const CONTAINER = "mx-auto w-full max-w-[1200px] px-5 sm:px-8";
+const SECTION_TITLE =
+  "font-display text-balance text-[clamp(2rem,4.2vw,3.4rem)] leading-[1.02] font-semibold tracking-[-0.035em]";
+
+function TwoTone({ lead, rest }: { lead: string; rest: string }) {
+  return (
+    <>
+      <span className="text-ink">{lead}</span> <span className="text-ink-muted">{rest}</span>
+    </>
+  );
+}
+
+const TRAIL = ["github", "greenhouse", "lever", "rss · atom", "discourse", "hacker news", "reddit", "pricing pages", "newsrooms"];
+
+const LOOP = [
   {
-    n: "01",
-    title: "Collect",
-    body: "Nine public sources per competitor, on a schedule. Deduplicated, so ten retellings of one story count once.",
+    step: "01",
+    title: "Watch",
+    body: "Nine public sources per competitor, on a schedule. Ten retellings of one story count once.",
+    spec: "collect → dedupe → cluster",
   },
   {
-    n: "02",
-    title: "Cluster",
-    body: "Related evidence becomes one event with a quality score, instead of nine alerts about the same thing.",
-  },
-  {
-    n: "03",
+    step: "02",
     title: "Predict",
-    body: "Above an evidence floor, a dated claim with a probability and machine-checkable criteria. Below it, silence.",
+    body: "Above an evidence floor of five distinct clusters, a dated claim with a probability. Below it, silence.",
+    spec: "p ∈ [0.05, 0.95]",
   },
   {
-    n: "04",
-    title: "Resolve",
-    body: "On the date, plain code checks the claim against what was collected. Hit, miss, or unresolved — all recorded.",
+    step: "03",
+    title: "Keep score",
+    body: "On the date, plain code checks the claim against what was collected: hit, miss, or unresolved.",
+    spec: "Brier vs 0.25 baseline",
   },
 ];
 
-// Grouped by *when* each source tends to move relative to an announcement,
-// which is the property that actually matters for forecasting.
+// Grouped by *when* each source tends to move relative to an announcement —
+// the property that matters for forecasting.
 const SOURCE_GROUPS = [
   {
     timing: "Leading",
     note: "Moves before anything is announced",
-    tint: "var(--color-tint-teal)",
+    tint: "bg-tint-blue",
     sources: [
-      { name: "GitHub", detail: "Releases, pull requests, brand-new repositories" },
-      { name: "Job boards", detail: "Greenhouse and Lever postings, as deltas" },
-      { name: "Their website", detail: "Homepage and product copy, diffed daily" },
+      { name: "GitHub", detail: "Releases, pull requests, new repositories", color: "var(--color-source-github)" },
+      { name: "Job boards", detail: "Greenhouse and Lever postings, as deltas", color: "var(--color-source-jobs)" },
+      { name: "Their website", detail: "Homepage and product copy, diffed daily", color: "var(--color-source-website)" },
     ],
   },
   {
     timing: "Confirming",
     note: "Moves as the change goes public",
-    tint: "var(--color-tint-sky)",
+    tint: "bg-tint-lilac",
     sources: [
-      { name: "Changelogs", detail: "RSS and Atom feeds, full text" },
-      { name: "Newsroom posts", detail: "Press and announcement feeds" },
-      { name: "Pricing pages", detail: "Structured diffs against a baseline" },
+      { name: "Changelogs", detail: "RSS and Atom feeds, full text", color: "var(--color-source-changelog)" },
+      { name: "Newsroom posts", detail: "Press and announcement feeds", color: "var(--color-source-postings)" },
+      { name: "Pricing pages", detail: "Structured diffs against a baseline", color: "var(--color-source-pricing)" },
     ],
   },
   {
     timing: "Reacting",
     note: "Moves as the market responds",
-    tint: "var(--color-tint-sand)",
+    tint: "bg-tint-flare",
     sources: [
-      { name: "Community forums", detail: "Their own Discourse and discussions" },
-      { name: "Hacker News", detail: "Weighted higher in pattern detection" },
-      { name: "Reddit", detail: "Discovered subreddits per competitor" },
+      { name: "Community forums", detail: "Their public Discourse forum", color: "var(--color-source-community)" },
+      { name: "Hacker News", detail: "Weighted higher in pattern detection", color: "var(--color-source-hn)" },
+      { name: "Reddit", detail: "Discovered subreddits per competitor", color: "var(--color-source-reddit)" },
     ],
   },
+];
+
+const RULES = [
+  ["It cannot claim certainty", "Probabilities are bounded between 5% and 95% by the database itself."],
+  ["No model grades its own work", "The verdict is plain code matching written criteria against collected evidence."],
+  ["Silence is not failure", "A window that closes with no evidence is recorded as unresolved and never scored as a miss."],
+];
+
+const ASK_POINTS = [
+  ["Answers from evidence", "Every claim cites the signals behind it. Thin evidence gets a refusal, not a guess."],
+  ["Stays on topic", "Questions outside your competitive market are declined rather than improvised."],
+  ["Asks before it acts", "Adding a competitor, starting a run or voiding a prediction waits for your approval."],
 ];
 
 const COMPARISON = [
@@ -103,217 +128,225 @@ const QUESTIONS = [
     a: "It can propose to — add a competitor, start an analysis, void a prediction — but anything that writes or spends waits for you to approve it. It also declines questions outside your competitive market rather than improvising an answer.",
   },
   {
+    q: "Can a competitor game it by planting text on their own site?",
+    a: "Everything collected is treated as untrusted evidence. It reaches the model inside delimited blocks with an explicit rule never to follow instructions found there, and the resolution is decided by code, not by the model.",
+  },
+  {
     q: "What do I need to get started?",
     a: "A competitor's name and domain. Signal finds its GitHub organisation, job boards, changelog, pricing page, website and community on its own, and asks before it tracks anything it discovered.",
   },
 ];
 
-function TwoTone({ lead, rest }: { lead: string; rest: string }) {
-  return (
-    <>
-      {lead} <span className="text-ink-muted">{rest}</span>
-    </>
-  );
-}
-
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-ground text-ink">
-      {/* Announcement. Only ever something that has fully shipped. */}
+      {/* Announcement */}
       <a
         href="#sources"
-        className="block border-b border-[var(--color-accent-line)] bg-[var(--color-tint-teal)] px-4 py-2 text-center text-[12.5px] text-ink-secondary transition-colors hover:text-ink"
+        className="block bg-midnight px-4 py-2.5 text-center text-[13px] text-midnight-ink transition-colors hover:text-white"
       >
-        <span className="mr-2 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-white">
-          New
-        </span>
-        Code is now a source — pull requests and releases, read weeks before the launch post
-        <span aria-hidden="true" className="ml-1 text-accent">
-          &rarr;
+        <span className="mr-2 rounded-full bg-flare px-2 py-0.5 text-[11px] font-semibold text-midnight">New</span>
+        Signal now reads competitors&rsquo; websites, forums and newsroom posts
+        <span aria-hidden="true" className="ml-1.5 text-flare">
+          →
         </span>
       </a>
 
-      <header className="sticky top-0 z-30 border-b border-line bg-ground/80 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
-          <Link href="/" aria-label="Signal home">
-            <SignalMark />
-          </Link>
-          <nav className="flex items-center gap-1" aria-label="Site">
-            {[
-              ["#how", "How it works"],
-              ["#capabilities", "Capabilities"],
-              ["#sources", "Sources"],
-              ["#questions", "Questions"],
-            ].map(([href, label]) => (
-              <a
-                key={href}
-                href={href}
-                className="hidden rounded-md px-3 py-2 text-[13px] font-medium text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink md:inline-flex"
-              >
-                {label}
-              </a>
-            ))}
-            <Link
-              href="/login"
-              className="rounded-md px-3 py-2 text-[13px] font-medium text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/signup"
-              className="ml-1 inline-flex items-center rounded-md bg-accent px-3.5 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover"
-            >
-              Start tracking
-            </Link>
-          </nav>
-        </div>
-      </header>
+      <SiteHeader />
 
-      <main className="rails">
-        {/* ── Hero ─────────────────────────────────────────────────────── */}
+      <main>
+        {/* ── Hero ───────────────────────────────────────────────────── */}
         <section className="relative overflow-hidden">
+          <div aria-hidden="true" className="brand-glow absolute inset-0" />
           <div aria-hidden="true" className="grid-backdrop absolute inset-0" />
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute -top-40 left-1/2 h-[520px] w-[900px] -translate-x-1/2 rounded-full opacity-60 blur-3xl"
-            style={{
-              background:
-                "radial-gradient(closest-side, var(--color-tint-teal), transparent), radial-gradient(closest-side at 70% 40%, var(--color-tint-sky), transparent)",
-            }}
-          />
 
-          <div className="relative mx-auto max-w-6xl px-5 pt-16 sm:px-8 sm:pt-24">
-            <div className="max-w-4xl">
-              <p
-                className="rise-in mb-6 inline-flex items-center gap-2 rounded-full border border-[var(--color-accent-line)] bg-surface/70 px-3 py-1 text-[12px] font-medium text-accent backdrop-blur"
-                style={{ animationDelay: "40ms" }}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                Competitive intelligence for teams building developer tools
-              </p>
+          <div className={`${CONTAINER} relative pt-20 text-center sm:pt-28`}>
+            <p
+              className="rise-in mx-auto inline-flex items-center gap-2 rounded-full bg-surface/80 px-3.5 py-1.5 text-[13px] font-medium text-ink-secondary shadow-[var(--shadow-card)] backdrop-blur"
+              style={{ animationDelay: "40ms" }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-flare" />
+              Competitive intelligence for teams that build developer tools
+            </p>
 
-              <h1
-                className="rise-in text-[clamp(2.5rem,6vw,4.75rem)] leading-[0.98] font-semibold tracking-[-0.04em] text-balance text-ink"
-                style={{ animationDelay: "120ms" }}
-              >
-                Know what your competitors ship before they announce it.
-              </h1>
+            <h1
+              className="rise-in mx-auto mt-8 max-w-5xl text-balance font-display text-[clamp(2.75rem,6.6vw,5.6rem)] leading-[0.95] font-semibold tracking-[-0.045em]"
+              style={{ animationDelay: "120ms" }}
+            >
+              <TwoTone lead="See what competitors ship" rest="before they announce it." />
+            </h1>
 
-              <p
-                className="rise-in mt-7 max-w-2xl text-[18px] leading-relaxed text-ink-secondary"
-                style={{ animationDelay: "200ms" }}
-              >
-                Your competitors are telling you what they&rsquo;re building right now, in public,
-                and nobody&rsquo;s reading it. Signal does &mdash; then writes down what it
-                expects next, with a probability, and scores itself when the date arrives.
-              </p>
+            <p
+              className="rise-in mx-auto mt-7 max-w-2xl text-balance text-[18px] leading-relaxed text-ink-secondary sm:text-[19px]"
+              style={{ animationDelay: "200ms" }}
+            >
+              Signal reads the public trail — pull requests, hiring, homepage rewrites — writes down what it expects
+              next with a probability and a date, and scores itself when the date arrives.
+            </p>
 
-              <div
-                className="rise-in mt-9 flex flex-wrap items-center gap-3"
-                style={{ animationDelay: "280ms" }}
+            <div
+              className="rise-in mt-10 flex flex-wrap items-center justify-center gap-3"
+              style={{ animationDelay: "280ms" }}
+            >
+              <Link
+                href="/signup"
+                className="inline-flex min-h-12 items-center rounded-xl bg-flare px-6 text-[15px] font-semibold text-midnight shadow-[0_14px_30px_-14px_rgba(249,110,49,0.9)] transition-colors hover:bg-flare-hover"
               >
-                <Link
-                  href="/signup"
-                  className="inline-flex min-h-12 items-center rounded-lg bg-accent px-6 text-[15px] font-medium text-white shadow-[0_10px_30px_-12px_rgba(15,110,104,0.7)] transition-colors hover:bg-accent-hover"
-                >
-                  Track your first competitor
-                </Link>
-                <a
-                  href="#how"
-                  className="inline-flex min-h-12 items-center rounded-lg border border-line-strong bg-surface/80 px-6 text-[15px] font-medium text-ink backdrop-blur transition-colors hover:bg-surface"
-                >
-                  See how it works
-                </a>
-              </div>
+                Track your first competitor
+              </Link>
+              <a
+                href="#product"
+                className="inline-flex min-h-12 items-center rounded-xl bg-surface px-6 text-[15px] font-medium text-ink shadow-[var(--shadow-card)] transition-colors hover:bg-surface-sunken"
+              >
+                Take the tour
+              </a>
             </div>
           </div>
 
-          {/* The trace runs behind the product window and out past its edges. */}
-          <div className="relative mt-14 sm:mt-16">
-            <SignalTrace className="absolute inset-x-0 -top-16 h-[380px] w-full sm:-top-24 sm:h-[460px]" />
-            <div className="relative mx-auto max-w-5xl px-5 pb-20 sm:px-8 sm:pb-28">
-              <div className="rise-in" style={{ animationDelay: "420ms" }}>
-                <ProductWindow />
-              </div>
+          <div className={`${CONTAINER} relative mt-16 pb-24 sm:mt-20 sm:pb-28`}>
+            <div className="rise-in" style={{ animationDelay: "420ms" }}>
+              <HeroProduct />
             </div>
+            <p className="mt-4 text-center text-[12px] text-ink-muted">
+              Illustrative product view · fictional companies and example figures
+            </p>
           </div>
         </section>
 
-        {/* ── How it works ─────────────────────────────────────────────── */}
-        <section id="how" className="scroll-mt-20 border-t border-line bg-surface py-20 sm:py-28">
-          <div className="mx-auto max-w-6xl px-5 sm:px-8">
-            <h2 className="max-w-3xl text-balance text-[clamp(1.9rem,3.8vw,2.9rem)] leading-[1.08] font-semibold tracking-[-0.03em]">
-              <TwoTone
-                lead="Watch, predict, then keep score."
-                rest="The same loop, for every competitor, running without you."
-              />
-            </h2>
-
-            <ol className="relative mt-14 grid gap-8 md:grid-cols-4 md:gap-6">
-              {/* Connector across the four stages. */}
-              <div
-                aria-hidden="true"
-                className="absolute top-[18px] right-[12%] left-[12%] hidden h-px md:block"
-                style={{
-                  background:
-                    "linear-gradient(90deg, var(--color-trace-a), var(--color-trace-b), var(--color-trace-c), var(--color-trace-d))",
-                }}
-              />
-              {PIPELINE.map((stage) => (
-                <li key={stage.n} className="relative">
-                  <span className="relative z-10 flex h-9 w-9 items-center justify-center rounded-full border border-[var(--color-accent-line)] bg-surface font-mono text-[12px] font-medium text-accent">
-                    {stage.n}
-                  </span>
-                  <h3 className="mt-5 text-[18px] font-semibold tracking-[-0.015em]">{stage.title}</h3>
-                  <p className="mt-2 text-[14px] leading-relaxed text-ink-secondary">{stage.body}</p>
+        {/* ── The public trail ───────────────────────────────────────── */}
+        <section aria-label="Sources Signal reads" className="border-y border-line bg-surface">
+          <div className={`${CONTAINER} flex flex-col items-center gap-5 py-8 lg:flex-row lg:justify-between`}>
+            <p className="shrink-0 text-[13px] font-medium text-ink-secondary">Reads the public trail from</p>
+            <ul className="flex flex-wrap justify-center gap-x-6 gap-y-2 font-mono text-[13px] text-ink-muted">
+              {TRAIL.map((item) => (
+                <li key={item} className="flex items-center gap-2">
+                  <span className="h-1 w-1 rounded-full bg-line-strong" />
+                  {item}
                 </li>
               ))}
-            </ol>
+            </ul>
           </div>
         </section>
 
-        {/* ── Capabilities ─────────────────────────────────────────────── */}
-        <section id="capabilities" className="scroll-mt-20 border-t border-line py-20 sm:py-28">
-          <div className="mx-auto max-w-6xl px-5 sm:px-8">
-            <h2 className="max-w-3xl text-balance text-[clamp(1.9rem,3.8vw,2.9rem)] leading-[1.08] font-semibold tracking-[-0.03em]">
-              <TwoTone
-                lead="Everything a competitive analyst does."
-                rest="Including the part where they admit they were wrong."
-              />
-            </h2>
-            <div className="mt-12">
-              <Bento />
-            </div>
-          </div>
-        </section>
-
-        {/* ── Sources ──────────────────────────────────────────────────── */}
-        <section id="sources" className="scroll-mt-20 border-t border-line bg-surface py-20 sm:py-28">
-          <div className="mx-auto max-w-6xl px-5 sm:px-8">
-            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-end">
-              <h2 className="text-balance text-[clamp(1.9rem,3.8vw,2.9rem)] leading-[1.08] font-semibold tracking-[-0.03em]">
-                <TwoTone lead="Nine sources." rest="Sorted by when they move." />
+        {/* ── How it works ───────────────────────────────────────────── */}
+        <section id="how" className="scroll-mt-24 py-24 sm:py-32">
+          <div className={CONTAINER}>
+            <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr] lg:items-end">
+              <h2 className={SECTION_TITLE}>
+                <TwoTone lead="The launch post is the last signal." rest="Signal reads the first ones." />
               </h2>
-              <p className="max-w-lg text-[15px] leading-relaxed text-ink-secondary">
-                A changelog describes a change after it shipped. A pull request, a new job
-                posting or a rewritten homepage <em>is</em> the change &mdash; timestamped,
-                public, and usually weeks earlier. Tools built for sales teams never read any of
-                it.
+              <p className="max-w-lg text-[16px] leading-relaxed text-ink-secondary lg:justify-self-end">
+                A pull request, a job posting for a role that doesn&rsquo;t exist yet, a rewritten product page — all
+                public, all weeks before the announcement. Signal lines them up, forecasts once enough independent
+                evidence agrees, and checks itself on the date.
               </p>
             </div>
 
-            <div className="mt-12 grid gap-4 lg:grid-cols-3">
-              {SOURCE_GROUPS.map((group) => (
-                <div key={group.timing} className="overflow-hidden rounded-xl border border-line">
-                  <div className="border-b border-line px-5 py-4" style={{ backgroundColor: group.tint }}>
-                    <div className="text-[14px] font-semibold text-ink">{group.timing}</div>
-                    <div className="text-[12.5px] text-ink-secondary">{group.note}</div>
+            <div className="mt-14">
+              <LeadTimeline />
+            </div>
+
+            <div className="mt-6 grid overflow-hidden rounded-[22px] bg-surface shadow-[var(--shadow-card)] md:grid-cols-3">
+              {LOOP.map((item, index) => (
+                <div
+                  key={item.title}
+                  className={`p-7 sm:p-8 ${index > 0 ? "border-t border-line md:border-t-0 md:border-l" : ""}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-[12px] text-flare-deep">{item.step}</span>
+                    <span className="h-px flex-1 bg-line" />
                   </div>
-                  <ul className="divide-y divide-line bg-surface">
+                  <h3 className="mt-5 font-display text-[24px] font-semibold text-ink">{item.title}</h3>
+                  <p className="mt-2 text-[15px] leading-relaxed text-ink-secondary">{item.body}</p>
+                  <p className="mt-5 inline-block rounded-md bg-surface-sunken px-2 py-1 font-mono text-[12px] text-ink-secondary">
+                    {item.spec}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── Product tour ───────────────────────────────────────────── */}
+        <section id="product" className="scroll-mt-24 border-t border-line bg-surface-sunken/60 py-24 sm:py-32">
+          <div className={CONTAINER}>
+            <h2 className={`${SECTION_TITLE} max-w-3xl`}>
+              <TwoTone lead="Everything a competitive analyst does." rest="Including admitting when it was wrong." />
+            </h2>
+            <div className="mt-14">
+              <ProductTour />
+            </div>
+          </div>
+        </section>
+
+        {/* ── Scorecard / honesty ─────────────────────────────────────── */}
+        <section
+          id="scorecard"
+          className="relative scroll-mt-24 overflow-hidden bg-midnight py-24 text-midnight-ink sm:py-32"
+        >
+          <SignalTrace
+            id="honesty-trace"
+            tone="dark"
+            className="pointer-events-none absolute inset-x-0 top-0 h-[420px] w-full opacity-40"
+          />
+          <div className={`${CONTAINER} relative grid gap-14 lg:grid-cols-[1fr_440px] lg:items-center`}>
+            <div>
+              <h2 className={`${SECTION_TITLE} text-white`}>
+                Scored in public. <span className="text-midnight-muted">Starting from zero.</span>
+              </h2>
+              <p className="mt-6 max-w-xl text-[16px] leading-relaxed text-midnight-muted">
+                Every forecast carries a probability and a date. When the date arrives it is marked hit, miss or
+                unresolved and Brier-scored against a coin flip. There is no accuracy number on this page because
+                there isn&rsquo;t one yet — your workspace earns its own.
+              </p>
+              <ul className="mt-10 space-y-6">
+                {RULES.map(([title, body]) => (
+                  <li key={title} className="flex gap-4">
+                    <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-flare shadow-[0_0_0_4px_rgba(249,110,49,0.18)]" />
+                    <div>
+                      <p className="text-[16px] font-semibold text-white">{title}</p>
+                      <p className="mt-1 text-[14.5px] leading-relaxed text-midnight-muted">{body}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <Calibration />
+          </div>
+        </section>
+
+        {/* ── Sources ────────────────────────────────────────────────── */}
+        <section id="sources" className="scroll-mt-24 py-24 sm:py-32">
+          <div className={CONTAINER}>
+            <div className="grid gap-6 lg:grid-cols-[1fr_1fr] lg:items-end">
+              <h2 className={SECTION_TITLE}>
+                <TwoTone lead="Nine sources." rest="Sorted by when they move." />
+              </h2>
+              <p className="max-w-lg text-[16px] leading-relaxed text-ink-secondary lg:justify-self-end">
+                A changelog describes a change after it shipped. A pull request, a new job posting or a rewritten
+                homepage is the change — timestamped, public, and usually weeks earlier. Discovery finds each source
+                from a name and a domain.
+              </p>
+            </div>
+
+            <div className="mt-14 grid gap-5 lg:grid-cols-3">
+              {SOURCE_GROUPS.map((group) => (
+                <div key={group.timing} className="overflow-hidden rounded-[22px] bg-surface shadow-[var(--shadow-card)]">
+                  <div className={`${group.tint} px-6 py-5`}>
+                    <p className="font-display text-[20px] font-semibold text-ink">{group.timing}</p>
+                    <p className="mt-0.5 text-[13.5px] text-ink-secondary">{group.note}</p>
+                  </div>
+                  <ul>
                     {group.sources.map((source) => (
-                      <li key={source.name} className="px-5 py-4">
-                        <div className="text-[14px] font-medium text-ink">{source.name}</div>
-                        <div className="mt-0.5 text-[12.5px] text-ink-muted">{source.detail}</div>
+                      <li key={source.name} className="flex gap-3 border-t border-line px-6 py-4">
+                        <span
+                          className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: source.color }}
+                        />
+                        <div>
+                          <p className="text-[15px] font-medium text-ink">{source.name}</p>
+                          <p className="text-[13.5px] text-ink-secondary">{source.detail}</p>
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -323,100 +356,89 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* ── Honesty band ─────────────────────────────────────────────── */}
-        <section className="relative z-[1] overflow-hidden bg-[var(--color-deep)] py-20 text-[var(--color-deep-ink)] sm:py-28">
-          <SignalTrace className="pointer-events-none absolute inset-x-0 top-1/2 h-[420px] w-full -translate-y-1/2 opacity-25" />
-          <div className="relative mx-auto grid max-w-6xl gap-12 px-5 sm:px-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-center">
+        {/* ── Ask Signal ─────────────────────────────────────────────── */}
+        <section id="ask" className="scroll-mt-24 border-t border-line bg-surface py-24 sm:py-32">
+          <div className={`${CONTAINER} grid gap-14 lg:grid-cols-2 lg:items-center`}>
             <div>
-              <h2 className="text-balance text-[clamp(1.9rem,3.8vw,2.9rem)] leading-[1.08] font-semibold tracking-[-0.03em]">
-                Honesty enforced in the schema,{" "}
-                <span className="text-[var(--color-deep-muted)]">not promised in the copy.</span>
+              <h2 className={SECTION_TITLE}>
+                <TwoTone lead="Ask it anything about a competitor." rest="It answers from evidence." />
               </h2>
               <ul className="mt-10 space-y-6">
-                {[
-                  [
-                    "It cannot claim certainty.",
-                    "Probabilities are bounded away from 0 and 1 by the database itself.",
-                  ],
-                  [
-                    "No model grades its own work.",
-                    "The verdict is plain code against collected evidence.",
-                  ],
-                  [
-                    "Silence is not failure.",
-                    "A window with no evidence is recorded as unresolved and never scored as a miss.",
-                  ],
-                ].map(([h, p]) => (
-                  <li key={h} className="flex gap-4">
-                    <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-[var(--color-trace-c)]" />
+                {ASK_POINTS.map(([title, body]) => (
+                  <li key={title} className="flex gap-4">
+                    <span className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-accent-tint text-accent">
+                      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden="true">
+                        <path
+                          d="M3.5 8.5l3 3 6-7"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
                     <div>
-                      <div className="text-[16px] font-semibold">{h}</div>
-                      <div className="mt-1 text-[14px] leading-relaxed text-[var(--color-deep-muted)]">{p}</div>
+                      <p className="text-[16px] font-semibold text-ink">{title}</p>
+                      <p className="mt-1 text-[15px] leading-relaxed text-ink-secondary">{body}</p>
                     </div>
                   </li>
                 ))}
               </ul>
             </div>
 
-            {/* Real excerpts from the codebase, not an illustration of one. */}
-            <div className="overflow-hidden rounded-xl border border-white/10 bg-black/25 backdrop-blur">
-              <div className="flex items-center gap-2 border-b border-white/10 px-4 py-2.5 font-mono text-[11px] text-[var(--color-deep-muted)]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-trace-c)]" />
-                from the Signal codebase
+            <div className="relative overflow-hidden rounded-[22px] bg-tint-lilac p-5 ring-1 ring-line sm:p-8">
+              <div className="dot-field pointer-events-none absolute inset-0 opacity-50" aria-hidden="true" />
+              <div className="relative space-y-3">
+                <div className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-md bg-midnight px-4 py-2.5 text-[14px] text-white">
+                  Add Tidewater and tell me what they&rsquo;re hiring for.
+                </div>
+                <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-surface px-4 py-3 text-[14px] leading-relaxed text-ink shadow-[var(--shadow-card)]">
+                  I can start tracking Tidewater and run discovery on tidewater.dev. That writes to your workspace, so
+                  I need your go-ahead first.
+                </div>
+                <div className="max-w-[92%] rounded-xl bg-surface p-4 shadow-[var(--shadow-card)] ring-1 ring-accent-line">
+                  <p className="text-[12px] font-semibold text-accent">Needs your approval</p>
+                  <p className="mt-1 text-[14px] text-ink">Create competitor “Tidewater” and start discovery</p>
+                  <div className="mt-3 flex gap-2">
+                    <span className="rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white">Approve</span>
+                    <span className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary ring-1 ring-line">
+                      Decline
+                    </span>
+                  </div>
+                </div>
+                <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-surface px-4 py-3 text-[14px] text-ink-secondary shadow-[var(--shadow-card)]">
+                  What&rsquo;s the weather in Lisbon?
+                  <p className="mt-2 text-ink">That&rsquo;s outside your competitive market, so I&rsquo;ll pass on it.</p>
+                </div>
               </div>
-              <pre className="overflow-x-auto p-5 font-mono text-[12.5px] leading-[1.75]">
-                <code>
-                  <span className="text-[var(--color-deep-muted)]">-- predictions</span>
-                  {"\n"}CHECK (probability &gt;= <span className="text-[var(--color-trace-d)]">0.05</span>
-                  {"\n"}   AND probability &lt;= <span className="text-[var(--color-trace-d)]">0.95</span>)
-                  {"\n\n"}
-                  <span className="text-[var(--color-deep-muted)]">
-                    {"// resolver: an unresolved window carries no score"}
-                  </span>
-                  {"\n"}const brier = outcome.status === <span className="text-[var(--color-trace-c)]">&quot;unresolved&quot;</span>
-                  {"\n"}  ? <span className="text-[var(--color-trace-d)]">null</span>
-                  {"\n"}  : brierScore(probability, hit);
-                  {"\n\n"}
-                  <span className="text-[var(--color-deep-muted)]">
-                    {"// an empty track record is null — zero would read as perfect"}
-                  </span>
-                  {"\n"}if (resolved.length === <span className="text-[var(--color-trace-d)]">0</span>) return {"{"} brier: <span className="text-[var(--color-trace-d)]">null</span> {"}"};
-                </code>
-              </pre>
+              <p className="relative mt-5 text-center text-[11.5px] text-ink-muted">Illustrative conversation</p>
             </div>
           </div>
         </section>
 
-        {/* ── Comparison ───────────────────────────────────────────────── */}
-        <section className="border-t border-line py-20 sm:py-28">
-          <div className="mx-auto max-w-6xl px-5 sm:px-8">
-            <h2 className="max-w-3xl text-balance text-[clamp(1.9rem,3.8vw,2.9rem)] leading-[1.08] font-semibold tracking-[-0.03em]">
+        {/* ── Comparison ─────────────────────────────────────────────── */}
+        <section className="py-24 sm:py-32">
+          <div className={CONTAINER}>
+            <h2 className={`${SECTION_TITLE} max-w-3xl`}>
               <TwoTone lead="Not another alert feed." rest="A different kind of product." />
             </h2>
-
-            <div className="mt-12 overflow-x-auto rounded-xl border border-line bg-surface">
-              <table className="w-full min-w-[640px] border-collapse text-left text-[14px]">
+            <div className="mt-12 overflow-x-auto rounded-[22px] bg-surface shadow-[var(--shadow-card)]">
+              <table className="w-full min-w-[640px] border-collapse text-left text-[14.5px]">
                 <thead>
-                  <tr className="border-b border-line text-[12.5px]">
-                    <th scope="col" className="px-5 py-3 font-semibold text-ink-muted">
-                      <span className="sr-only">Aspect</span>
-                    </th>
-                    <th scope="col" className="bg-surface-sunken px-5 py-3 font-semibold text-ink-secondary">
-                      Typical alert feed
-                    </th>
-                    <th scope="col" className="bg-[var(--color-tint-teal)] px-5 py-3 font-semibold text-accent">
-                      Signal
-                    </th>
+                  <tr>
+                    <th className="w-1/4 px-6 py-4" />
+                    <th className="w-[37.5%] px-6 py-4 font-medium text-ink-muted">Typical alert feed</th>
+                    <th className="w-[37.5%] bg-tint-blue px-6 py-4 font-semibold text-accent">Signal</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {COMPARISON.map(([label, feed, signal]) => (
-                    <tr key={label} className="border-b border-line last:border-b-0">
-                      <th scope="row" className="px-5 py-4 font-medium text-ink">
-                        {label}
+                  {COMPARISON.map(([aspect, feed, signal]) => (
+                    <tr key={aspect} className="border-t border-line">
+                      <th scope="row" className="px-6 py-4 font-medium text-ink">
+                        {aspect}
                       </th>
-                      <td className="bg-surface-sunken/60 px-5 py-4 text-ink-secondary">{feed}</td>
-                      <td className="bg-[var(--color-tint-teal)]/60 px-5 py-4 text-ink">{signal}</td>
+                      <td className="px-6 py-4 text-ink-muted">{feed}</td>
+                      <td className="bg-tint-blue/60 px-6 py-4 font-medium text-ink">{signal}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -425,59 +447,64 @@ export default function LandingPage() {
           </div>
         </section>
 
-        {/* ── Questions ────────────────────────────────────────────────── */}
-        <section id="questions" className="scroll-mt-20 border-t border-line bg-surface py-20 sm:py-28">
-          <div className="mx-auto grid max-w-6xl gap-12 px-5 sm:px-8 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <h2 className="text-balance text-[clamp(1.9rem,3.8vw,2.9rem)] leading-[1.08] font-semibold tracking-[-0.03em]">
+        {/* ── FAQ ────────────────────────────────────────────────────── */}
+        <section id="questions" className="scroll-mt-24 border-t border-line bg-surface py-24 sm:py-32">
+          <div className={`${CONTAINER} grid gap-12 lg:grid-cols-[1fr_1.5fr]`}>
+            <h2 className={SECTION_TITLE}>
               <TwoTone lead="Questions," rest="answered plainly." />
             </h2>
             <div className="divide-y divide-line border-y border-line">
               {QUESTIONS.map((item) => (
                 <details key={item.q} className="group py-5">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-6 text-[16px] font-medium text-ink">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-6 text-[17px] font-medium text-ink">
                     {item.q}
                     <span
                       aria-hidden="true"
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line-strong text-ink-muted transition-transform group-open:rotate-45"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-ink-secondary transition-transform group-open:rotate-45"
                     >
                       +
                     </span>
                   </summary>
-                  <p className="mt-3 max-w-2xl text-[14.5px] leading-relaxed text-ink-secondary">{item.a}</p>
+                  <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-ink-secondary">{item.a}</p>
                 </details>
               ))}
             </div>
           </div>
         </section>
 
-        {/* ── Final call ───────────────────────────────────────────────── */}
-        <section className="relative overflow-hidden border-t border-line py-24 sm:py-32">
-          <SignalTrace className="pointer-events-none absolute inset-x-0 top-1/2 h-[380px] w-full -translate-y-1/2 opacity-70" />
-          <div className="relative mx-auto max-w-2xl px-5 text-center sm:px-8">
-            <h2 className="text-balance text-[clamp(2rem,4.5vw,3.25rem)] leading-[1.05] font-semibold tracking-[-0.035em]">
-              Add one competitor. Let it run.
-            </h2>
-            <p className="mx-auto mt-5 max-w-lg text-[16px] leading-relaxed text-ink-secondary">
-              A name and a domain is enough. Signal finds the rest and tells you what it expects
-              &mdash; as probabilities, never certainties.
-            </p>
-            <div className="mt-9 flex flex-wrap justify-center gap-3">
-              <Link
-                href="/signup"
-                className="inline-flex min-h-12 items-center rounded-lg bg-accent px-6 text-[15px] font-medium text-white shadow-[0_10px_30px_-12px_rgba(15,110,104,0.7)] transition-colors hover:bg-accent-hover"
-              >
-                Create a workspace
-              </Link>
-              <Link
-                href="/login"
-                className="inline-flex min-h-12 items-center rounded-lg border border-line-strong bg-surface px-6 text-[15px] font-medium text-ink transition-colors hover:bg-surface-sunken"
-              >
-                Sign in
-              </Link>
+        {/* ── Final CTA ──────────────────────────────────────────────── */}
+        <section className="py-20 sm:py-28">
+          <div className={CONTAINER}>
+            <div className="relative overflow-hidden rounded-[28px] bg-[linear-gradient(135deg,#2b61cc_0%,#0f2150_55%,#061436_100%)] px-6 py-20 text-center sm:px-12">
+              <SignalTrace
+                id="cta-trace"
+                tone="dark"
+                className="pointer-events-none absolute inset-x-0 top-1/2 h-[380px] w-full -translate-y-1/2 opacity-35"
+              />
+              <div className="relative">
+                <h2 className="mx-auto max-w-3xl text-balance font-display text-[clamp(2.2rem,5vw,4rem)] leading-[1] font-semibold tracking-[-0.04em] text-white">
+                  Read the signal before the launch post.
+                </h2>
+                <p className="mx-auto mt-5 max-w-xl text-[17px] leading-relaxed text-white/80">
+                  Add a competitor by name and domain. Signal finds its sources and asks before it tracks anything it
+                  discovered.
+                </p>
+                <div className="mt-9 flex flex-wrap justify-center gap-3">
+                  <Link
+                    href="/signup"
+                    className="inline-flex min-h-12 items-center rounded-xl bg-flare px-6 text-[15px] font-semibold text-midnight transition-colors hover:bg-flare-hover"
+                  >
+                    Create a workspace
+                  </Link>
+                  <Link
+                    href="/login"
+                    className="inline-flex min-h-12 items-center rounded-xl bg-white/10 px-6 text-[15px] font-medium text-white ring-1 ring-white/20 transition-colors hover:bg-white/15"
+                  >
+                    Sign in
+                  </Link>
+                </div>
+              </div>
             </div>
-            <p className="mt-6 text-[12px] text-ink-muted">
-              Product views on this page are illustrative and use fictional companies.
-            </p>
           </div>
         </section>
       </main>
