@@ -109,6 +109,24 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   const app = express();
   app.disable("x-powered-by");
   app.use(cors({ origin: process.env.FRONTEND_URL ?? "http://localhost:3001", credentials: true }));
+  // Mounted before requireAuth because Slack has no bearer token to present —
+  // the HMAC signature verified inside this router IS the authentication. It is
+  // also mounted before the global express.json() below, and that ordering is
+  // load-bearing: body-parser sets req._body on the first parse, so a second
+  // express.json() further down the stack silently skips its own `verify` hook
+  // and the router would never see the raw bytes Slack signed.
+  app.use(
+    "/api/slack",
+    createSlackRouter({
+      signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
+      getSlackInstallation,
+      enqueueSlackQuestion: async (question: SlackQuestion) => {
+        await queues["slack-question"].add("slack-question", question, {
+          jobId: question.dedupe_key,
+        });
+      },
+    })
+  );
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   // Compatibility liveness endpoint: process-only by design. Infrastructure
   // health belongs to /ready so an outage does not trigger restart loops.
@@ -122,20 +140,6 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
       res.status(503).json({ status: "unavailable" });
     }
   });
-  // Mounted before requireAuth on purpose. Slack has no bearer token to
-  // present — the HMAC signature verified inside this router IS the
-  // authentication, and putting it behind requireAuth would reject every
-  // legitimate Slack event.
-  app.use(
-    "/api/slack",
-    createSlackRouter({
-      signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
-      getSlackInstallation,
-      enqueueSlackQuestion: async (question: SlackQuestion) => {
-        await queues["slack-question"].add("slack-question", question);
-      },
-    })
-  );
   app.use("/api", requireAuth);
   app.use("/api/competitors", createCompetitorRouter());
   app.use("/api/signals", createSignalRouter());

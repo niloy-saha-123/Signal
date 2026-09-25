@@ -80,3 +80,31 @@ describe("computeCalibration", () => {
     expect(c.buckets).toHaveLength(1);
   });
 });
+
+describe("calibration bucketing precision", () => {
+  it("files round probabilities in the bucket a human would name", () => {
+    // 0.7 / 0.1 is 6.999999999999999 in IEEE-754, so a naive floor puts a 70%
+    // call in the 60-70% row. Round probabilities are exactly what a model
+    // emits most often, and misfiling them corrupts the one surface whose
+    // whole purpose is an honest calibration read.
+    for (const [probability, expected] of [
+      [0.1, "10-20%"],
+      [0.2, "20-30%"],
+      [0.3, "30-40%"],
+      [0.4, "40-50%"],
+      [0.5, "50-60%"],
+      [0.6, "60-70%"],
+      [0.7, "70-80%"],
+      [0.8, "80-90%"],
+      [0.9, "90-100%"],
+    ] as Array<[number, string]>) {
+      const c = computeCalibration([{ probability, status: "hit" }]);
+      expect(c.buckets[0].range, `probability ${probability}`).toBe(expected);
+    }
+  });
+
+  it("keeps a probability at the top of the range inside the last bucket", () => {
+    const c = computeCalibration([{ probability: 1, status: "hit" }]);
+    expect(c.buckets[0].range).toBe("90-100%");
+  });
+});

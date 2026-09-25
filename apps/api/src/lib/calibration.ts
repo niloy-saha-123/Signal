@@ -30,8 +30,10 @@ export const BASELINE_BRIER = 0.25;
 // Width of each calibration bucket. Ten buckets across [0, 1] is the standard
 // resolution for a reliability diagram: fine enough to show a curve, coarse
 // enough that each bucket holds real counts before the ledger is large.
-const BUCKET_WIDTH = 0.1;
 const BUCKET_COUNT = 10;
+// Label arithmetic only — bucket assignment multiplies by BUCKET_COUNT instead,
+// because dividing by this value is not exact in floating point.
+const BUCKET_WIDTH = 1 / BUCKET_COUNT;
 
 export function brierScore(probability: number, hit: boolean): number {
   const outcome = hit ? 1 : 0;
@@ -62,10 +64,17 @@ export interface ResolvedPrediction {
 }
 
 function bucketIndexFor(probability: number): number {
+  // Multiply, never divide. `probability / 0.1` is inexact in IEEE-754 for
+  // several round tenths — 0.7 / 0.1 is 6.999999999999999, 0.3 / 0.1 is
+  // 2.9999999999999996 — so flooring the quotient files a 70% call in the
+  // 60-70% row. Round probabilities are exactly what a model emits most often,
+  // and misfiling them corrupts the one surface whose whole purpose is an
+  // honest calibration read. `probability * 10` is exact for every tenth.
+  //
   // A probability of exactly 1 would land in a non-existent 11th bucket. The
   // schema clamps to 0.95 so this cannot happen today, but the ledger is meant
   // to outlive that constant.
-  return Math.min(BUCKET_COUNT - 1, Math.floor(probability / BUCKET_WIDTH));
+  return Math.min(BUCKET_COUNT - 1, Math.floor(probability * BUCKET_COUNT));
 }
 
 function rangeLabel(index: number): string {

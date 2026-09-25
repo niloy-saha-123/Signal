@@ -690,9 +690,14 @@ export async function getJobSignalsForHiringDelta(
 
 // Retrieval pipeline source — fetch recent signals across multiple competitors
 // for BM25 corpus. inArray with empty array is a Drizzle footgun, so short-circuit.
+// Capped like every sibling query here. The forecaster reads a 30-day window
+// across every active competitor daily; without a limit a high-volume
+// competitor loads thousands of rows into memory purely to have most of them
+// discarded by buildEvidenceText's later truncation.
 export async function getRecentSignalsByCompetitorIds(
   competitorIds: string[],
-  days = 7
+  days = 7,
+  limit = 500
 ): Promise<Signal[]> {
   if (competitorIds.length === 0) {
     return [];
@@ -1041,14 +1046,23 @@ export type CreateSignalScoreInput = {
 // instead of appending a duplicate score.
 // Every open prediction whose resolution date has passed, across all workspaces.
 // Backed by predictions_workspace_status_resolves_idx.
+// Bounded. The sweep runs once a day at concurrency 1, so an unbounded result
+// set turns a volume spike into a job whose wall-clock time grows with no
+// backpressure, blocking every other workspace's resolutions behind it.
+// Oldest-due first, so a backlog drains in the order predictions came due
+// rather than starving the ones that have waited longest.
+export const DUE_PREDICTIONS_BATCH_LIMIT = 500;
+
 export async function listDuePredictions(
-  now: Date
+  now: Date,
+  limit: number = DUE_PREDICTIONS_BATCH_LIMIT
 ): Promise<Array<typeof predictionsTable.$inferSelect>> {
   return db
     .select()
     .from(predictionsTable)
     .where(and(eq(predictionsTable.status, "open"), lte(predictionsTable.resolves_at, now)))
-    .orderBy(asc(predictionsTable.resolves_at));
+    .orderBy(asc(predictionsTable.resolves_at))
+    .limit(limit);
 }
 
 export interface ResolvePredictionInput {
@@ -1062,11 +1076,16 @@ export interface ResolvePredictionInput {
   brier_score: number | null;
 }
 
-export async function resolvePrediction(input: ResolvePredictionInput): Promise<void> {
+// Returns whether this call is the one that actually settled the prediction.
+// The status='open' guard already makes a duplicate write a no-op at the row
+// level, but a caller that ignores the result will still go on to announce the
+// resolution a second time. Reporting the outcome is what lets the caller keep
+// the Slack side idempotent too.
+export async function resolvePrediction(input: ResolvePredictionInput): Promise<boolean> {
   // Guarded on status "open": the daily sweep and a manual re-run can overlap,
   // and re-resolving a settled prediction would overwrite a recorded outcome
   // with a fresh verdict computed over a different window.
-  await db
+  const updated = await db
     .update(predictionsTable)
     .set({
       status: input.status,
@@ -1075,7 +1094,9 @@ export async function resolvePrediction(input: ResolvePredictionInput): Promise<
       resolution_evidence_urls: input.resolution_evidence_urls,
       brier_score: input.brier_score,
     })
-    .where(and(eq(predictionsTable.id, input.id), eq(predictionsTable.status, "open")));
+    .where(and(eq(predictionsTable.id, input.id), eq(predictionsTable.status, "open")))
+    .returning({ id: predictionsTable.id });
+  return updated.length > 0;
 }
 
 export interface CalibrationQuery {

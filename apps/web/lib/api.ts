@@ -14,6 +14,7 @@ import {
   type CompanyProfile,
   type CompetitorCreateInput,
   type ChatAgentResult,
+  PredictionSchema,
   type DiscoveryStatus,
   type PredictionPatternType,
   type PredictionStatus,
@@ -580,29 +581,12 @@ export function renameWorkspace(name: string): Promise<Workspace> {
 
 // --- Prediction ledger ---
 
-export interface PredictionRow {
-  id: string;
-  workspace_id: string;
-  competitor_id: string;
-  run_id: string | null;
-  statement: string;
-  pattern_type: PredictionPatternType;
-  probability: number;
-  resolution_criteria: ResolutionCriteria;
-  horizon_days: number;
-  resolves_at: string;
-  evidence_signal_ids: string[];
-  evidence_count: number;
-  status: PredictionStatus;
-  resolved_at: string | null;
-  resolution_note: string | null;
-  resolution_evidence_urls: string[];
-  // null while open, and null for unresolved/void — those carry no information
-  // about accuracy, so they never get a score. Render the absence, do not
-  // coerce it to 0: zero is a perfect Brier score.
-  brier_score: number | null;
-  created_at: string;
-}
+// Inferred from the shared schema rather than hand-mirrored, so a field rename
+// in packages/shared is a compile error here instead of a silent shape drift.
+// brier_score is null while open and null for unresolved/void — those carry no
+// information about accuracy. Render the absence; never coerce it to 0, because
+// zero is a perfect Brier score.
+export type PredictionRow = z.infer<typeof PredictionSchema>;
 
 export interface PredictionDetail extends PredictionRow {
   evidence: Signal[];
@@ -615,6 +599,30 @@ export interface ListPredictionsParams {
   limit?: number;
 }
 
+// Validated at the boundary, like every other endpoint in this file. The
+// brier_score null-vs-number distinction is the single most load-bearing
+// invariant in this product — null means "nothing resolved", 0 means "a perfect
+// score" — and an unvalidated response is the one place a backend change could
+// flip it silently, with no type error and no failing test.
+const PredictionRowSchema = PredictionSchema;
+const PredictionDetailSchema = PredictionSchema.extend({
+  evidence: z.array(SignalSchema),
+});
+
+const CalibrationBucketSchema = z.object({
+  range: z.string(),
+  predicted: z.number(),
+  observed: z.number(),
+  count: z.number().int().nonnegative(),
+});
+
+const CalibrationSchema = z.object({
+  resolved_count: z.number().int().nonnegative(),
+  brier: z.number().nullable(),
+  baseline_brier: z.number(),
+  buckets: z.array(CalibrationBucketSchema),
+});
+
 export async function listPredictions(
   params: ListPredictionsParams = {},
   token?: string
@@ -625,35 +633,26 @@ export async function listPredictions(
     competitor_id: params.competitor_id,
     limit: params.limit?.toString(),
   });
-  const res = await request<{ data: PredictionRow[] }>(
+  const res = await request<{ data: unknown[] }>(
     `/api/predictions?${query}`,
     undefined,
     token
   );
-  return res.data;
+  return z.array(PredictionRowSchema).parse(res.data);
 }
 
-export function getPrediction(id: string, token?: string): Promise<PredictionDetail> {
-  return request(`/api/predictions/${id}`, undefined, token);
+export async function getPrediction(id: string, token?: string): Promise<PredictionDetail> {
+  const res = await request<unknown>(`/api/predictions/${id}`, undefined, token);
+  return PredictionDetailSchema.parse(res);
 }
 
-export interface CalibrationBucket {
-  range: string;
-  predicted: number;
-  observed: number;
-  count: number;
-}
+export type CalibrationBucket = z.infer<typeof CalibrationBucketSchema>;
 
-export interface Calibration {
-  resolved_count: number;
-  // null means no track record yet. It must render as "nothing resolved yet",
-  // never as a score — 0 is flawless calibration and would be a lie.
-  brier: number | null;
-  baseline_brier: number;
-  buckets: CalibrationBucket[];
-}
+// `brier: null` means no track record yet. It must render as "nothing resolved
+// yet", never as a score — 0 is flawless calibration and would be a lie.
+export type Calibration = z.infer<typeof CalibrationSchema>;
 
-export function getCalibration(
+export async function getCalibration(
   params: { competitor_id?: string; pattern_type?: PredictionPatternType } = {},
   token?: string
 ): Promise<Calibration> {
@@ -661,7 +660,8 @@ export function getCalibration(
     competitor_id: params.competitor_id,
     pattern_type: params.pattern_type,
   });
-  return request(`/api/predictions/calibration?${query}`, undefined, token);
+  const res = await request<unknown>(`/api/predictions/calibration?${query}`, undefined, token);
+  return CalibrationSchema.parse(res);
 }
 
 // Marks a prediction moot. Only an open prediction can be voided — a settled

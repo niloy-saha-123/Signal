@@ -14,9 +14,16 @@
 // model budget is spent. An unsigned request must cost nothing.
 //
 // The raw body is required for verification, since Slack signed exact bytes and
-// a re-serialised JSON object will not match. This router mounts its own
-// raw-body parser rather than relying on the app-level express.json(), which
-// has already discarded the original bytes by the time a handler runs.
+// a re-serialised JSON object will not match.
+//
+// MOUNT ORDER IS LOAD-BEARING. body-parser sets `req._body` on the first parse
+// and every later express.json() short-circuits on it, so if this router is
+// mounted behind the app's global JSON parser its own `verify` hook never runs,
+// `rawBody` is never captured, and every genuine Slack request fails signature
+// verification. That failure mode is invisible from outside — a correct
+// signature and a forged one both look the same — so the handler detects the
+// missing raw body explicitly and answers 500 with a named error rather than
+// 401, which would send whoever debugs it hunting for a wrong signing secret.
 import express, { Router } from "express";
 import { z } from "zod";
 import * as queries from "../db/queries";
@@ -31,6 +38,10 @@ export interface SlackQuestion {
   question: string;
   thread_ts: string;
   bot_token: string;
+  // Stable per-event key, used as the BullMQ job id so a redelivered Slack
+  // event collapses onto the job the first delivery already created instead of
+  // running the agent a second time and posting a second answer.
+  dedupe_key: string;
 }
 
 export interface SlackRouterDeps {
@@ -77,9 +88,21 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
   );
 
   router.post("/events", async (req, res) => {
-    const rawBody = (req as express.Request & { rawBody?: string }).rawBody ?? "";
+    const rawBody = (req as express.Request & { rawBody?: string }).rawBody;
     const timestamp = req.header("x-slack-request-timestamp") ?? "";
     const signature = req.header("x-slack-signature") ?? "";
+
+    // A misconfigured mount order, not a bad request. Never answer 401 here:
+    // that is indistinguishable from a signature failure and hides the actual
+    // cause completely.
+    if (rawBody === undefined) {
+      logger.error(
+        "slack: raw body unavailable — the Slack router must be mounted BEFORE the app's global express.json()",
+        { hint: "body-parser sets req._body on first parse; later parsers skip their verify hook" }
+      );
+      res.status(500).json({ error: "slack_raw_body_unavailable" });
+      return;
+    }
 
     if (
       !verifySlackRequest({
@@ -114,7 +137,36 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
       return;
     }
 
-    const installation = await deps.getSlackInstallation(teamId);
+    // Slack redelivers any event it does not see acked within 3 seconds. By the
+    // time a retry arrives the original has almost always already been queued,
+    // so re-processing it means a second agent run and a second answer in the
+    // channel for one question. Drop retries.
+    if ((req.header("x-slack-retry-num") ?? "") !== "") {
+      logger.info("slack: ignoring a retry delivery", {
+        team_id: teamId,
+        retry_num: req.header("x-slack-retry-num"),
+        retry_reason: req.header("x-slack-retry-reason"),
+      });
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    // From here on nothing may throw past this handler. Express 4 does not
+    // catch a rejected promise from an async handler, and an uncaught one means
+    // no response at all — which Slack reads as a timeout and retries, turning
+    // a transient database blip into duplicate answers and duplicate spend.
+    let installation: Awaited<ReturnType<typeof deps.getSlackInstallation>>;
+    try {
+      installation = await deps.getSlackInstallation(teamId);
+    } catch (error) {
+      logger.error("slack: installation lookup failed — acking so Slack does not retry", {
+        team_id: teamId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     if (!installation) {
       // A signed request from a Slack team nobody connected. Serving it would
       // mean running an agent with no workspace to scope it to.
@@ -153,6 +205,8 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         // a busy channel.
         thread_ts: event.thread_ts ?? event.ts ?? "",
         bot_token: installation.bot_token,
+        // team_id + the event's own timestamp is unique per Slack event.
+        dedupe_key: `${teamId}:${event.ts ?? ""}`,
       });
     } catch (error) {
       // Still ack. A non-200 makes Slack retry, and a retry against a broken

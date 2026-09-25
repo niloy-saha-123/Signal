@@ -19,6 +19,30 @@ import { brierScore } from "../../lib/calibration";
 
 const SERVICE_NAME = "prediction-resolver";
 
+// One prediction must not be able to hold the whole sweep. The queries inside
+// resolvePredictionCriteria are row-capped but have no statement timeout, so a
+// single query stuck behind lock contention would otherwise block every other
+// workspace's resolutions until the next day's tick.
+const PER_PREDICTION_TIMEOUT_MS = 30_000;
+
+async function withDeadline<T>(work: Promise<T>, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} exceeded ${PER_PREDICTION_TIMEOUT_MS}ms`)),
+          PER_PREDICTION_TIMEOUT_MS
+        );
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 interface PredictionResolverJobData {
   // No fields — every run sweeps every workspace's due predictions.
 }
@@ -54,7 +78,10 @@ export async function predictionResolverProcessor(
       // the ledger's value is that it settles everything that came due, and a
       // single malformed row should not freeze the whole track record.
       try {
-        const outcome = await resolvePredictionCriteria(prediction, now);
+        const outcome = await withDeadline(
+          resolvePredictionCriteria(prediction, now),
+          `resolving prediction ${prediction.id}`
+        );
 
         // Only a real verdict carries a score. An unresolved window says nothing
         // about accuracy, so it stores null rather than a number that would later
@@ -64,7 +91,7 @@ export async function predictionResolverProcessor(
             ? null
             : brierScore(prediction.probability, outcome.status === "hit");
 
-        await resolvePrediction({
+        const settled = await resolvePrediction({
           id: prediction.id,
           status: outcome.status,
           resolved_at: now,
@@ -72,6 +99,16 @@ export async function predictionResolverProcessor(
           resolution_evidence_urls: outcome.evidence_urls,
           brier_score: brier,
         });
+
+        // Another path already settled this one. The row write was a correct
+        // no-op; announcing anyway would put a second "prediction resolved"
+        // message in the channel for the same prediction.
+        if (!settled) {
+          logger.info("prediction was already resolved by another run — not announcing again", {
+            prediction_id: prediction.id,
+          });
+          continue;
+        }
 
         // Announcing misses as plainly as hits is the point. A ledger that only
         // broadcasts its wins is marketing wearing a track record's clothes.
