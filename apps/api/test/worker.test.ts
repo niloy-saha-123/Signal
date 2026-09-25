@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => {
     initChangelog: makeInit(),
     initPricing: makeInit(),
     initGithub: makeInit(),
+    initWebsite: makeInit(),
+    initCommunity: makeInit(),
+    initPostings: makeInit(),
     initEntity: makeInit(),
     initQuality: makeInit(),
     initDedup: makeInit(),
@@ -40,9 +43,14 @@ vi.mock("@/queues/scheduler", () => ({ registerQueueSchedules: mocks.registerSch
 vi.mock("@/collectors/reddit", () => ({ initRedditWorker: mocks.initReddit }));
 vi.mock("@/collectors/hn", () => ({ initHnWorker: mocks.initHn }));
 vi.mock("@/collectors/jobs", () => ({ initJobsWorker: mocks.initJobs }));
-vi.mock("@/collectors/changelog", () => ({ initChangelogWorker: mocks.initChangelog }));
+vi.mock("@/collectors/changelog", () => ({
+  initChangelogWorker: mocks.initChangelog,
+  initPostingsWorker: mocks.initPostings,
+}));
 vi.mock("@/collectors/pricing", () => ({ initPricingWorker: mocks.initPricing }));
 vi.mock("@/collectors/github", () => ({ initGithubWorker: mocks.initGithub }));
+vi.mock("@/collectors/website", () => ({ initWebsiteWorker: mocks.initWebsite }));
+vi.mock("@/collectors/community", () => ({ initCommunityWorker: mocks.initCommunity }));
 vi.mock("@/agents/resolver/resolver-worker", () => ({
   initPredictionResolverWorker: mocks.initPredictionResolver,
 }));
@@ -84,7 +92,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 18 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 21 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -96,6 +104,9 @@ describe("standalone worker runtime", () => {
     expect(mocks.initChangelog).toHaveBeenCalledTimes(1);
     expect(mocks.initPricing).toHaveBeenCalledTimes(1);
     expect(mocks.initGithub).toHaveBeenCalledTimes(1);
+    expect(mocks.initWebsite).toHaveBeenCalledTimes(1);
+    expect(mocks.initCommunity).toHaveBeenCalledTimes(1);
+    expect(mocks.initPostings).toHaveBeenCalledTimes(1);
     expect(mocks.initEntity).toHaveBeenCalledTimes(1);
     expect(mocks.initQuality).toHaveBeenCalledTimes(1);
     expect(mocks.initDedup).toHaveBeenCalledTimes(1);
@@ -108,7 +119,7 @@ describe("standalone worker runtime", () => {
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(18);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(21);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);

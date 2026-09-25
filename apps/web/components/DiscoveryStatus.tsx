@@ -20,6 +20,9 @@ const FIELD_LABELS: Record<DiscoveryLog["field_name"], string> = {
   pricing_url: "Pricing URL",
   rss_url: "RSS feed",
   github_org: "GitHub org",
+  website_urls: "Website pages",
+  discourse_url: "Community forum",
+  postings_rss: "Newsroom feed",
 };
 
 const SETTLED_STATUSES = new Set(["complete", "failed"]);
@@ -54,14 +57,14 @@ export function DiscoveryStatus({
   }, [competitorId, pollIntervalMs]);
 
   if (!discovery) {
-    return <p className="text-sm text-studio-muted">Checking discovery status…</p>;
+    return <p className="text-sm text-ink-secondary">Checking discovery status…</p>;
   }
 
   return (
     <ul className="flex flex-col gap-1">
       {discovery.log.map((entry) => (
         <li key={entry.field_name} className="flex items-center gap-2 text-sm">
-          <span className="text-studio-ink">{FIELD_LABELS[entry.field_name]}</span>
+          <span className="text-ink">{FIELD_LABELS[entry.field_name]}</span>
           {entry.status === "found" ? (
             <span className="text-emerald-600">✓</span>
           ) : (
@@ -76,7 +79,7 @@ export function DiscoveryStatus({
                 <button
                   type="button"
                   onClick={() => onManualEntry(entry.field_name)}
-                  className="text-xs text-studio-action underline"
+                  className="text-xs text-accent underline"
                   aria-label={`Enter ${entry.field_name} manually`}
                 >
                   Enter manually
