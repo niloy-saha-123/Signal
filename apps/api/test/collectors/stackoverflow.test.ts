@@ -29,7 +29,7 @@ vi.mock("@/lib/logger", () => ({
 import { recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import { enqueueInitialSignalPipeline } from "@/pipeline/recovery";
 
-import { stackoverflowCollectorProcessor } from "@/collectors/stackoverflow";
+import { stackoverflowCollectorProcessor, timing } from "@/collectors/stackoverflow";
 
 const job = {} as any;
 const json = (body: unknown, status = 200) => ({
@@ -45,12 +45,15 @@ const q = (over: Record<string, unknown> = {}) => ({
   body: "<p>Hello <b>world</b></p>",
   score: 3,
   answer_count: 2,
+  creation_date: Math.floor(Date.now() / 1000) - 3600,
   ...over,
 });
 
 describe("stackoverflow collector", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    vi.spyOn(timing, "sleep").mockResolvedValue(undefined);
     existsMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async (s: any) => ({ id: s.source_url }));
     listCompetitorsMock.mockResolvedValue([
@@ -91,8 +94,8 @@ describe("stackoverflow collector", () => {
     expect(warnMock).toHaveBeenCalled();
   });
 
-  it("treats HTTP 400 as config: no failure", async () => {
-    safeFetchMock.mockResolvedValue(json({}, 400));
+  it("treats HTTP 400 bad_parameter as config: no failure", async () => {
+    safeFetchMock.mockResolvedValue(json({ error_id: 400, error_name: "bad_parameter" }, 400));
     await stackoverflowCollectorProcessor(job);
     expect(warnMock).toHaveBeenCalled();
     expect(recordFailure).not.toHaveBeenCalled();
@@ -103,5 +106,59 @@ describe("stackoverflow collector", () => {
     safeFetchMock.mockResolvedValue(json({}, 503));
     await stackoverflowCollectorProcessor(job);
     expect(recordFailure).toHaveBeenCalledWith("stackoverflow", expect.any(String));
+  });
+
+  const two = [
+    { id: "c1", name: "Kestrel", is_active: true, stackoverflow_tag: "kestrel" },
+    { id: "c2", name: "Osprey", is_active: true, stackoverflow_tag: "osprey" },
+  ];
+
+  it("a 400 throttle_violation charges the circuit and stops the sweep", async () => {
+    listCompetitorsMock.mockResolvedValue(two);
+    safeFetchMock.mockResolvedValue(json({ error_id: 502, error_name: "throttle_violation" }, 400));
+    await stackoverflowCollectorProcessor(job);
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+    expect(recordFailure).toHaveBeenCalledWith("stackoverflow", expect.stringMatching(/502/));
+  });
+
+  it("honours backoff (capped at 60s) before the next request", async () => {
+    listCompetitorsMock.mockResolvedValue(two);
+    safeFetchMock.mockResolvedValueOnce(json({ items: [], backoff: 90 })).mockResolvedValueOnce(json({ items: [] }));
+    await stackoverflowCollectorProcessor(job);
+    expect(timing.sleep).toHaveBeenCalledTimes(1);
+    expect(timing.sleep).toHaveBeenCalledWith(60);
+    expect(safeFetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the sweep when quota_remaining drops below 10", async () => {
+    listCompetitorsMock.mockResolvedValue(two);
+    safeFetchMock.mockResolvedValue(json({ items: [q()], quota_remaining: 5 }));
+    await stackoverflowCollectorProcessor(job);
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+    expect(createSignalMock).toHaveBeenCalledTimes(1);
+    expect(recordFailure).toHaveBeenCalledWith("stackoverflow", expect.stringMatching(/quota/));
+  });
+
+  it("fetches each distinct tag once per run", async () => {
+    listCompetitorsMock.mockResolvedValue([two[0], { ...two[1], stackoverflow_tag: "kestrel" }]);
+    safeFetchMock.mockResolvedValue(json({ items: [q()] }));
+    await stackoverflowCollectorProcessor(job);
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("appends STACKEXCHANGE_KEY when set", async () => {
+    vi.stubEnv("STACKEXCHANGE_KEY", "k&ey");
+    safeFetchMock.mockResolvedValue(json({ items: [] }));
+    await stackoverflowCollectorProcessor(job);
+    expect(safeFetchMock.mock.calls[0][0]).toMatch(/&key=k%26ey$/);
+  });
+
+  it("skips questions older than 30 days", async () => {
+    safeFetchMock.mockResolvedValue(
+      json({ items: [q({ creation_date: Math.floor(Date.now() / 1000) - 40 * 86400 })] })
+    );
+    await stackoverflowCollectorProcessor(job);
+    expect(createSignalMock).not.toHaveBeenCalled();
   });
 });

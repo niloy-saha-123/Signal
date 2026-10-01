@@ -13,28 +13,88 @@ import { runSourceSweep, ConfigError } from "./sweep";
 
 const SERVICE = "stackoverflow";
 const SOURCE = "community" as const;
+const MAX_BACKOFF_SECONDS = 60;
+const MIN_QUOTA = 10;
+const MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+// Indirection so tests can observe backoff waits without real timers.
+export const timing = {
+  sleep: (seconds: number) => new Promise<void>((resolve) => setTimeout(resolve, seconds * 1000)),
+};
+
+// A Stack Exchange answer that applies to every later request this run
+// (throttle, quota): never retried, and it stops the rest of the sweep.
+class StackExchangeHalt extends Error {}
+
+// One processor run's shared Stack Exchange state.
+interface Run {
+  bodies: Map<string, Promise<unknown>>;
+  waitSeconds: number;
+  halted: Error | null;
+}
 
 function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null;
 }
 
 async function fetchQuestions(tag: string): Promise<unknown> {
-  const url = `https://api.stackexchange.com/2.3/questions?order=desc&sort=creation&tagged=${encodeURIComponent(tag)}&site=stackoverflow&pagesize=20&filter=withbody`;
+  const key = process.env.STACKEXCHANGE_KEY?.trim();
+  const url = `https://api.stackexchange.com/2.3/questions?order=desc&sort=creation&tagged=${encodeURIComponent(tag)}&site=stackoverflow&pagesize=20&filter=withbody${key ? `&key=${encodeURIComponent(key)}` : ""}`;
   return withRetry(
     async () => {
       const res = await safeFetch(url, { signal: AbortSignal.timeout(30_000), maxBytes: 2_000_000 });
-      if (res.status === 400) throw new ConfigError(`stackexchange rejected tag ${tag}`);
-      if (res.status < 200 || res.status >= 300) throw new Error(`${url} returned ${res.status}`);
+      if (res.status === 400) {
+        // Stack Exchange reports throttling as HTTP 400 too; only bad_parameter is the tag's fault.
+        const errBody = await res.json().catch(() => null);
+        const errorId = isRecord(errBody) ? errBody.error_id : undefined;
+        if (errorId === 400) throw new ConfigError(`stackexchange rejected tag ${tag}`);
+        throw new StackExchangeHalt(`stackexchange returned 400 with error_id ${String(errorId)}`);
+      }
+      // Not the URL: it may carry the API key.
+      if (res.status < 200 || res.status >= 300) throw new Error(`stackexchange returned ${res.status}`);
       return res.json();
     },
-    { shouldRetry: (err: unknown) => !(err instanceof ConfigError) }
+    { shouldRetry: (err: unknown) => !(err instanceof ConfigError || err instanceof StackExchangeHalt) }
   );
 }
 
-async function collectStackoverflow(competitor: Competitor, tag: string): Promise<void> {
+function fetchForRun(run: Run, tag: string): Promise<unknown> {
+  // Several workspaces can track the same competitor: one request per tag per run.
+  let pending = run.bodies.get(tag);
+  if (!pending) {
+    pending = (async () => {
+      if (run.halted) throw run.halted;
+      if (run.waitSeconds > 0) {
+        await timing.sleep(run.waitSeconds);
+        run.waitSeconds = 0;
+      }
+      let body: unknown;
+      try {
+        body = await fetchQuestions(tag);
+      } catch (err) {
+        if (err instanceof StackExchangeHalt) run.halted = err;
+        throw err;
+      }
+      if (isRecord(body)) {
+        if (typeof body.backoff === "number") {
+          logger.warn("stackexchange asked us to back off", { backoff: body.backoff, tag });
+          run.waitSeconds = Math.min(body.backoff, MAX_BACKOFF_SECONDS);
+        }
+        if (typeof body.quota_remaining === "number" && body.quota_remaining < MIN_QUOTA) {
+          run.halted = new StackExchangeHalt(`stackexchange quota nearly spent (${body.quota_remaining} left)`);
+        }
+      }
+      return body;
+    })();
+    run.bodies.set(tag, pending);
+  }
+  return pending;
+}
+
+async function collectStackoverflow(competitor: Competitor, tag: string, run: Run): Promise<void> {
   let body: unknown;
   try {
-    body = await fetchQuestions(tag);
+    body = await fetchForRun(run, tag);
   } catch (err) {
     if (err instanceof ConfigError) {
       logger.warn("stackoverflow tag rejected — check the competitor's tag", {
@@ -46,16 +106,14 @@ async function collectStackoverflow(competitor: Competitor, tag: string): Promis
     }
     throw err;
   }
-  if (!isRecord(body)) return;
-  if (body.backoff !== undefined) {
-    logger.warn("stackexchange asked us to back off", { backoff: body.backoff, tag });
-  }
-  if (!Array.isArray(body.items)) return;
+  if (!isRecord(body) || !Array.isArray(body.items)) return;
+  const minCreated = Date.now() / 1000 - MAX_AGE_SECONDS;
 
   for (const item of body.items) {
     try {
       if (!isRecord(item) || typeof item.title !== "string" || typeof item.link !== "string") continue;
       if (!item.link.startsWith("https://stackoverflow.com/")) continue;
+      if (typeof item.creation_date !== "number" || item.creation_date < minCreated) continue;
       if (await signalExistsBySourceUrl(competitor.id, SOURCE, item.link)) continue;
       const title = cheerio.load(item.title).text();
       const bodyText = typeof item.body === "string" ? extractHtmlText(item.body) : "";
@@ -87,7 +145,10 @@ async function collectStackoverflow(competitor: Competitor, tag: string): Promis
 }
 
 export async function stackoverflowCollectorProcessor(_job: Job): Promise<void> {
-  return runSourceSweep<string>(SERVICE, (c) => c.stackoverflow_tag || null, collectStackoverflow);
+  const run: Run = { bodies: new Map(), waitSeconds: 0, halted: null };
+  return runSourceSweep<string>(SERVICE, (c) => c.stackoverflow_tag || null, (c, tag) =>
+    collectStackoverflow(c, tag, run)
+  );
 }
 
 export function initStackoverflowWorker() {
