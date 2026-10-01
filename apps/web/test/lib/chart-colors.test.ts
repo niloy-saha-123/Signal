@@ -6,33 +6,32 @@ import {
   DIVERGING_COLORS,
   SCORE_DELTA_COLORS,
   SEQUENTIAL_COLOR,
+  OTHER_SOURCE_COLOR,
   SOURCE_COLORS,
   STATUS_COLORS,
+  chartSourceColor,
+  sourceColor,
+  sourceLabel,
 } from "../../lib/chart-colors";
 
 describe("lib/chart-colors", () => {
-  it("exposes the nine signal-source categorical colors in the dataviz palette's fixed order", () => {
-    expect(SOURCE_COLORS).toEqual({
-      reddit: "#2a78d6",
-      hn: "#eb6834",
-      jobs: "#1baf7a",
-      changelog: "#eda100",
-      pricing: "#e87ba4",
-      // GitHub's own mark is near-black; slate reads as the same family without
-      // colliding with the five hues already assigned.
-      github: "#4b5563",
-      website: "#9a6a3a",
-      community: "#7a8b2e",
-      postings: "#1c9aa8",
-    });
+  it("assigns the eight validated categorical slots and folds the rest into Other on charts", () => {
+    expect(SOURCE_COLORS.website).toBe("#2a78d6");
+    expect(SOURCE_COLORS.reddit).toBe("#e34948");
+    expect(chartSourceColor("github")).toBe(SOURCE_COLORS.github);
+    expect(chartSourceColor("news")).toBe(OTHER_SOURCE_COLOR);
+    expect(chartSourceColor("not-a-source")).toBe(OTHER_SOURCE_COLOR);
+    expect(sourceColor("news")).toBe(SOURCE_COLORS.news);
+    expect(sourceLabel("postings")).toBe("Newsroom");
+    expect(sourceLabel("mystery")).toBe("mystery");
   });
 
   it("exposes the fixed status palette", () => {
     expect(STATUS_COLORS).toEqual({
-      good: "#0ca30c",
-      warning: "#fab219",
-      serious: "#ec835a",
-      critical: "#d03b3b",
+      good: "#0a8a55",
+      warning: "#f3b01d",
+      serious: "#e97125",
+      critical: "#cc3148",
     });
   });
 
@@ -40,7 +39,7 @@ describe("lib/chart-colors", () => {
     expect(DIVERGING_COLORS).toEqual({
       positive: "#2a78d6",
       negative: "#e34948",
-      neutral: "#f0efec",
+      neutral: "#eef3f7",
     });
   });
 
@@ -50,12 +49,12 @@ describe("lib/chart-colors", () => {
 
   it("exposes chart chrome/ink tokens", () => {
     expect(CHART_CHROME).toEqual({
-      surface: "#fcfcfb",
-      inkPrimary: "#0b0b0b",
-      inkSecondary: "#52514e",
-      inkMuted: "#898781",
-      gridline: "#e1e0d9",
-      baseline: "#c3c2b7",
+      surface: "#ffffff",
+      inkPrimary: "#0f1d2b",
+      inkSecondary: "#3d4f62",
+      inkMuted: "#5a6b7d",
+      gridline: "#e4ebf1",
+      baseline: "#c8d6e2",
     });
   });
 
