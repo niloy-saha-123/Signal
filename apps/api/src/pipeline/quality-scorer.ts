@@ -42,6 +42,10 @@ const SOURCE_AUTHORITY: Record<Signal["source"], number> = {
   packages: 0.75,
   // A teammate's first-hand report from a call or deal — valuable, unverified.
   field: 0.6,
+  // First-party but promotional — same tier as a newsroom.
+  blog: 0.7,
+  // First-party, low-effort; a post states intent, rarely fact.
+  social: 0.5,
   // Edited third-party coverage: above forums, below first-party.
   news: 0.5,
   // A company's own forum: real users, real complaints, but unverifiable

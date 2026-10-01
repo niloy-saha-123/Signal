@@ -2024,6 +2024,11 @@ export async function createCompetitorForWorkspace(
       ...(input.docs_sitemap_url === undefined ? {} : { docs_sitemap_url: input.docs_sitemap_url }),
       ...(input.npm_packages === undefined ? {} : { npm_packages: input.npm_packages }),
       ...(input.pypi_packages === undefined ? {} : { pypi_packages: input.pypi_packages }),
+      ...(input.blog_feeds === undefined ? {} : { blog_feeds: input.blog_feeds }),
+      ...(input.social_feeds === undefined ? {} : { social_feeds: input.social_feeds }),
+      ...(input.forum_feeds === undefined ? {} : { forum_feeds: input.forum_feeds }),
+      ...(input.bluesky_handle === undefined ? {} : { bluesky_handle: input.bluesky_handle }),
+      ...(input.stackoverflow_tag === undefined ? {} : { stackoverflow_tag: input.stackoverflow_tag }),
       discovery_status: "pending",
     })
     .returning();

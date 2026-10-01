@@ -295,6 +295,37 @@ describe("v5 sources", () => {
     expect(CompetitorSourceConfigSchema.safeParse({ name: "x" }).success).toBe(false);
   });
 
+  it("accepts blog/social sources and the social config on create", () => {
+    expect(SignalSourceSchema.safeParse("blog").success).toBe(true);
+    expect(SignalSourceSchema.safeParse("social").success).toBe(true);
+    expect(
+      CompetitorCreateInputSchema.safeParse({
+        name: "Kestrel",
+        domain: "kestrel.dev",
+        blog_feeds: ["https://kestrel.dev/blog/rss.xml"],
+        social_feeds: ["https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"],
+        forum_feeds: ["https://forum.kestrel.dev/feed"],
+        bluesky_handle: "kestrel.dev",
+        stackoverflow_tag: "kestrel-sdk",
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    ["blog_feeds", ["javascript:alert(1)"]],
+    ["social_feeds", Array.from({ length: 11 }, (_, i) => `https://kestrel.dev/${i}.xml`)],
+    ["bluesky_handle", "not a handle"],
+    ["stackoverflow_tag", "Bad Tag"],
+  ])("rejects bad %s on patch", (field, value) => {
+    expect(CompetitorSourceConfigSchema.safeParse({ [field]: value }).success).toBe(false);
+  });
+
+  it("allows clearing bluesky_handle / forum_feeds on patch", () => {
+    expect(
+      CompetitorSourceConfigSchema.safeParse({ bluesky_handle: null, forum_feeds: [] }).success
+    ).toBe(true);
+  });
+
   it("validates field intel", () => {
     expect(FieldIntelInputSchema.safeParse({ note: "  Lost a deal to them  " }).success).toBe(true);
     expect(FieldIntelInputSchema.safeParse({ note: " " }).success).toBe(false);

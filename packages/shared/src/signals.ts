@@ -55,6 +55,15 @@ const sourceConfigFields = {
   pypi_packages: z
     .array(z.string().max(100).regex(PYPI_PROJECT_NAME, "must be a PyPI project name"))
     .max(10),
+  blog_feeds: z.array(webUrl).max(10),
+  social_feeds: z.array(webUrl).max(10),
+  forum_feeds: z.array(webUrl).max(10),
+  bluesky_handle: z
+    .string()
+    .trim()
+    .max(253)
+    .regex(/^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/, "must be a Bluesky handle"),
+  stackoverflow_tag: z.string().trim().regex(/^[a-z0-9][a-z0-9.#+-]{0,34}$/, "must be a Stack Overflow tag"),
 };
 
 export const CompetitorCreateInputSchema = z.object({
@@ -79,6 +88,11 @@ export const CompetitorCreateInputSchema = z.object({
   docs_sitemap_url: sourceConfigFields.docs_sitemap_url.optional(),
   npm_packages: sourceConfigFields.npm_packages.optional(),
   pypi_packages: sourceConfigFields.pypi_packages.optional(),
+  blog_feeds: sourceConfigFields.blog_feeds.optional(),
+  social_feeds: sourceConfigFields.social_feeds.optional(),
+  forum_feeds: sourceConfigFields.forum_feeds.optional(),
+  bluesky_handle: sourceConfigFields.bluesky_handle.optional(),
+  stackoverflow_tag: sourceConfigFields.stackoverflow_tag.optional(),
 });
 export type CompetitorCreateInput = z.infer<typeof CompetitorCreateInputSchema>;
 
@@ -89,6 +103,11 @@ export const CompetitorSourceConfigSchema = z
     docs_sitemap_url: sourceConfigFields.docs_sitemap_url.nullable().optional(),
     npm_packages: sourceConfigFields.npm_packages.optional(),
     pypi_packages: sourceConfigFields.pypi_packages.optional(),
+    blog_feeds: sourceConfigFields.blog_feeds.optional(),
+    social_feeds: sourceConfigFields.social_feeds.optional(),
+    forum_feeds: sourceConfigFields.forum_feeds.optional(),
+    bluesky_handle: sourceConfigFields.bluesky_handle.nullable().optional(),
+    stackoverflow_tag: sourceConfigFields.stackoverflow_tag.nullable().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, "at least one field is required");
@@ -175,6 +194,10 @@ export const SignalSourceSchema = z.enum([
   "packages",
   // Links and notes submitted by the user's own teammates.
   "field",
+  // The competitor's own blog and publication feeds (Medium, Hashnode, Dev.to).
+  "blog",
+  // The competitor's own social accounts: YouTube, Mastodon, Bluesky.
+  "social",
 ]);
 export type SignalSource = z.infer<typeof SignalSourceSchema>;
 
