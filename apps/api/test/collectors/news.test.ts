@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));

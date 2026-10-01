@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -20,6 +21,7 @@ vi.mock("@/lib/logger", () => ({
 
 import {
   isCircuitOpen,
+  isCircuitMarkedOpen,
   recordFailure,
   recordSuccess,
 } from "@/reliability/circuit-breaker";
@@ -38,6 +40,7 @@ describe("runSourceSweep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isCircuitOpen).mockResolvedValue(false);
+    vi.mocked(isCircuitMarkedOpen).mockResolvedValue(false);
   });
 
   it("throws without listing competitors when the circuit is already open", async () => {
@@ -64,7 +67,7 @@ describe("runSourceSweep", () => {
     expect(recordSuccess).toHaveBeenCalledWith("news");
   });
 
-  it("continues past a failing competitor and records failure, not success", async () => {
+  it("continues past a failing competitor and records both failure and success when another succeeds", async () => {
     listCompetitorsMock.mockResolvedValue([c("a"), c("b")]);
     const collect = vi
       .fn()
@@ -73,13 +76,36 @@ describe("runSourceSweep", () => {
     await runSourceSweep("news", (x: any) => x.feed, collect);
     expect(collect).toHaveBeenCalledTimes(2);
     expect(recordFailure).toHaveBeenCalledWith("news", "boom");
+    expect(recordSuccess).toHaveBeenCalledWith("news");
+  });
+
+  it("does not record success when every competitor fails", async () => {
+    listCompetitorsMock.mockResolvedValue([c("a"), c("b")]);
+    const collect = vi.fn().mockRejectedValue(new Error("boom"));
+    await runSourceSweep("news", (x: any) => x.feed, collect);
+    expect(recordFailure).toHaveBeenCalledTimes(2);
     expect(recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("processes competitors on a half-open trial run, checking mid-run with the non-claiming peek", async () => {
+    listCompetitorsMock.mockResolvedValue([c("a"), c("b")]);
+    // Real isCircuitOpen would report "open" on a second call during a
+    // half-open trial (the NX claim is already taken) — only the start check
+    // may use it.
+    vi.mocked(isCircuitOpen)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const collect = vi.fn().mockResolvedValue(undefined);
+    await runSourceSweep("news", (x: any) => x.feed, collect);
+    expect(collect).toHaveBeenCalledTimes(2);
+    expect(isCircuitOpen).toHaveBeenCalledTimes(1);
+    expect(isCircuitMarkedOpen).toHaveBeenCalledTimes(2);
+    expect(recordSuccess).toHaveBeenCalledWith("news");
   });
 
   it("stops when the circuit trips mid-run and does not record success", async () => {
     listCompetitorsMock.mockResolvedValue([c("a"), c("b")]);
-    vi.mocked(isCircuitOpen)
-      .mockResolvedValueOnce(false) // start
+    vi.mocked(isCircuitMarkedOpen)
       .mockResolvedValueOnce(false) // before a
       .mockResolvedValueOnce(true); // before b
     const collect = vi.fn().mockResolvedValue(undefined);

@@ -3,6 +3,7 @@
 // changelog.ts so the v5 collectors don't each carry their own copy.
 import {
   isCircuitOpen,
+  isCircuitMarkedOpen,
   recordFailure,
   recordSuccess,
 } from "../reliability/circuit-breaker";
@@ -46,11 +47,14 @@ export async function runSourceSweep<T>(
     });
 
     let hadFailure = false;
-    // Exiting on a mid-run trip is not a clean run, so it must not let the
-    // trailing recordSuccess() force-close a circuit just observed open.
+    let hadSuccess = false;
+    // Exiting on a mid-run trip must not let the trailing recordSuccess()
+    // force-close a circuit just observed open.
     let circuitTrippedMidRun = false;
     for (const { competitor, config } of targets) {
-      if (await isCircuitOpen(service)) {
+      // Peek, don't claim: the start check may already hold this run's
+      // half-open trial, and a second claim would read as "open".
+      if (await isCircuitMarkedOpen(service)) {
         circuitTrippedMidRun = true;
         logger.warn(
           `${service} circuit opened mid-run — stopping before remaining competitors`,
@@ -64,6 +68,7 @@ export async function runSourceSweep<T>(
 
       try {
         await collectOne(competitor, config);
+        hadSuccess = true;
       } catch (err) {
         hadFailure = true;
         logger.error(
@@ -78,7 +83,9 @@ export async function runSourceSweep<T>(
       }
     }
 
-    if (!hadFailure && !circuitTrippedMidRun) {
+    // One dead competitor host is not a source outage: any success (or no
+    // targets at all) closes the circuit; only an all-failed run doesn't.
+    if (!circuitTrippedMidRun && (hadSuccess || !hadFailure)) {
       await recordSuccess(service);
     }
   } catch (err) {

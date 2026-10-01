@@ -50,6 +50,12 @@ export async function isCircuitOpen(service: string): Promise<boolean> {
   return (await getCircuitState(service)) === "open";
 }
 
+// Non-claiming peek: unlike isCircuitOpen it never takes the half-open trial,
+// so a caller already running that trial can re-check without seeing "open".
+export async function isCircuitMarkedOpen(service: string): Promise<boolean> {
+  return (await cacheRedis.get(stateKey(service))) === "open";
+}
+
 async function logEvent(service: string, state: CircuitState, reason?: string) {
   try {
     await db.insert(circuitEventsTable).values({ service, state, reason: reason ?? null });
