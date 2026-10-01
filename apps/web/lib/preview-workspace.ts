@@ -212,8 +212,8 @@ export function previewTrackedEntities() {
       workspace_id: "33333333-3333-4333-8333-333333333333",
       source: "discovered",
       status: "dismissed",
-      candidate_name: "Notion",
-      candidate_domain: "notion.so",
+      candidate_name: "Paperloom",
+      candidate_domain: "paperloom.app",
       relationship_type: "other",
       relationship_confidence: 0.4,
       candidate_reason: "Adjacent, not a real competitor.",
@@ -222,4 +222,17 @@ export function previewTrackedEntities() {
       updated_at: earlier,
     },
   ];
+}
+
+// Fictional profile for /radar/<preview id>. No forecasts, ever: a preview must
+// not fabricate a track record.
+export function previewCompetitorProfile(id: string) {
+  const competitor = PREVIEW_COMPETITORS.find((item) => item.id === id);
+  if (!competitor) return null;
+  const card = previewBoardCards().find((item) => item.id === id);
+  return {
+    competitor,
+    score: card ? { score: card.score, delta_7d: null } : null,
+    signals: PREVIEW_SIGNALS.filter((signal) => signal.competitor_id === id),
+  };
 }
