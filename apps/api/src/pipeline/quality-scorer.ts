@@ -36,6 +36,14 @@ const SOURCE_AUTHORITY: Record<Signal["source"], number> = {
   // believed, which is useful evidence of intent and weak evidence of fact.
   postings: 0.7,
   jobs: 0.6,
+  // First-party: a new docs page usually documents something that shipped.
+  docs: 0.75,
+  // First-party fact, but most version bumps are routine.
+  packages: 0.75,
+  // A teammate's first-hand report from a call or deal — valuable, unverified.
+  field: 0.6,
+  // Edited third-party coverage: above forums, below first-party.
+  news: 0.5,
   // A company's own forum: real users, real complaints, but unverifiable
   // individual claims — same tier as the third-party community venues.
   community: 0.4,

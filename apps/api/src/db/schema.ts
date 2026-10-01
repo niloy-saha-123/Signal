@@ -63,6 +63,14 @@ export const competitorsTable = pgTable(
     // changelog_rss: a press feed and an engineering changelog say different
     // things and deserve different quality weights.
     postings_rss: text("postings_rss"),
+    // Google News search query. Null means the quoted competitor name; set it
+    // when the name is also a common word ("Linear").
+    news_query: text("news_query"),
+    // Docs sitemap. Null means the docs collector probes docs.<domain> and
+    // <domain>, then writes back the first one that is a real sitemap.
+    docs_sitemap_url: text("docs_sitemap_url"),
+    npm_packages: text("npm_packages").array().notNull().default(sql`'{}'::text[]`),
+    pypi_packages: text("pypi_packages").array().notNull().default(sql`'{}'::text[]`),
     // Pause monitoring without losing history — hard delete would orphan
     // every signal/alert/score row a RESTRICT/CASCADE choice below depends on.
     is_active: boolean("is_active").notNull().default(true),
@@ -115,7 +123,7 @@ export const signalsTable = pgTable(
   (table) => [
     check(
       "signals_source_check",
-      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github', 'website', 'community', 'postings')`
+      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github', 'website', 'community', 'postings', 'news', 'docs', 'packages', 'field')`
     ),
     check(
       "signals_quality_score_check",

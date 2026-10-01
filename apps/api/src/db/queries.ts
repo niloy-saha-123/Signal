@@ -10,6 +10,7 @@ import type {
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
+  CompetitorSourceConfig,
   RagEvalResult,
   RagEvalRunSummary,
   RagEvalCategory,
@@ -2019,8 +2020,27 @@ export async function createCompetitorForWorkspace(
       ...(input.website_urls === undefined ? {} : { website_urls: input.website_urls }),
       ...(input.discourse_url === undefined ? {} : { discourse_url: input.discourse_url }),
       ...(input.postings_rss === undefined ? {} : { postings_rss: input.postings_rss }),
+      ...(input.news_query === undefined ? {} : { news_query: input.news_query }),
+      ...(input.docs_sitemap_url === undefined ? {} : { docs_sitemap_url: input.docs_sitemap_url }),
+      ...(input.npm_packages === undefined ? {} : { npm_packages: input.npm_packages }),
+      ...(input.pypi_packages === undefined ? {} : { pypi_packages: input.pypi_packages }),
       discovery_status: "pending",
     })
+    .returning();
+  return row;
+}
+
+// Patch keys are exactly column names (CompetitorSourceConfigSchema is strict),
+// and drizzle skips undefined keys, so the patch spreads straight in.
+export async function updateCompetitorSourceConfigForWorkspace(
+  id: string,
+  workspaceId: string,
+  patch: CompetitorSourceConfig
+): Promise<Competitor | undefined> {
+  const [row] = await db
+    .update(competitorsTable)
+    .set({ ...patch, updated_at: new Date() })
+    .where(and(eq(competitorsTable.id, id), eq(competitorsTable.workspace_id, workspaceId)))
     .returning();
   return row;
 }
