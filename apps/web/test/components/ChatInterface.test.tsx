@@ -129,7 +129,7 @@ describe("ChatInterface", () => {
     await waitFor(() =>
       expect(screen.getByText("Acme cut Pro tier pricing 20% last week.")).toBeInTheDocument()
     );
-    expect(screen.getByText("pricing")).toBeInTheDocument();
+    expect(screen.getByText("Pricing")).toBeInTheDocument();
   });
 
   it("renders the reason and suggested query when onResult fires with a RefusalResult", async () => {
@@ -161,6 +161,42 @@ describe("ChatInterface", () => {
     streamChatResultMock.mockImplementation(() => new Promise(() => {}));
     render(<ChatInterface competitorIds={["comp-1"]} />);
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    expect(streamChatResultMock).not.toHaveBeenCalled();
+  });
+
+  it("offers suggested questions that fill the composer without sending", () => {
+    render(<ChatInterface competitorIds={["comp-1"]} />);
+    fireEvent.click(screen.getByRole("button", { name: "What changed across my competitors this week?" }));
+    expect(screen.getByPlaceholderText("Ask Signal a question…")).toHaveValue(
+      "What changed across my competitors this week?"
+    );
+    expect(streamChatResultMock).not.toHaveBeenCalled();
+  });
+
+  it("shows Sig thinking while an answer streams", () => {
+    streamChatResultMock.mockImplementation(() => new Promise(() => {}));
+    const { container } = render(<ChatInterface competitorIds={["comp-1"]} />);
+    typeAndSubmit("What changed?");
+    expect(container.querySelector('[data-mood="thinking"]')).not.toBeNull();
+  });
+
+  it("shows Sig unsure on a refusal and turns the suggestion into a one-click retry", async () => {
+    streamChatResultMock.mockImplementation(async (_q, _ids, onResult) => {
+      onResult(refusalResult);
+    });
+    const { container } = render(<ChatInterface competitorIds={["comp-1"]} />);
+    typeAndSubmit("What changed?");
+    await waitFor(() => expect(screen.getByText("No grounded evidence for that claim.")).toBeInTheDocument());
+    expect(container.querySelector('[data-mood="unsure"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /What pricing changes has Acme made this month\?/ }));
+    expect(screen.getByPlaceholderText("Ask Signal a question…")).toHaveValue(
+      "What pricing changes has Acme made this month?"
+    );
+  });
+
+  it("starts with a pre-filled question when opened from Ask Signal about this", () => {
+    render(<ChatInterface competitorIds={["comp-1"]} initialQuery="Why did Acme change pricing?" />);
+    expect(screen.getByPlaceholderText("Ask Signal a question…")).toHaveValue("Why did Acme change pricing?");
     expect(streamChatResultMock).not.toHaveBeenCalled();
   });
 });
