@@ -786,4 +786,35 @@ describe("PATCH /api/competitors/:id", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("400s when any blog feed resolves to a non-public host", async () => {
+    const deps = makeDeps({
+      isPublicHostname: vi.fn(async (host: string) => host !== "internal.kestrel.dev"),
+    });
+    const res = await call(app(deps), "PATCH", path, {
+      blog_feeds: ["https://kestrel.dev/rss.xml", "https://internal.kestrel.dev/feed"],
+    });
+    expect(res.status).toBe(400);
+    expect(deps.updateCompetitorSourceConfigForWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("accepts public social feeds plus a bluesky handle", async () => {
+    const deps = makeDeps();
+    const body = { social_feeds: ["https://kestrel.dev/social.xml"], bluesky_handle: "kestrel.bsky.social" };
+    const res = await call(app(deps), "PATCH", path, body);
+    expect(res.status).toBe(200);
+    expect(deps.updateCompetitorSourceConfigForWorkspace).toHaveBeenCalledWith(UUID, WS_UUID, body);
+  });
+
+  it("POST create refuses a non-public forum feed", async () => {
+    const deps = makeDeps({
+      isPublicHostname: vi.fn(async (host: string) => host !== "internal.kestrel.dev"),
+    });
+    const res = await call(app(deps), "POST", "/api/competitors", {
+      name: "Kestrel",
+      domain: "kestrel.dev",
+      forum_feeds: ["https://internal.kestrel.dev/forum.rss"],
+    });
+    expect(res.status).toBe(400);
+  });
 });
