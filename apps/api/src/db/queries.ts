@@ -2045,6 +2045,15 @@ export async function updateCompetitorSourceConfigForWorkspace(
   return row;
 }
 
+// Docs collector write-back after a successful probe. Collector-side, so not
+// workspace-scoped — the id came from listCompetitors().
+export async function setCompetitorDocsSitemapUrl(id: string, url: string): Promise<void> {
+  await db
+    .update(competitorsTable)
+    .set({ docs_sitemap_url: url, updated_at: new Date() })
+    .where(eq(competitorsTable.id, id));
+}
+
 // R1: the synthetic own-company row derives `name` from workspaces.name
 // (falling back to the literal "Own Company" when unavailable) and `domain`
 // from a deterministic per-workspace placeholder `own-company.<workspace_id>.invalid`.
