@@ -1,75 +1,110 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Sig } from "@/components/brand/Sig";
+import { Icon } from "@/components/ui/icons";
 import { listCompetitors } from "../lib/api";
-import { ChatInterface } from "./ChatInterface";
+import { onAskSignal } from "../lib/ask";
 import { ChatAvatar } from "./ChatAvatar";
+import { ChatInterface } from "./ChatInterface";
 
+// The slide-over Ask Signal panel. Opens from Sig, from ⌘K free text, or from
+// any "Ask Signal about this" button — the last two arrive pre-filled.
 export function ChatSidebar() {
   const [competitorIds, setCompetitorIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
   const [chatKey, setChatKey] = useState(0);
+  const [prefill, setPrefill] = useState("");
+  const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     listCompetitors()
       .then((competitors) => {
-        const activeIds = competitors.filter((c) => c.is_active).map((c) => c.id);
-        setCompetitorIds(activeIds);
+        setCompetitorIds(competitors.filter((c) => c.is_active).map((c) => c.id));
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, []);
 
+  useEffect(
+    () =>
+      onAskSignal((prompt) => {
+        setPrefill(prompt);
+        setChatKey((key) => key + 1);
+        setIsOpen(true);
+      }),
+    []
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    panelRef.current?.querySelector<HTMLTextAreaElement | HTMLInputElement>("textarea, input[type=text]")?.focus();
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, chatKey]);
+
   return (
     <>
       {!isOpen && <ChatAvatar onOpen={() => setIsOpen(true)} />}
 
-      {/* Chat panel - slides in from right */}
       {isOpen && (
         <div className="fixed inset-0 z-50 flex">
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 bg-ink/20 backdrop-blur-sm transition-opacity"
-            onClick={() => setIsOpen(false)}
-            aria-hidden="true"
-          />
-          {/* Panel */}
-          <aside className="fixed top-0 right-0 z-50 flex h-screen w-full max-w-[400px] flex-col border-l border-line bg-surface shadow-[var(--shadow-modal)] animate-slide-in-right">
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
-              <h2 className="text-[14px] font-semibold text-ink">Ask Signal</h2>
+          <div className="fixed inset-0 bg-ink/20" onClick={() => setIsOpen(false)} aria-hidden="true" />
+          <aside
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Ask Signal"
+            className="animate-slide-in-right fixed top-0 right-0 z-50 flex h-[100dvh] w-full max-w-[440px] flex-col border-l border-line bg-surface shadow-[var(--shadow-window)]"
+          >
+            <div className="flex h-16 shrink-0 items-center justify-between border-b border-line px-4">
+              <div className="flex items-center gap-2.5">
+                <Sig size={30} decorative />
+                <div>
+                  <h2 className="text-[15px] font-semibold text-ink">Ask Signal</h2>
+                  <p className="text-[12px] text-ink-muted">Answers cite your collected evidence</p>
+                </div>
+              </div>
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setChatKey((prev) => prev + 1)}
-                  className="rounded-md px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-sunken"
+                  type="button"
+                  onClick={() => {
+                    setPrefill("");
+                    setChatKey((prev) => prev + 1);
+                  }}
+                  className="h-9 rounded-[8px] px-3 text-[13px] font-semibold text-ink hover:bg-surface-sunken"
                 >
                   New chat
                 </button>
                 <button
+                  type="button"
                   onClick={() => setIsOpen(false)}
-                  className="rounded-md p-1.5 text-ink-muted hover:bg-surface-sunken hover:text-ink"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-[8px] text-ink-muted hover:bg-surface-sunken hover:text-ink"
                   aria-label="Close chat"
                 >
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <Icon name="close" className="h-[18px] w-[18px]" />
                 </button>
               </div>
             </div>
 
             <div className="min-h-0 flex-1">
               {loading ? (
-                <div className="flex items-center justify-center p-8">
-                  <p className="text-sm text-ink-muted">Loading workspace chat…</p>
+                <div className="flex h-full items-center justify-center p-8">
+                  <Sig mood="thinking" size={44} title="Loading workspace chat" />
                 </div>
               ) : competitorIds.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center p-8 text-center">
-                  <p className="text-sm leading-relaxed text-ink-muted">
-                    Research chat stays tied to collected evidence. Sign in to ask a follow-up against
-                    this workspace.
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+                  <Sig mood="unsure" size={48} decorative />
+                  <p className="max-w-xs text-[14px] text-ink-secondary">
+                    Signal answers from evidence it has collected. Add a competitor (or sign in) and
+                    ask again once the first signals arrive.
                   </p>
                 </div>
               ) : (
-                <ChatInterface key={chatKey} competitorIds={competitorIds} showThreads={false} />
+                <ChatInterface key={chatKey} competitorIds={competitorIds} showThreads={false} initialQuery={prefill} />
               )}
             </div>
           </aside>

@@ -14,21 +14,21 @@ function makeCommands(overrides: Partial<Command>[] = []): Command[] {
 describe("CommandBar", () => {
   it("is closed by default", () => {
     render(<CommandBar commands={makeCommands()} />);
-    expect(screen.queryByPlaceholderText("Type a command…")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search pages or ask Signal…")).not.toBeInTheDocument();
   });
 
   it("opens on Cmd+K and closes on Escape", () => {
     render(<CommandBar commands={makeCommands()} />);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    expect(screen.getByPlaceholderText("Type a command…")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search pages or ask Signal…")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByPlaceholderText("Type a command…")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search pages or ask Signal…")).not.toBeInTheDocument();
   });
 
   it("filters commands by typed query", () => {
     render(<CommandBar commands={makeCommands()} />);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    fireEvent.change(screen.getByPlaceholderText("Type a command…"), {
+    fireEvent.change(screen.getByPlaceholderText("Search pages or ask Signal…"), {
       target: { value: "signal" },
     });
     expect(screen.getByText("Ask Signal a question")).toBeInTheDocument();
@@ -43,7 +43,7 @@ describe("CommandBar", () => {
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.click(screen.getByText("Ask Signal a question"));
     expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(screen.queryByPlaceholderText("Type a command…")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search pages or ask Signal…")).not.toBeInTheDocument();
   });
 
   it("selects the active command on Enter", () => {
@@ -52,7 +52,22 @@ describe("CommandBar", () => {
       <CommandBar commands={[{ id: "chat", label: "Ask Signal a question", onSelect }]} />
     );
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    fireEvent.keyDown(screen.getByPlaceholderText("Type a command…"), { key: "Enter" });
+    fireEvent.keyDown(screen.getByPlaceholderText("Search pages or ask Signal…"), { key: "Enter" });
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("CommandBar free-text questions", () => {
+  it("offers to ask Signal when the query matches no command", async () => {
+    const { fireEvent, render, screen } = await import("@testing-library/react");
+    const { CommandBar } = await import("../../components/CommandBar");
+    const onAsk = vi.fn();
+    render(<CommandBar commands={[]} onAsk={onAsk} />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.change(screen.getByPlaceholderText("Search pages or ask Signal…"), {
+      target: { value: "  is Kestrel building a Postgres adapter?  " },
+    });
+    fireEvent.keyDown(screen.getByPlaceholderText("Search pages or ask Signal…"), { key: "Enter" });
+    expect(onAsk).toHaveBeenCalledWith("is Kestrel building a Postgres adapter?");
   });
 });

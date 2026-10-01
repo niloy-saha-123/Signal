@@ -30,6 +30,8 @@ import {
 export interface ChatInterfaceProps {
   competitorIds: string[];
   showThreads?: boolean;
+  // Pre-fills the composer (from "Ask Signal about this"). Never auto-sent.
+  initialQuery?: string;
 }
 
 const GENERIC_ERROR_MESSAGE = "Signal couldn't answer that. Please try again.";
@@ -66,11 +68,11 @@ interface ChatMessage {
   } | null;
 }
 
-export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfaceProps) {
+export function ChatInterface({ competitorIds, showThreads = true, initialQuery = "" }: ChatInterfaceProps) {
   const [threads, setThreads] = useState<ChatThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [submitting, setSubmitting] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);

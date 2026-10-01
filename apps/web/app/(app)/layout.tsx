@@ -1,17 +1,17 @@
-import { AppSidebar } from "@/components/AppSidebar";
-import { TopBar } from "@/components/TopBar";
-import { ChatSidebar } from "@/components/ChatSidebar";
-import { AlertBanner } from "@/components/AlertBanner";
-import { AppCommandBar } from "../app-command-bar";
 import Link from "next/link";
+import { AlertBanner } from "@/components/AlertBanner";
+import { AppSidebar } from "@/components/AppSidebar";
+import { ChatSidebar } from "@/components/ChatSidebar";
+import { TopBar } from "@/components/TopBar";
+import { Toaster } from "@/components/ui/toast";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
+import { AppCommandBar } from "../app-command-bar";
 
 // Authenticated pages depend on per-request session and API data.
 export const dynamic = "force-dynamic";
 
-// Authenticated shell. The sidebar is fixed on large screens and collapses
-// below `lg`, where TopBar carries navigation instead — the content column is
-// the priority at narrow widths, not the chrome.
+// Authenticated shell. The sidebar is fixed on large screens and collapses below
+// `lg`, where TopBar carries navigation instead.
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // No session only happens in the dev preview, where pages render fictional
   // example data. Say so, or those figures read as a real workspace.
@@ -23,18 +23,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <ChatSidebar />
       <AppCommandBar />
       <AlertBanner />
-      <main className="min-h-screen bg-ground px-4 pt-20 pb-16 text-ink sm:px-6 lg:ml-60 lg:px-8">
-        <div className="mx-auto max-w-6xl">
+      <Toaster />
+      <main className="min-h-screen bg-ground px-4 pt-24 pb-24 text-ink sm:px-6 lg:ml-[248px] lg:px-10">
+        <div className="mx-auto max-w-[1120px]">
           {isPreview && (
             <p
               role="status"
-              className="mb-6 rounded-lg border border-line bg-[var(--color-tint-sand)] px-4 py-2.5 text-[13px] text-ink-secondary"
+              className="mb-6 flex flex-wrap items-center gap-x-2 rounded-[12px] bg-tint-sun px-4 py-2.5 text-[14px] text-ink"
             >
-              Preview &mdash; example data with fictional companies.{" "}
-              <Link href="/login" className="font-medium text-accent hover:underline">
-                Sign in
-              </Link>{" "}
-              to see your workspace.
+              <span className="font-semibold">Preview.</span> Example data with fictional companies.
+              <Link href="/login" className="font-semibold text-accent underline-offset-2 hover:underline">
+                Sign in to see your workspace
+              </Link>
             </p>
           )}
           {children}
