@@ -91,4 +91,19 @@ describe("Settings page", () => {
     await waitFor(() => expect(signOutMock).toHaveBeenCalled());
     expect(pushMock).toHaveBeenCalledWith("/login");
   });
+
+  it("links Settings and Activity as one area", async () => {
+    render(<Page />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("href", "/activity"));
+  });
+
+  it("rejects mismatched passwords without calling the API", async () => {
+    render(<Page />);
+    await waitFor(() => expect(screen.getByLabelText("New password")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("New password"), { target: { value: "longenough1" } });
+    fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "different22" } });
+    fireEvent.click(screen.getByRole("button", { name: "Update password" }));
+    expect(await screen.findByText("Passwords don't match.")).toBeInTheDocument();
+    expect(updateUserMock).not.toHaveBeenCalled();
+  });
 });

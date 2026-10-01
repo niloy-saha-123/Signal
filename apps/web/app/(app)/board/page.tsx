@@ -1,58 +1,54 @@
-// Freeform board — drag-to-arrange score cards. Preview cards are shown ONLY with
-// no session (dev-only preview); an authenticated fetch failure throws to the error
-// boundary instead of rendering fake cards.
-import { ApiError, getCompetitorScore, listCompetitors } from "@/lib/api";
-import { previewBoardCards } from "@/lib/preview-workspace";
+// Competitors — everyone being watched, ranked by activity, with the next
+// forecast for each. Preview rows are shown ONLY with no session (dev-only
+// preview) and never carry forecasts; an authenticated fetch failure throws to
+// the error boundary instead of rendering fake rows.
+import { getCompetitorScore, listCompetitors, listPredictions } from "@/lib/api";
+import { PREVIEW_COMPETITORS, previewBoardCards } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
-import { Board, type BoardCardState } from "../board-client";
-import { GoalsList } from "@/components/GoalsList";
-
-const COLUMNS = 3;
-const CARD_WIDTH = 240;
-const CARD_HEIGHT = 160;
-const PADDING = 16;
-
-function toBoardCards(cards: { id: string; name: string; score: number }[]): BoardCardState[] {
-  return cards.map((card, index) => ({
-    ...card,
-    x: (index % COLUMNS) * CARD_WIDTH + PADDING,
-    y: Math.floor(index / COLUMNS) * CARD_HEIGHT + PADDING,
-  }));
-}
+import { CompetitorBoard, type BoardRow } from "../board-client";
 
 export default async function Page() {
   const token = await getOptionalAccessToken();
 
-  let cards: BoardCardState[] = toBoardCards(previewBoardCards());
-
-  if (token) {
-    const competitors = await listCompetitors(token);
-    const scored = await Promise.all(
-      competitors.map(async (competitor) => {
-        const score = await getCompetitorScore(competitor.id, token).catch((error) => {
-          if (error instanceof ApiError && error.status === 404) return null;
-          return null;
-        });
-        return score ? { id: competitor.id, name: competitor.name, score: score.score } : null;
-      })
-    );
-    cards = toBoardCards(
-      scored.filter((card): card is { id: string; name: string; score: number } => card !== null)
-    );
+  if (!token) {
+    const domains = new Map(PREVIEW_COMPETITORS.map((c) => [c.id, c.domain]));
+    const rows: BoardRow[] = previewBoardCards().map((card) => ({
+      ...card,
+      domain: domains.get(card.id) ?? "",
+      delta: null,
+      openForecasts: 0,
+      next: null,
+      discovering: false,
+    }));
+    return <CompetitorBoard rows={rows} />;
   }
 
-  return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-2">
-        <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
-          Board
-        </h1>
-        <p className="text-sm font-semibold text-ink-secondary">
-          Drag cards to arrange your own view. Competitors without a score aren&apos;t shown here.
-        </p>
-      </div>
-      <GoalsList />
-      <Board initialCards={cards} />
-    </div>
-  );
+  const watched = (await listCompetitors(token)).filter((competitor) => !competitor.is_own_company);
+  if (watched.length === 0) return <CompetitorBoard rows={[]} />;
+
+  const [scores, open] = await Promise.all([
+    Promise.all(watched.map((competitor) => getCompetitorScore(competitor.id, token).catch(() => null))),
+    listPredictions({ status: "open", limit: 200 }, token).catch(() => null),
+  ]);
+
+  const rows: BoardRow[] = watched.map((competitor, index) => {
+    const forecasts = (open ?? [])
+      .filter((prediction) => prediction.competitor_id === competitor.id)
+      .sort((a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime());
+    const next = forecasts[0];
+    return {
+      id: competitor.id,
+      name: competitor.name,
+      domain: competitor.domain,
+      score: scores[index]?.score ?? null,
+      delta: scores[index]?.delta_7d ?? null,
+      openForecasts: forecasts.length,
+      next: next
+        ? { id: next.id, statement: next.statement, probability: next.probability, resolvesAt: next.resolves_at }
+        : null,
+      discovering: competitor.discovery_status !== "complete" && competitor.discovery_status !== "failed",
+    };
+  });
+
+  return <CompetitorBoard rows={rows} forecastsUnavailable={open === null} />;
 }

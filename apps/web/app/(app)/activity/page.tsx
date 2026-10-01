@@ -4,6 +4,7 @@
 // in the background. This shows it: what ran, what it decided, what it cost,
 // and which dependencies are currently broken.
 import { getActivity, listCompetitors } from "@/lib/api";
+import { SettingsAreaTabs } from "@/components/area-tabs";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 import {
   Badge,
@@ -11,6 +12,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkButton,
   Metric,
   Num,
   PageHeader,
@@ -44,7 +46,8 @@ export default async function ActivityPage() {
 
   const [activity, competitors] = token
     ? await Promise.all([
-        getActivity(token).catch(() => empty),
+        // A failure throws to the error boundary: "nothing has run" would be a false claim.
+        getActivity(token),
         listCompetitors(token).catch(() => []),
       ])
     : [empty, []];
@@ -62,13 +65,14 @@ export default async function ActivityPage() {
       <PageHeader
         title="Agent activity"
         description="What Signal has been doing, what it spent doing it, and whether anything it depends on is currently down."
+        action={<SettingsAreaTabs active="activity" />}
       />
 
-      <div className="mb-6 grid gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-3">
-        <div className="bg-[var(--color-tint-teal)] p-5">
+      <div className="mb-6 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-[14px] bg-sky p-5">
           <Metric value={String(activity.runs.length)} label="Recent runs" size="md" />
         </div>
-        <div className="bg-[var(--color-tint-sky)] p-5">
+        <div className="rounded-[14px] bg-sky p-5">
           <Metric
             value={`$${activity.spend_today_usd.toFixed(2)}`}
             label="Model spend today"
@@ -79,7 +83,7 @@ export default async function ActivityPage() {
               className={
                 budgetUsed > 0.85
                   ? "h-full rounded-full bg-[var(--color-status-critical)]"
-                  : "h-full rounded-full bg-accent"
+                  : "h-full rounded-full bg-ink"
               }
               style={{ width: `${Math.max(2, budgetUsed * 100)}%` }}
             />
@@ -88,7 +92,7 @@ export default async function ActivityPage() {
             of ${activity.daily_budget_usd.toFixed(2)} daily budget
           </p>
         </div>
-        <div className="bg-[var(--color-tint-sand)] p-5">
+        <div className="rounded-[14px] bg-sky p-5">
           <Metric
             value={String(activity.open_circuits.length)}
             label="Open circuits"
@@ -104,7 +108,7 @@ export default async function ActivityPage() {
       </div>
 
       {activity.open_circuits.length > 0 ? (
-        <div className="mb-6 rounded-[10px] border border-[#f0c4c4] bg-[#fdeeee] px-5 py-4">
+        <div role="alert" className="mb-6 rounded-[14px] border border-[#f3c0ca] bg-tint-rose px-5 py-4">
           <p className="text-[14px] font-medium text-[var(--color-status-critical)]">
             {activity.open_circuits.length} dependenc
             {activity.open_circuits.length === 1 ? "y is" : "ies are"} circuit-broken
@@ -113,7 +117,7 @@ export default async function ActivityPage() {
             Signal has stopped calling {activity.open_circuits.join(", ")} after repeated
             failures, and will retry automatically. Collection and analysis that depend on
             {activity.open_circuits.length === 1 ? " it" : " them"} are paused until it
-            recovers — this is the system protecting itself, not a crash.
+            recovers. This is the system protecting itself, not a crash.
           </p>
         </div>
       ) : null}
@@ -128,6 +132,11 @@ export default async function ActivityPage() {
             <EmptyState
               title="Nothing has run yet"
               note="Collectors run on a schedule and analysis follows them. Add a competitor and the first runs appear within a few hours."
+              action={
+                <LinkButton href="/board" variant="primary" size="sm">
+                  Add a competitor
+                </LinkButton>
+              }
             />
           ) : (
             <ul>

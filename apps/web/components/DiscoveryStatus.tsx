@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { getCompetitorDiscovery, type CompetitorDiscovery } from "../lib/api";
 import type { DiscoveryLog } from "@signal/shared";
+import { Icon } from "./ui/icons";
 
 export interface DiscoveryStatusProps {
   competitorId: string;
@@ -33,17 +34,23 @@ export function DiscoveryStatus({
   onManualEntry,
 }: DiscoveryStatusProps) {
   const [discovery, setDiscovery] = useState<CompetitorDiscovery | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | undefined;
 
     async function poll() {
-      const result = await getCompetitorDiscovery(competitorId);
-      if (cancelled) return;
-      setDiscovery(result);
-      if (SETTLED_STATUSES.has(result.discovery_status) && timer) {
-        clearInterval(timer);
+      try {
+        const result = await getCompetitorDiscovery(competitorId);
+        if (cancelled) return;
+        setDiscovery(result);
+        setFailed(false);
+        if (SETTLED_STATUSES.has(result.discovery_status) && timer) {
+          clearInterval(timer);
+        }
+      } catch {
+        if (!cancelled) setFailed(true);
       }
     }
 
@@ -57,38 +64,44 @@ export function DiscoveryStatus({
   }, [competitorId, pollIntervalMs]);
 
   if (!discovery) {
-    return <p className="text-sm text-ink-secondary">Checking discovery status…</p>;
+    return (
+      <p className="text-[13.5px] text-ink-muted" aria-live="polite">
+        {failed ? "Couldn't check discovery right now. Retrying." : "Checking which sources were found…"}
+      </p>
+    );
   }
 
   return (
-    <ul className="flex flex-col gap-1">
-      {discovery.log.map((entry) => (
-        <li key={entry.field_name} className="flex items-center gap-2 text-sm">
-          <span className="text-ink">{FIELD_LABELS[entry.field_name]}</span>
-          {entry.status === "found" ? (
-            <span className="text-emerald-600">✓</span>
-          ) : (
-            <span className="flex items-center gap-1 text-amber-600">
-              <span>
-                ✗{" "}
-                {entry.status === "not_found"
-                  ? "(not found — enter manually)"
-                  : `(${entry.error_message ?? "error"})`}
+    <ul className="space-y-2" aria-live="polite">
+      {discovery.log.map((entry) => {
+        const label = FIELD_LABELS[entry.field_name];
+        const found = entry.status === "found";
+        return (
+          <li key={entry.field_name} className="flex flex-wrap items-center justify-between gap-2 text-[13.5px]">
+            <span className="font-medium text-ink">{label}</span>
+            {found ? (
+              <span className="inline-flex items-center gap-1 font-semibold text-hit-text">
+                <Icon name="check" className="h-3.5 w-3.5" />
+                Found
               </span>
-              {onManualEntry ? (
-                <button
-                  type="button"
-                  onClick={() => onManualEntry(entry.field_name)}
-                  className="text-xs text-accent underline"
-                  aria-label={`Enter ${entry.field_name} manually`}
-                >
-                  Enter manually
-                </button>
-              ) : null}
-            </span>
-          )}
-        </li>
-      ))}
+            ) : (
+              <span className="inline-flex items-center gap-2 text-ink-muted">
+                {entry.status === "not_found" ? "Not found" : (entry.error_message ?? "Couldn't check")}
+                {onManualEntry ? (
+                  <button
+                    type="button"
+                    onClick={() => onManualEntry(entry.field_name)}
+                    className="font-semibold text-accent hover:underline"
+                    aria-label={`Enter ${label} manually`}
+                  >
+                    Enter it
+                  </button>
+                ) : null}
+              </span>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }

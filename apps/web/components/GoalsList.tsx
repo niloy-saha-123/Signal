@@ -10,11 +10,13 @@ import {
   updateCompanyGoal,
   type CompanyGoal,
 } from "@/lib/api";
+import { Badge, Button, ErrorState, LoadingRows } from "./ui/primitives";
 
 export function GoalsList() {
   const [goals, setGoals] = useState<CompanyGoal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [newGoal, setNewGoal] = useState("");
@@ -25,8 +27,9 @@ export function GoalsList() {
       const list = await listCompanyGoals();
       setGoals(list.filter((g) => g.status === "active"));
       setError(null);
+      setLoadFailed(false);
     } catch {
-      setError("Couldn't load goals.");
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -85,73 +88,88 @@ export function GoalsList() {
     }
   }
 
+  const iconButton =
+    "rounded-[8px] px-2 py-1 text-[12.5px] font-semibold text-ink-secondary hover:bg-surface hover:text-ink";
+
   return (
-    <section className="rounded-[10px] bg-surface p-6">
-      <div className="flex items-baseline justify-between">
-        <h2 className=" text-xl font-semibold tracking-tight text-ink">
-          Goals &amp; plans
+    <section aria-labelledby="goals-heading" className="rounded-[14px] border border-line bg-surface p-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 id="goals-heading" className="text-[15px] font-semibold text-ink">
+          Goals and plans
         </h2>
-        <span className="text-xs font-medium text-ink-secondary">Editable by you and Signal</span>
+        <span className="text-[12.5px] text-ink-muted">You and Signal can both edit these</span>
       </div>
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-3 text-[13.5px] text-miss-text">
+          {error}
+        </p>
+      )}
 
       {loading ? (
-        <p className="mt-4 text-sm text-ink-secondary">Loading…</p>
+        <div className="mt-4">
+          <LoadingRows rows={2} />
+        </div>
+      ) : loadFailed ? (
+        <div className="mt-4">
+          <ErrorState
+            message="Goals didn't load."
+            onRetry={() => {
+              setLoading(true);
+              void refresh();
+            }}
+          />
+        </div>
       ) : (
         <ul className="mt-4 flex flex-col gap-2">
           {goals.map((goal) => (
             <li
               key={goal.id}
               data-testid={`goal-${goal.id}`}
-              className="flex items-start gap-2 rounded-[10px] border border-line bg-surface-sunken px-3 py-2.5"
+              className="flex items-start gap-2 rounded-[10px] bg-sky px-3 py-2.5"
             >
               {editingId === goal.id ? (
                 <div className="flex w-full items-center gap-2">
-                  <input
-                    value={editingText}
-                    onChange={(e) => setEditingText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleSave(goal.id);
-                      if (e.key === "Escape") setEditingId(null);
-                    }}
-                    className="w-full rounded-[10px] border border-line bg-white px-3 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void handleSave(goal.id)}
-                    className="shrink-0 rounded-[10px] bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover"
-                  >
+                  <label className="min-w-0 flex-1">
+                    <span className="sr-only">Edit goal</span>
+                    <input
+                      value={editingText}
+                      autoFocus
+                      onChange={(e) => setEditingText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleSave(goal.id);
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                      className="h-9 w-full rounded-[8px] border border-line-strong bg-surface px-3 text-[14px] text-ink focus:border-ink focus:outline-none"
+                    />
+                  </label>
+                  <Button variant="primary" size="sm" onClick={() => void handleSave(goal.id)}>
                     Save
-                  </button>
+                  </Button>
                 </div>
               ) : (
                 <>
-                  <p className="flex-1 text-sm text-ink">{goal.content}</p>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {goal.created_by === "agent" && (
-                      <span className="rounded-full bg-accent-tint px-2 py-0.5 text-[10px] font-semibold text-accent">
-                        Signal
-                      </span>
-                    )}
+                  <p className="min-w-0 flex-1 text-[14px] break-words text-ink">{goal.content}</p>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {goal.created_by === "agent" && <Badge tone="accent">Signal</Badge>}
                     <button
                       type="button"
                       onClick={() => {
                         setEditingId(goal.id);
                         setEditingText(goal.content);
                       }}
-                      className="rounded-full p-1 text-ink-secondary hover:bg-white hover:text-ink"
+                      className={iconButton}
                       aria-label="Edit goal"
                     >
-                      ✎
+                      Edit
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleArchive(goal.id)}
-                      className="rounded-full p-1 text-ink-secondary hover:bg-white hover:text-ink"
+                      className={iconButton}
                       aria-label="Archive goal"
                     >
-                      ⌫
+                      Archive
                     </button>
                   </div>
                 </>
@@ -159,27 +177,26 @@ export function GoalsList() {
             </li>
           ))}
           {goals.length === 0 && (
-            <li className="rounded-[10px] border border-dashed border-line px-3 py-4 text-sm text-ink-secondary">
-              No goals yet — add one, or ask Signal in chat to draft one.
+            <li className="rounded-[10px] border border-dashed border-line-strong px-3 py-4 text-[13.5px] text-ink-secondary">
+              No goals yet. Add one, or ask Signal in chat to draft one from your company profile.
             </li>
           )}
         </ul>
       )}
 
       <form onSubmit={handleAdd} className="mt-4 flex items-center gap-2">
-        <input
-          value={newGoal}
-          onChange={(e) => setNewGoal(e.target.value)}
-          placeholder="Add a goal or plan…"
-          className="w-full rounded-[10px] border border-line bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={adding || newGoal.trim().length === 0}
-          className="shrink-0 rounded-[10px] bg-accent px-4 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-30"
-        >
+        <label className="min-w-0 flex-1">
+          <span className="sr-only">New goal</span>
+          <input
+            value={newGoal}
+            onChange={(e) => setNewGoal(e.target.value)}
+            placeholder="Add a goal or plan…"
+            className="h-10 w-full rounded-[10px] border border-line-strong bg-surface px-3 text-[14px] text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+          />
+        </label>
+        <Button type="submit" variant="primary" disabled={adding || newGoal.trim().length === 0}>
           Add
-        </button>
+        </Button>
       </form>
     </section>
   );

@@ -24,5 +24,7 @@ describe("globals.css", () => {
     expect(result.css).toContain("--color-status-critical");
     expect(result.css).toContain("--color-diverging-positive");
     expect(result.css).toContain("--color-sequential");
+    expect(result.css).toContain("--color-sun");
+    expect(result.css).toContain("--color-source-news");
   });
 });

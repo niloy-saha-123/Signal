@@ -27,7 +27,7 @@ export default async function ForecastPage() {
 
   const [predictions, calibration, competitors] = await Promise.all([
     listPredictions({ limit: 200 }, token),
-    getCalibration({}, token).catch(() => emptyCalibration),
+    getCalibration({}, token),
     listCompetitors(token).catch(() => []),
   ]);
 

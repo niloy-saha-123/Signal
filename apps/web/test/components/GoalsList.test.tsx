@@ -94,4 +94,11 @@ describe("GoalsList", () => {
     render(<GoalsList />);
     expect(await screen.findByText(/No goals yet/)).toBeInTheDocument();
   });
+
+  it("offers a retry when goals fail to load", async () => {
+    listCompanyGoalsMock.mockRejectedValueOnce(new Error("down"));
+    render(<GoalsList />);
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Expand to SMB")).toBeInTheDocument();
+  });
 });

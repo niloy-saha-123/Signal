@@ -1,77 +1,74 @@
-// Briefing — overnight briefing with KPI tiles, a top movement, and the rest of the signals.
-// Preview data (previewBriefingProps) is shown ONLY when there is no session — the dev-only
-// unauthenticated preview. An authenticated fetch failure throws to the (app) error boundary
-// instead of silently rendering fake data.
-import {
-  getCompetitorScore,
-  getDashboardSummary,
-  listAlerts,
-  listCompetitors,
-} from "@/lib/api";
+// Home — what moved, what Signal expects next, and how each competitor is
+// trending. Preview data (previewBriefingProps) is shown ONLY when there is no
+// session (the dev-only unauthenticated preview). An authenticated fetch
+// failure throws to the (app) error boundary instead of rendering fake data.
+import { getCompetitorScore, getDashboardSummary, listAlerts, listCompetitors, listPredictions } from "@/lib/api";
 import { previewBriefingProps } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
-import { BriefingClient } from "../briefing-client";
+import { BriefingClient, type Movement, type Pulse } from "../briefing-client";
 
 export default async function BriefingPage() {
   const token = await getOptionalAccessToken();
   if (!token) {
-    return <BriefingClient summary={null} {...previewBriefingProps()} />;
+    return <BriefingClient {...previewBriefingProps()} />;
   }
 
   const [competitors, summary] = await Promise.all([
     listCompetitors(token),
     getDashboardSummary(token).catch(() => null),
   ]);
-  const competitorIds = competitors.map((competitor) => competitor.id);
+  const watched = competitors.filter((competitor) => !competitor.is_own_company);
 
-  if (competitorIds.length === 0) {
-    return (
-      <BriefingClient
-        summary={summary}
-        highestScore={0}
-        highestScoreDelta={0}
-        highestScoreCompetitor=""
-        movements={[]}
-        competitors={[]}
-      />
-    );
+  if (watched.length === 0) {
+    return <BriefingClient summary={summary} movements={[]} pulse={[]} forecasts={[]} competitorCount={0} />;
   }
 
-  const [scores, alerts] = await Promise.all([
-    Promise.all(competitorIds.map((id) => getCompetitorScore(id, token).catch(() => null))),
-    listAlerts({ competitor_ids: competitorIds, limit: 20 }, token),
+  const ids = watched.map((competitor) => competitor.id);
+  const [scores, alerts, predictions] = await Promise.all([
+    Promise.all(ids.map((id) => getCompetitorScore(id, token).catch(() => null))),
+    listAlerts({ competitor_ids: ids, limit: 12 }, token),
+    listPredictions({ status: "open", limit: 50 }, token).catch(() => null),
   ]);
 
-  const scored = scores
-    .map((score, index) => ({ score, competitor: competitors[index] }))
-    .filter((item) => item.score !== null);
+  const names = new Map(watched.map((competitor) => [competitor.id, competitor.name]));
 
-  const highestItem = scored.reduce<(typeof scored)[number] | null>(
-    (best, item) => (!best || (item.score!.score > best.score!.score) ? item : best),
-    null
-  );
+  const movements: Movement[] = alerts.data.slice(0, 6).map((alert) => ({
+    id: alert.id,
+    competitorId: alert.competitor_id,
+    competitor: names.get(alert.competitor_id) ?? "Unknown competitor",
+    pattern: alert.pattern,
+    detail: alert.interpretation,
+    confidence: alert.confidence,
+    timestamp: alert.created_at,
+    action: typeof alert.recommended_actions[0]?.action === "string" ? (alert.recommended_actions[0].action as string) : null,
+  }));
 
-  const recentMovements = alerts.data.slice(0, 10).map((alert) => {
-    const competitor = competitors.find((item) => item.id === alert.competitor_id);
-    return {
-      id: alert.id,
-      competitor: competitor?.name || "Unknown",
-      title: alert.pattern,
-      detail: alert.interpretation || "",
-      category: alert.pattern.split("_")[0] || "signal",
-      timestamp: alert.created_at,
-      confidence: alert.confidence,
-    };
-  });
+  const pulse: Pulse[] = watched.map((competitor, index) => ({
+    id: competitor.id,
+    name: competitor.name,
+    score: scores[index]?.score ?? null,
+    delta: scores[index]?.delta_7d ?? null,
+  }));
+
+  const forecasts = predictions
+    ?.slice()
+    .sort((a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime())
+    .slice(0, 3)
+    .map((prediction) => ({
+      id: prediction.id,
+      competitor: names.get(prediction.competitor_id) ?? "Unknown competitor",
+      statement: prediction.statement,
+      probability: prediction.probability,
+      resolvesAt: prediction.resolves_at,
+    }));
 
   return (
     <BriefingClient
       summary={summary}
-      highestScore={highestItem?.score?.score || 0}
-      highestScoreDelta={highestItem?.score?.delta_7d || 0}
-      highestScoreCompetitor={highestItem?.competitor?.name || ""}
-      movements={recentMovements}
-      competitors={competitors}
+      movements={movements}
+      pulse={pulse}
+      forecasts={forecasts ?? null}
+      competitorCount={watched.length}
     />
   );
 }

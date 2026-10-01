@@ -6,15 +6,32 @@
 import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { Signal } from "@signal/shared";
-import { SOURCE_COLORS } from "../lib/chart-colors";
+import { AskButton } from "./AskButton";
+import { Icon } from "./ui/icons";
+import { Badge, EmptyState, SourceChip } from "./ui/primitives";
+import { sourceLabel } from "../lib/chart-colors";
+import { relativeTime } from "../lib/format";
 import { joinCompetitor, leaveCompetitor, onSignalCreated } from "../lib/socket";
 
 export interface SignalFeedProps {
   signals: Signal[];
   competitorIds: string[];
+  competitorNames?: Record<string, string>;
+  emptyTitle?: string;
+  emptyNote?: string;
+  emptyAction?: React.ReactNode;
 }
 
-export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
+const STRONG = 0.8;
+
+export function SignalFeed({
+  signals,
+  competitorIds,
+  competitorNames = {},
+  emptyTitle = "No evidence here yet",
+  emptyNote = "New evidence appears here the moment Signal collects it.",
+  emptyAction,
+}: SignalFeedProps) {
   const router = useRouter();
 
   useEffect(() => {
@@ -43,29 +60,47 @@ export function SignalFeed({ signals, competitorIds }: SignalFeedProps) {
   }, [competitorIdsKey]);
 
   if (signals.length === 0) {
-    return <p className="text-sm text-ink-secondary">No signals yet.</p>;
+    return <EmptyState compact title={emptyTitle} note={emptyNote} action={emptyAction} />;
   }
 
   return (
-    <ul className="flex flex-col gap-2">
-      {signals.map((signal) => (
-        <li
-          key={signal.id}
-          className="flex items-start gap-3 rounded-[10px] border border-line bg-surface-sunken p-4"
-        >
-          <span
-            className="mt-1 h-2 w-2 shrink-0 rounded-full"
-            style={{ backgroundColor: SOURCE_COLORS[signal.source] }}
-            aria-label={signal.source}
-          />
-          <div>
-            {signal.title ? (
-              <p className="text-sm font-medium text-ink">{signal.title}</p>
-            ) : null}
-            <p className="text-sm text-ink-secondary">{signal.raw_text}</p>
-          </div>
-        </li>
-      ))}
+    <ul className="divide-y divide-line">
+      {signals.map((signal) => {
+        const competitor = competitorNames[signal.competitor_id];
+        const title = signal.title || `${sourceLabel(signal.source)} update`;
+        return (
+          <li key={signal.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <SourceChip source={signal.source} />
+                {competitor ? <span className="text-[13px] font-bold text-ink">{competitor}</span> : null}
+                <span className="text-[12.5px] text-ink-muted" suppressHydrationWarning>
+                  {relativeTime(signal.collected_at)}
+                </span>
+                {signal.quality_score >= STRONG ? <Badge tone="hit">Strong</Badge> : null}
+              </div>
+              <p className="mt-1.5 text-[15px] leading-snug font-semibold break-words text-ink">
+                {signal.source_url ? (
+                  <a href={signal.source_url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                    {title}
+                    <Icon name="external" className="ml-1 inline h-3.5 w-3.5 text-ink-muted" />
+                  </a>
+                ) : (
+                  title
+                )}
+              </p>
+              <p className="mt-1 line-clamp-3 text-[14px] break-words text-ink-secondary">{signal.raw_text}</p>
+            </div>
+            <div className="shrink-0">
+              <AskButton
+                variant="ghost"
+                label="Ask"
+                prompt={`What does this mean${competitor ? ` for how ${competitor} competes with us` : ""}? "${title}" (${sourceLabel(signal.source)})`}
+              />
+            </div>
+          </li>
+        );
+      })}
     </ul>
   );
 }

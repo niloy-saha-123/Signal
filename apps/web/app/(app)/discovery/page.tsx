@@ -1,4 +1,4 @@
-// Discovery — real tracked-entities triage board (Phase 1's interrupt()-gated HITL flow).
+// Candidates — real tracked-entities triage board (Phase 1's interrupt()-gated HITL flow).
 // Confirmed/dismissed via POST /api/discovery/:threadId/resume; new candidates via
 // GET /api/tracked-entities; a new discovery sweep via POST /api/discovery/trigger.
 import { listCompetitors, listTrackedEntities, type TrackedEntity } from "@/lib/api";
@@ -36,17 +36,12 @@ export default async function DiscoveryPage() {
     );
   }
 
-  try {
-    const [competitors, entities] = await Promise.all([
-      listCompetitors(token),
-      listTrackedEntities(token),
-    ]);
-    const nameById = new Map(competitors.map((c) => [c.id, c.name]));
+  // A failure throws to the error boundary: an empty board would read as "no suggestions".
+  const [competitors, entities] = await Promise.all([
+    listCompetitors(token),
+    listTrackedEntities(token),
+  ]);
+  const nameById = new Map(competitors.map((c) => [c.id, c.name]));
 
-    const mapped = entities.map((entity) => toDiscoveryEntity(entity, nameById));
-
-    return <DiscoveryBoard entities={mapped} />;
-  } catch {
-    return <DiscoveryBoard entities={[]} />;
-  }
+  return <DiscoveryBoard entities={entities.map((entity) => toDiscoveryEntity(entity, nameById))} />;
 }
