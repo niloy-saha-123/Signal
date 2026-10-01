@@ -81,7 +81,7 @@ export function PageHeader({
             <p className="mt-2 max-w-2xl text-[15px] text-ink-secondary">{description}</p>
           ) : null}
         </div>
-        {action ? <div className="flex shrink-0 flex-wrap gap-2">{action}</div> : null}
+        {action ? <div className="flex max-w-full flex-wrap gap-2">{action}</div> : null}
       </div>
       {children ? <div className="mt-5">{children}</div> : null}
     </header>

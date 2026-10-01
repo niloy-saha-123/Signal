@@ -41,4 +41,14 @@ describe("ChatSidebar", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: "Ask Signal" })).toBeInTheDocument();
   });
+
+  it("moves focus into the panel even before the composer exists, and back to the launcher on close", async () => {
+    listCompetitorsMock.mockReturnValue(new Promise(() => {}));
+    render(<ChatSidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Signal" }));
+    const dialog = screen.getByRole("dialog", { name: "Ask Signal" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Ask Signal" })));
+  });
 });

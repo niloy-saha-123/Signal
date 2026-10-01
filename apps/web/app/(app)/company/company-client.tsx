@@ -164,7 +164,7 @@ export function CompanyClient({
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-start">
         <div className="flex flex-col gap-4">
           <form onSubmit={handleSaveGoal} className="rounded-[14px] border border-line bg-surface p-5">
-            <h2 className="text-[15px] font-semibold text-ink">What you're trying to do</h2>
+            <h2 className="text-[15px] font-semibold text-ink">What you&apos;re trying to do</h2>
             <p className="mt-1 text-[13.5px] text-ink-secondary">
               &ldquo;Defend the enterprise tier&rdquo; reads every signal differently from &ldquo;catch up in the
               mid-market.&rdquo;

@@ -1,12 +1,14 @@
 "use client";
 
+import type { Ref } from "react";
 import { Sig } from "@/components/brand/Sig";
 
 // Sig, pinned bottom-right on every app page. Hovering says what it does; the
 // face itself is the button.
-export function ChatAvatar({ onOpen }: { onOpen: () => void }) {
+export function ChatAvatar({ onOpen, ref }: { onOpen: () => void; ref?: Ref<HTMLButtonElement> }) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onOpen}
       aria-label="Ask Signal"

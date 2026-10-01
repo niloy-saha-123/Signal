@@ -16,6 +16,14 @@ export function ChatSidebar() {
   const [chatKey, setChatKey] = useState(0);
   const [prefill, setPrefill] = useState("");
   const panelRef = useRef<HTMLElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
+
+  // Hand focus back to the launcher after the panel closes (it remounts on close).
+  useEffect(() => {
+    if (!isOpen && wasOpen.current) launcherRef.current?.focus();
+    wasOpen.current = isOpen;
+  }, [isOpen]);
 
   useEffect(() => {
     listCompetitors()
@@ -42,13 +50,14 @@ export function ChatSidebar() {
       if (event.key === "Escape") setIsOpen(false);
     }
     window.addEventListener("keydown", onKey);
-    panelRef.current?.querySelector<HTMLTextAreaElement | HTMLInputElement>("textarea, input[type=text]")?.focus();
+    const composer = panelRef.current?.querySelector<HTMLTextAreaElement>("textarea");
+    (composer ?? panelRef.current)?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [isOpen, chatKey]);
+  }, [isOpen, chatKey, loading]);
 
   return (
     <>
-      {!isOpen && <ChatAvatar onOpen={() => setIsOpen(true)} />}
+      {!isOpen && <ChatAvatar ref={launcherRef} onOpen={() => setIsOpen(true)} />}
 
       {isOpen && (
         <div className="fixed inset-0 z-50 flex">
@@ -58,7 +67,8 @@ export function ChatSidebar() {
             role="dialog"
             aria-modal="true"
             aria-label="Ask Signal"
-            className="animate-slide-in-right fixed top-0 right-0 z-50 flex h-[100dvh] w-full max-w-[440px] flex-col border-l border-line bg-surface shadow-[var(--shadow-window)]"
+            tabIndex={-1}
+            className="animate-slide-in-right outline-none fixed top-0 right-0 z-50 flex h-[100dvh] w-full max-w-[440px] flex-col border-l border-line bg-surface shadow-[var(--shadow-window)]"
           >
             <div className="flex h-16 shrink-0 items-center justify-between border-b border-line px-4">
               <div className="flex items-center gap-2.5">
