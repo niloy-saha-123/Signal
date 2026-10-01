@@ -2064,10 +2064,21 @@ export async function saveDiscoveredLinks(
   id: string,
   patch: Partial<Pick<Competitor, "blog_feeds" | "social_feeds" | "bluesky_handle" | "stackoverflow_tag">>
 ): Promise<void> {
-  await db
-    .update(competitorsTable)
-    .set({ ...patch, links_scanned_at: new Date(), updated_at: new Date() })
-    .where(eq(competitorsTable.id, id));
+  // Each field fills only while still empty in the row, so a PATCH that lands
+  // between the scan's read and this write is never overwritten.
+  const fillArray = (col: typeof competitorsTable.blog_feeds | typeof competitorsTable.social_feeds, urls: string[]) =>
+    sql`CASE WHEN cardinality(${col}) = 0 THEN ARRAY[${sql.join(
+      urls.map((u) => sql`${u}`),
+      sql`, `
+    )}]::text[] ELSE ${col} END`;
+  const set: Record<string, unknown> = { links_scanned_at: new Date(), updated_at: new Date() };
+  if (patch.blog_feeds?.length) set.blog_feeds = fillArray(competitorsTable.blog_feeds, patch.blog_feeds);
+  if (patch.social_feeds?.length) set.social_feeds = fillArray(competitorsTable.social_feeds, patch.social_feeds);
+  if (patch.bluesky_handle) set.bluesky_handle = sql`COALESCE(${competitorsTable.bluesky_handle}, ${patch.bluesky_handle})`;
+  if (patch.stackoverflow_tag) {
+    set.stackoverflow_tag = sql`COALESCE(${competitorsTable.stackoverflow_tag}, ${patch.stackoverflow_tag})`;
+  }
+  await db.update(competitorsTable).set(set).where(eq(competitorsTable.id, id));
 }
 
 // R1: the synthetic own-company row derives `name` from workspaces.name

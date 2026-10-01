@@ -151,6 +151,7 @@ import {
   upsertCompanyProfileForWorkspace,
   getOwnCompanyCompetitorForWorkspace,
   createOwnCompanyCompetitorRow,
+  saveDiscoveredLinks,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -263,6 +264,36 @@ describe("db/queries — competitors", () => {
       expect(whereMock).toHaveBeenCalled();
       expect(orderByMock).toHaveBeenCalledWith(competitorDiscoveryLogTable.discovered_at);
       expect(result).toEqual(rows);
+    });
+  });
+
+  describe("saveDiscoveredLinks", () => {
+    it("only fills fields still empty in the row, so a concurrent PATCH is never overwritten", async () => {
+      updateWhereMock.mockResolvedValue(undefined);
+      await saveDiscoveredLinks("c1", {
+        blog_feeds: ["https://k.dev/rss.xml", "https://k.dev/it's.xml"],
+        bluesky_handle: "kestrel.dev",
+      });
+
+      expect(updateMock).toHaveBeenCalledWith(competitorsTable);
+      const set = updateSetMock.mock.calls[0][0];
+      expect(Object.keys(set).sort()).toEqual(["blog_feeds", "bluesky_handle", "links_scanned_at", "updated_at"]);
+      expect(set.links_scanned_at).toBeInstanceOf(Date);
+      const dialect = new PgDialect();
+      const blog = dialect.sqlToQuery(set.blog_feeds);
+      expect(blog.sql).toBe(
+        'CASE WHEN cardinality("competitors"."blog_feeds") = 0 THEN ARRAY[$1, $2]::text[] ELSE "competitors"."blog_feeds" END'
+      );
+      expect(blog.params).toEqual(["https://k.dev/rss.xml", "https://k.dev/it's.xml"]);
+      const bsky = dialect.sqlToQuery(set.bluesky_handle);
+      expect(bsky.sql).toBe('COALESCE("competitors"."bluesky_handle", $1)');
+      expect(bsky.params).toEqual(["kestrel.dev"]);
+    });
+
+    it("an empty patch only stamps the scan", async () => {
+      updateWhereMock.mockResolvedValue(undefined);
+      await saveDiscoveredLinks("c1", {});
+      expect(Object.keys(updateSetMock.mock.calls[0][0]).sort()).toEqual(["links_scanned_at", "updated_at"]);
     });
   });
 });
