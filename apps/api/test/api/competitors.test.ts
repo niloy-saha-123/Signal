@@ -73,6 +73,10 @@ function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDep
     enqueueInitialSignalPipeline: vi.fn(async () => undefined) as any,
     fetchPublicPageText: vi.fn(async () => "Kestrel doubled its Team plan price.") as any,
     consumeBudget: vi.fn(async () => undefined) as any,
+    updateCompetitorSourceConfigForWorkspace: vi.fn(async (_id: string, _ws: string, patch: any) => ({
+      id: UUID,
+      ...patch,
+    })) as any,
     ...over,
   };
 }
@@ -741,5 +745,45 @@ describe("POST /api/competitors/:id/field-intel", () => {
     });
     const res = await call(app(deps), "POST", path, { note: "Lost a deal" });
     expect(res.status).toBe(201);
+  });
+});
+
+describe("PATCH /api/competitors/:id", () => {
+  const path = `/api/competitors/${UUID}`;
+
+  it("sets and clears source config, scoped to the workspace", async () => {
+    const deps = makeDeps();
+    const body = { news_query: null, npm_packages: ["@kestrel/sdk"], pypi_packages: [] };
+    const res = await call(app(deps), "PATCH", path, body);
+    expect(res.status).toBe(200);
+    expect(deps.updateCompetitorSourceConfigForWorkspace).toHaveBeenCalledWith(UUID, WS_UUID, body);
+  });
+
+  it("404s when the competitor is not in this workspace", async () => {
+    const deps = makeDeps({ updateCompetitorSourceConfigForWorkspace: vi.fn(async () => undefined) as any });
+    expect((await call(app(deps), "PATCH", path, { news_query: "x" })).status).toBe(404);
+  });
+
+  it.each([{}, { name: "Renamed" }, { npm_packages: ["Bad Name"] }])("400s on %j", async (body) => {
+    expect((await call(app(makeDeps()), "PATCH", path, body)).status).toBe(400);
+  });
+
+  it("400s on a docs sitemap that resolves to a non-public host", async () => {
+    const deps = makeDeps({ isPublicHostname: vi.fn(async () => false) });
+    const res = await call(app(deps), "PATCH", path, { docs_sitemap_url: "https://internal.kestrel.dev/sitemap.xml" });
+    expect(res.status).toBe(400);
+    expect(deps.updateCompetitorSourceConfigForWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("POST create also refuses a non-public docs sitemap", async () => {
+    const deps = makeDeps({
+      isPublicHostname: vi.fn(async (host: string) => host !== "internal.kestrel.dev"),
+    });
+    const res = await call(app(deps), "POST", "/api/competitors", {
+      name: "Kestrel",
+      domain: "kestrel.dev",
+      docs_sitemap_url: "https://internal.kestrel.dev/sitemap.xml",
+    });
+    expect(res.status).toBe(400);
   });
 });

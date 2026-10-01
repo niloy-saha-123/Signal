@@ -19,11 +19,14 @@
 //   attempted, with what it tried and what it found (or didn't). Polled by
 //   DiscoveryStatus.tsx every 3s while discovery_status is pending/in_progress.
 //
+// PATCH /competitors/:id — news_query / docs_sitemap_url / npm_packages / pypi_packages only.
+//
 // POST /competitors/:id/field-intel — teammate link/note → a 'field' signal.
 import express, { Router } from "express";
 import { z } from "zod";
 import {
   CompetitorCreateInputSchema,
+  CompetitorSourceConfigSchema,
   FieldIntelInputSchema,
   SignalScoreComponentsSchema,
 } from "@signal/shared";
@@ -138,6 +141,7 @@ function computeHiringDeltas(
 export interface CompetitorRouterDeps {
   createCompetitorForWorkspace: typeof queries.createCompetitorForWorkspace;
   getCompetitorByIdForWorkspace: typeof queries.getCompetitorByIdForWorkspace;
+  updateCompetitorSourceConfigForWorkspace: typeof queries.updateCompetitorSourceConfigForWorkspace;
   listCompetitorsForWorkspace: typeof queries.listCompetitorsForWorkspace;
   getCompetitorDiscoveryLog: typeof queries.getCompetitorDiscoveryLog;
   getLatestSignalScores: typeof queries.getLatestSignalScores;
@@ -158,6 +162,7 @@ export interface CompetitorRouterDeps {
 export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   createCompetitorForWorkspace: queries.createCompetitorForWorkspace,
   getCompetitorByIdForWorkspace: queries.getCompetitorByIdForWorkspace,
+  updateCompetitorSourceConfigForWorkspace: queries.updateCompetitorSourceConfigForWorkspace,
   listCompetitorsForWorkspace: queries.listCompetitorsForWorkspace,
   getCompetitorDiscoveryLog: queries.getCompetitorDiscoveryLog,
   getLatestSignalScores: queries.getLatestSignalScores,
@@ -232,14 +237,15 @@ export function createCompetitorRouter(
         return;
       }
 
-      const [pricingOk, rssOk] = await Promise.all([
+      const [pricingOk, rssOk, sitemapOk] = await Promise.all([
         overrideUrlIsPublic(parsed.data.pricing_url, deps.isPublicHostname),
         overrideUrlIsPublic(parsed.data.rss_url, deps.isPublicHostname),
+        overrideUrlIsPublic(parsed.data.docs_sitemap_url, deps.isPublicHostname),
       ]);
-      if (!pricingOk || !rssOk) {
+      if (!pricingOk || !rssOk || !sitemapOk) {
         res.status(400).json({
           error: "validation",
-          message: "pricing_url/rss_url must be a public URL",
+          message: "pricing_url/rss_url/docs_sitemap_url must be a public URL",
         });
         return;
       }
@@ -294,6 +300,31 @@ export function createCompetitorRouter(
       const id = requireUuidParam(req, res);
       if (id === null) return;
       const row = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
+      if (!row) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      res.status(200).json(row);
+    })
+  );
+
+  router.patch(
+    "/:id",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (id === null) return;
+      const parsed = CompetitorSourceConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      // The docs collector fetches this URL on a schedule — same SSRF gate as
+      // the create-time overrides.
+      if (!(await overrideUrlIsPublic(parsed.data.docs_sitemap_url ?? undefined, deps.isPublicHostname))) {
+        res.status(400).json({ error: "validation", message: "docs_sitemap_url must be a public URL" });
+        return;
+      }
+      const row = await deps.updateCompetitorSourceConfigForWorkspace(id, req.workspaceId!, parsed.data);
       if (!row) {
         res.status(404).json({ error: "not_found" });
         return;
