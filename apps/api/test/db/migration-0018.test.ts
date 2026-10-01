@@ -17,8 +17,11 @@ describe("0018 news/docs/packages/field migration", () => {
       "'postings', 'news', 'docs', 'packages', 'field')) NOT VALID",
       "ENABLE ROW LEVEL SECURITY",
       "schemaname = 'public'",
+      "SET LOCAL lock_timeout = '5s';--> statement-breakpoint",
+      "WHERE schemaname = 'public' AND NOT rowsecurity",
     ]) {
       expect(sql).toContain(requiredFragment);
     }
+    expect(sql.startsWith("SET LOCAL lock_timeout")).toBe(true);
   });
 });
