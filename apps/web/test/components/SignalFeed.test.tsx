@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Signal, SignalCreatedPayload } from "@signal/shared";
 
@@ -59,7 +59,25 @@ describe("SignalFeed", () => {
 
   it("shows an empty state when given no signals", () => {
     render(<SignalFeed signals={[]} competitorIds={["comp-1"]} />);
-    expect(screen.getByText("No signals yet.")).toBeInTheDocument();
+    expect(screen.getByText("No evidence here yet")).toBeInTheDocument();
+  });
+
+  it("labels each item with its source name, competitor and a link to the original", () => {
+    render(<SignalFeed signals={[signal]} competitorIds={["comp-1"]} competitorNames={{ "comp-1": "Acme" }} />);
+    expect(screen.getByText("Reddit")).toBeInTheDocument();
+    expect(screen.getByText("Acme")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Acme cut pricing/ })).toHaveAttribute("href", "https://reddit.com/r/x/1");
+  });
+
+  it("asks Signal about an item with a pre-filled question", () => {
+    const heard: string[] = [];
+    const listener = (event: Event) => heard.push((event as CustomEvent<{ prompt: string }>).detail.prompt);
+    window.addEventListener("signal:ask", listener);
+    render(<SignalFeed signals={[signal]} competitorIds={["comp-1"]} competitorNames={{ "comp-1": "Acme" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    window.removeEventListener("signal:ask", listener);
+    expect(heard[0]).toContain("Acme cut pricing");
+    expect(heard[0]).toContain("Acme");
   });
 
   it("renders each signal's title and text", () => {
