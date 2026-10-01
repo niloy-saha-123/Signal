@@ -8,15 +8,22 @@ import {
 } from "@/lib/api";
 import { getCompanyProfile } from "@/lib/api";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
+import { EmptyState, LinkButton } from "@/components/ui/primitives";
 import { CompanyClient } from "./company-client";
 
 export default async function CompanyPage() {
   const token = await getOptionalAccessToken();
   if (!token) {
     return (
-      <div className="rounded-[10px] border border-line bg-surface px-6 py-12">
-        <p className="text-sm text-ink-secondary">Sign in to manage your company profile.</p>
-      </div>
+      <EmptyState
+        title="Sign in to set up your company"
+        note="Signal judges every competitor move against your own product, buyers and goals."
+        action={
+          <LinkButton href="/login" variant="primary" size="sm">
+            Sign in
+          </LinkButton>
+        }
+      />
     );
   }
 

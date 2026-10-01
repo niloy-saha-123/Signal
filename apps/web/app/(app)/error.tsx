@@ -1,13 +1,15 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect } from "react";
+import { Sig } from "@/components/brand/Sig";
+import { Button, LinkButton } from "@/components/ui/primitives";
 
 type AppErrorProps = {
   error: Error & { digest?: string };
   reset: () => void;
 };
 
+// The raw error message is logged, never shown: it can carry internal detail.
 export default function AppError({ error, reset }: AppErrorProps) {
   useEffect(() => {
     console.error("Authenticated page failed", error);
@@ -16,37 +18,22 @@ export default function AppError({ error, reset }: AppErrorProps) {
   return (
     <section
       aria-labelledby="app-error-title"
-      className="mx-auto max-w-2xl rounded-[10px] border border-line bg-surface px-7 py-12 shadow-[0_20px_50px_-36px_rgba(10,32,51,0.45)] sm:px-12"
+      className="mx-auto flex max-w-xl flex-col items-center rounded-[20px] border border-line bg-surface px-6 py-12 text-center sm:px-12"
     >
-      <p className="text-sm font-semibold text-accent">Signal could not load this view</p>
-      <h1
-        id="app-error-title"
-        className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-ink"
-      >
-        Your workspace is still safe.
+      <Sig mood="unsure" size={60} decorative />
+      <h1 id="app-error-title" className="mt-4 font-display text-[28px] font-semibold tracking-[-0.03em] text-ink">
+        This view didn&apos;t load
       </h1>
-      <p className="mt-4 max-w-xl text-base leading-relaxed text-ink-secondary">
-        The latest workspace data did not arrive. Try the request again, or return to the
-        briefing and continue from there.
+      <p className="mt-3 text-[15px] text-ink-secondary">
+        Your workspace data is safe. The latest numbers just didn&apos;t arrive. Try again, or carry on from Home.
       </p>
-      <div className="mt-7 flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={reset}
-          className="min-h-11 rounded-full bg-accent px-5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
-        >
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
+        <Button variant="primary" onClick={reset}>
           Try again
-        </button>
-        <Link
-          href="/briefing"
-          className="inline-flex min-h-11 items-center rounded-full border border-line px-5 text-sm font-semibold text-ink transition-colors hover:bg-surface-sunken"
-        >
-          Return to briefing
-        </Link>
+        </Button>
+        <LinkButton href="/briefing">Go to Home</LinkButton>
       </div>
-      {error.digest ? (
-        <p className="mt-7 text-xs text-ink-secondary">Reference: {error.digest}</p>
-      ) : null}
+      {error.digest ? <p className="mt-6 text-[12px] text-ink-muted">Reference: {error.digest}</p> : null}
     </section>
   );
 }

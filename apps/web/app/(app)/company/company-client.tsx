@@ -1,10 +1,15 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { CompanyAreaTabs } from "@/components/area-tabs";
+import { GoalsList } from "@/components/GoalsList";
+import { Icon } from "@/components/ui/icons";
+import { Badge, Button, PageHeader, cx } from "@/components/ui/primitives";
+import { toast } from "@/components/ui/toast";
 import type { CompanyProfile, Competitor, CompanyDocument } from "@/lib/api";
 import { saveCompanyProfile, uploadCompanyDocument, getSignalGoal, saveSignalGoal } from "@/lib/api";
 import { validateDocument, formatBytes, ACCEPTED_DOC_EXTENSIONS } from "@/lib/attachments";
+import { formatDate } from "@/lib/format";
 
 interface PricingTier {
   name: string;
@@ -19,12 +24,16 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
-const STATUS_BADGE: Record<string, string> = {
-  structured: "bg-emerald-100 text-emerald-700",
-  embedded: "bg-accent-tint text-ink",
-  pending: "bg-amber-100 text-amber-700",
-  failed: "bg-red-100 text-red-700",
+const DOC_STATUS: Record<string, { label: string; tone: "hit" | "accent" | "neutral" | "miss" }> = {
+  structured: { label: "Merged into profile", tone: "hit" },
+  embedded: { label: "Searchable", tone: "accent" },
+  pending: { label: "Reading", tone: "neutral" },
+  failed: { label: "Couldn't read", tone: "miss" },
 };
+
+const FIELD =
+  "w-full rounded-[10px] border border-line-strong bg-surface px-3.5 text-[15px] text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none";
+const LABEL = "flex flex-col gap-1.5 text-[13px] font-semibold text-ink";
 
 export function CompanyClient({
   profile,
@@ -55,14 +64,12 @@ export function CompanyClient({
   const [primaryIds, setPrimaryIds] = useState<string[]>(profile?.primary_competitor_ids ?? []);
 
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const [goal, setGoal] = useState("");
   const [goalLoading, setGoalLoading] = useState(true);
   const [goalSaving, setGoalSaving] = useState(false);
-  const [goalMessage, setGoalMessage] = useState<string | null>(null);
 
   useEffect(() => {
     getSignalGoal()
@@ -77,12 +84,11 @@ export function CompanyClient({
     event.preventDefault();
     if (!goal.trim()) return;
     setGoalSaving(true);
-    setGoalMessage(null);
     try {
       await saveSignalGoal(goal.trim());
-      setGoalMessage("Signal goal saved.");
+      toast("Goal saved. Signal weighs new evidence against it from now on.", "success");
     } catch {
-      setGoalMessage("Couldn't save the goal. Sign in and try again.");
+      toast("Couldn't save the goal. Try again in a moment.", "error");
     } finally {
       setGoalSaving(false);
     }
@@ -101,7 +107,6 @@ export function CompanyClient({
   async function handleSave(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
-    setMessage(null);
     const body: CompanyProfile = {
       product_description: productDescription,
       icp_company_size: icpCompanySize || undefined,
@@ -117,10 +122,10 @@ export function CompanyClient({
     };
     try {
       await saveCompanyProfile(body);
-      setMessage("Company profile saved.");
+      toast("Company profile saved.", "success");
       router.refresh();
     } catch {
-      setMessage("Couldn't save. Sign in and try again.");
+      toast("Couldn't save the profile. Try again in a moment.", "error");
     } finally {
       setSaving(false);
     }
@@ -138,6 +143,7 @@ export function CompanyClient({
           continue;
         }
         await uploadCompanyDocument(file);
+        toast(`Uploaded ${file.name}. Signal is reading it.`, "success");
       }
       router.refresh();
     } catch {
@@ -148,255 +154,239 @@ export function CompanyClient({
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
-            Company
-          </h1>
-          <p className="text-sm text-ink-secondary">
-            The context Signal uses to decide what matters to you — plus the documents it learned from.
-          </p>
-        </div>
-        <Link
-          href="/company/compare"
-          className="inline-flex min-h-11 items-center rounded-full border border-line bg-surface px-5 text-sm font-semibold text-ink transition-colors hover:bg-surface-sunken"
-        >
-          Us vs. them
-        </Link>
-      </div>
+    <div>
+      <PageHeader
+        title="Your company"
+        description="What Signal knows about you. It judges every competitor move against this, so a sharper profile means sharper forecasts."
+        action={<CompanyAreaTabs active="profile" />}
+      />
 
-      {/* Signal goal */}
-      <form
-        onSubmit={handleSaveGoal}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
-      >
-        <h2 className="text-sm font-semibold text-ink">Signal goal</h2>
-        <p className="text-xs leading-relaxed text-ink-secondary">
-          What are you trying to do against your competitors? Signal judges every signal against
-          this. &ldquo;Defend the enterprise tier&rdquo; reads very differently from
-          &ldquo;catch up to Acme.&rdquo;
-        </p>
-        <textarea
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          rows={2}
-          disabled={goalLoading}
-          placeholder="e.g. Catch up to Acme in the mid-market"
-          className="rounded-[10px] bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint disabled:opacity-60"
-        />
-        {goalMessage && <p className="text-sm text-ink-secondary">{goalMessage}</p>}
-        <button
-          type="submit"
-          disabled={goalSaving || goalLoading}
-          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-        >
-          Save goal
-        </button>
-      </form>
-
-      {/* Profile */}
-      <form
-        onSubmit={handleSave}
-        className="flex max-w-2xl flex-col gap-5 rounded-[10px] border border-line bg-surface p-8"
-      >
-        <h2 className="text-sm font-semibold text-ink">Company profile</h2>
-
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          Product description
-          <textarea
-            value={productDescription}
-            onChange={(e) => setProductDescription(e.target.value)}
-            required
-            rows={4}
-            className="rounded-[10px] bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-            placeholder="What your product does, and for whom."
-          />
-        </label>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-            ICP company size
-            <input
-              value={icpCompanySize}
-              onChange={(e) => setIcpCompanySize(e.target.value)}
-              className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-              placeholder="e.g. 50–250 employees"
-            />
-          </label>
-          <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-            ICP buyer role
-            <input
-              value={icpBuyerRole}
-              onChange={(e) => setIcpBuyerRole(e.target.value)}
-              className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-              placeholder="e.g. Head of Product"
-            />
-          </label>
-        </div>
-
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          ICP industries (comma-separated)
-          <input
-            value={icpIndustries}
-            onChange={(e) => setIcpIndustries(e.target.value)}
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-            placeholder="SaaS, fintech, healthcare"
-          />
-        </label>
-
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          Key differentiators (comma-separated)
-          <input
-            value={differentiators}
-            onChange={(e) => setDifferentiators(e.target.value)}
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-            placeholder="Cheaper, faster onboarding, enterprise SSO"
-          />
-        </label>
-
-        <div className="flex flex-col gap-2">
-          <p className="text-sm font-semibold text-ink">Pricing tiers</p>
-          {tiers.map((tier, index) => (
-            <div key={index} className="flex gap-2">
-              <input
-                value={tier.name}
-                onChange={(e) => updateTier(index, { name: e.target.value })}
-                placeholder="Tier name"
-                className="min-w-0 flex-1 rounded-full bg-surface-sunken px-4 py-2.5 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-start">
+        <div className="flex flex-col gap-4">
+          <form onSubmit={handleSaveGoal} className="rounded-[14px] border border-line bg-surface p-5">
+            <h2 className="text-[15px] font-semibold text-ink">What you're trying to do</h2>
+            <p className="mt-1 text-[13.5px] text-ink-secondary">
+              &ldquo;Defend the enterprise tier&rdquo; reads every signal differently from &ldquo;catch up in the
+              mid-market.&rdquo;
+            </p>
+            <label className="mt-3 block">
+              <span className="sr-only">Signal goal</span>
+              <textarea
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                rows={2}
+                disabled={goalLoading}
+                placeholder="e.g. Win mid-market deals against the incumbent"
+                className={cx(FIELD, "py-2.5 disabled:opacity-60")}
               />
-              <input
-                type="number"
-                value={Number.isFinite(tier.price) ? tier.price : ""}
-                onChange={(e) => updateTier(index, { price: Number(e.target.value) })}
-                placeholder="Price"
-                className="w-24 rounded-full bg-surface-sunken px-4 py-2.5 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
+            </label>
+            <Button type="submit" variant="primary" size="sm" disabled={goalSaving || goalLoading} className="mt-3">
+              {goalSaving ? "Saving…" : "Save goal"}
+            </Button>
+          </form>
+
+          <form onSubmit={handleSave} className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-5">
+            <h2 className="text-[15px] font-semibold text-ink">Profile</h2>
+
+            <label className={LABEL}>
+              What you sell
+              <textarea
+                value={productDescription}
+                onChange={(e) => setProductDescription(e.target.value)}
+                required
+                rows={4}
+                className={cx(FIELD, "py-2.5 font-normal")}
+                placeholder="What your product does, and for whom."
               />
-              <select
-                value={tier.billing}
-                onChange={(e) => updateTier(index, { billing: e.target.value as PricingTier["billing"] })}
-                className="rounded-full bg-surface-sunken px-3 py-2.5 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-              >
-                <option value="monthly">Monthly</option>
-                <option value="annual">Annual</option>
-                <option value="custom">Custom</option>
-              </select>
-              <button
-                type="button"
-                onClick={() => setTiers((current) => current.filter((_, i) => i !== index))}
-                className="rounded-full px-3 text-ink-secondary hover:text-ink"
-                aria-label="Remove tier"
-              >
-                ✕
-              </button>
+            </label>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className={LABEL}>
+                Customer company size
+                <input
+                  value={icpCompanySize}
+                  onChange={(e) => setIcpCompanySize(e.target.value)}
+                  className={cx(FIELD, "h-11 font-normal")}
+                  placeholder="e.g. 50–250 employees"
+                />
+              </label>
+              <label className={LABEL}>
+                Who buys it
+                <input
+                  value={icpBuyerRole}
+                  onChange={(e) => setIcpBuyerRole(e.target.value)}
+                  className={cx(FIELD, "h-11 font-normal")}
+                  placeholder="e.g. Head of Product"
+                />
+              </label>
             </div>
-          ))}
-          <button
-            type="button"
-            onClick={() => setTiers((current) => [...current, { name: "", price: 0, billing: "monthly" }])}
-            className="self-start rounded-full bg-surface-sunken px-4 py-2 text-sm font-semibold text-accent hover:bg-accent-tint"
-          >
-            + Add tier
-          </button>
-        </div>
 
-        <div className="flex flex-col gap-2">
-          <p className="text-sm font-semibold text-ink">Primary competitors</p>
-          {competitors.length === 0 ? (
-            <p className="text-xs text-ink-secondary">Add competitors first, then flag the primary ones.</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {competitors.map((competitor) => {
-                const checked = primaryIds.includes(competitor.id);
-                return (
-                  <label
-                    key={competitor.id}
-                    className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors ${
-                      checked
-                        ? "border-accent bg-accent-tint text-accent"
-                        : "border-line bg-surface text-ink-secondary"
-                    }`}
+            <label className={LABEL}>
+              Industries you sell into
+              <input
+                value={icpIndustries}
+                onChange={(e) => setIcpIndustries(e.target.value)}
+                className={cx(FIELD, "h-11 font-normal")}
+                placeholder="SaaS, fintech, healthcare (comma-separated)"
+              />
+            </label>
+
+            <label className={LABEL}>
+              What makes you different
+              <input
+                value={differentiators}
+                onChange={(e) => setDifferentiators(e.target.value)}
+                className={cx(FIELD, "h-11 font-normal")}
+                placeholder="Faster onboarding, enterprise SSO (comma-separated)"
+              />
+            </label>
+
+            <fieldset className="flex flex-col gap-2">
+              <legend className="mb-1.5 text-[13px] font-semibold text-ink">Pricing tiers</legend>
+              {tiers.map((tier, index) => (
+                <div key={index} className="flex flex-wrap gap-2 sm:flex-nowrap">
+                  <input
+                    value={tier.name}
+                    onChange={(e) => updateTier(index, { name: e.target.value })}
+                    placeholder="Tier name"
+                    aria-label={`Tier ${index + 1} name`}
+                    className={cx(FIELD, "h-10 min-w-0 flex-1")}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    value={Number.isFinite(tier.price) ? tier.price : ""}
+                    onChange={(e) => updateTier(index, { price: Number(e.target.value) })}
+                    placeholder="Price"
+                    aria-label={`Tier ${index + 1} price`}
+                    className={cx(FIELD, "h-10 w-28")}
+                  />
+                  <select
+                    value={tier.billing}
+                    onChange={(e) => updateTier(index, { billing: e.target.value as PricingTier["billing"] })}
+                    aria-label={`Tier ${index + 1} billing`}
+                    className="h-10 rounded-[10px] border border-line-strong bg-surface px-3 text-[14px] text-ink focus:border-ink focus:outline-none"
                   >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => togglePrimary(competitor.id)}
-                      className="hidden"
-                    />
-                    {competitor.name}
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {message && <p className="text-sm text-ink-secondary">{message}</p>}
-        <button
-          type="submit"
-          disabled={saving}
-          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-        >
-          Save profile
-        </button>
-      </form>
-
-      {/* Documents */}
-      <section className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-ink">Documents</h2>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept={ACCEPTED_DOC_EXTENSIONS.join(",")}
-            className="hidden"
-            onChange={(e) => {
-              handleUpload(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="rounded-full bg-accent px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
-          >
-            {uploading ? "Uploading…" : "Upload documents"}
-          </button>
-        </div>
-        <p className="text-xs text-ink-secondary">
-          PDF, TXT, MD, DOC, DOCX, CSV, JSON, or RTF — up to {formatBytes(10 * 1024 * 1024)} each.
-          Structured content merges into your profile; narrative text is embedded for retrieval.
-        </p>
-        {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
-
-        {documents.length === 0 ? (
-          <p className="text-sm text-ink-secondary">No documents yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {documents.map((doc) => (
-              <li
-                key={doc.id}
-                className="flex items-center justify-between gap-4 rounded-[10px] bg-surface-sunken px-4 py-3"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink">{doc.filename}</p>
-                  <p className="text-xs text-ink-secondary">
-                    {doc.doc_type ?? "document"} · {new Date(doc.created_at).toLocaleDateString()}
-                  </p>
+                    <option value="monthly">Monthly</option>
+                    <option value="annual">Annual</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setTiers((current) => current.filter((_, i) => i !== index))}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-[10px] text-ink-muted hover:bg-surface-sunken hover:text-ink"
+                    aria-label={`Remove tier ${index + 1}`}
+                  >
+                    <Icon name="close" className="h-4 w-4" />
+                  </button>
                 </div>
-                <span
-                  className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                    STATUS_BADGE[doc.extraction_status] ?? "bg-surface-sunken text-ink-secondary"
-                  }`}
-                >
-                  {doc.extraction_status}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+              ))}
+              <Button
+                size="sm"
+                onClick={() => setTiers((current) => [...current, { name: "", price: 0, billing: "monthly" }])}
+                className="self-start"
+              >
+                <Icon name="plus" className="h-4 w-4" />
+                Add a tier
+              </Button>
+            </fieldset>
+
+            <fieldset>
+              <legend className="mb-2 text-[13px] font-semibold text-ink">Main competitors</legend>
+              {competitors.length === 0 ? (
+                <p className="text-[13.5px] text-ink-muted">Watch a competitor first, then mark the ones that matter most.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {competitors.map((competitor) => {
+                    const checked = primaryIds.includes(competitor.id);
+                    return (
+                      <label
+                        key={competitor.id}
+                        className={cx(
+                          "inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13.5px] font-semibold transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent",
+                          checked ? "border-ink bg-ink text-white" : "border-line-strong bg-surface text-ink hover:bg-surface-sunken"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => togglePrimary(competitor.id)}
+                          className="sr-only"
+                        />
+                        {checked ? <Icon name="check" className="h-3.5 w-3.5" /> : null}
+                        {competitor.name}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+
+            <Button type="submit" variant="primary" disabled={saving} className="self-start">
+              {saving ? "Saving…" : "Save profile"}
+            </Button>
+          </form>
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <GoalsList />
+
+          <section aria-labelledby="docs-heading" className="rounded-[14px] border border-line bg-surface p-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="docs-heading" className="text-[15px] font-semibold text-ink">
+                Documents
+              </h2>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_DOC_EXTENSIONS.join(",")}
+                className="hidden"
+                onChange={(e) => {
+                  handleUpload(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                <Icon name="upload" className="h-4 w-4" />
+                {uploading ? "Uploading…" : "Upload"}
+              </Button>
+            </div>
+            <p className="mt-1 text-[13px] text-ink-muted">
+              Decks, plans, pricing sheets. PDF, Word, text, CSV or JSON, up to {formatBytes(10 * 1024 * 1024)} each.
+            </p>
+            {uploadError && (
+              <p role="alert" className="mt-2 text-[13.5px] text-status-critical">
+                {uploadError}
+              </p>
+            )}
+
+            {documents.length === 0 ? (
+              <div className="mt-4 rounded-[10px] border border-dashed border-line-strong px-4 py-6 text-center">
+                <p className="text-[14px] font-semibold text-ink">No documents yet</p>
+                <p className="mt-1 text-[13px] text-ink-muted">Signal reads what you upload and fills in your profile.</p>
+              </div>
+            ) : (
+              <ul className="mt-4 flex flex-col gap-2">
+                {documents.map((doc) => {
+                  const status = DOC_STATUS[doc.extraction_status] ?? { label: doc.extraction_status, tone: "neutral" as const };
+                  return (
+                    <li key={doc.id} className="flex items-center justify-between gap-3 rounded-[10px] bg-sky px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-[14px] font-semibold text-ink">{doc.filename}</p>
+                        <p className="text-[12.5px] text-ink-muted">
+                          {doc.doc_type ?? "Document"} · {formatDate(String(doc.created_at))}
+                        </p>
+                      </div>
+                      <Badge tone={status.tone}>{status.label}</Badge>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        </div>
+      </div>
     </div>
   );
 }

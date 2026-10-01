@@ -3,6 +3,9 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import { getWorkspace, renameWorkspace, type Workspace } from "@/lib/api";
+import { SettingsAreaTabs } from "@/components/area-tabs";
+import { Button, LoadingRows, PageHeader, TextInput } from "@/components/ui/primitives";
+import type { ReactNode } from "react";
 
 export function SettingsClient() {
   const router = useRouter();
@@ -99,127 +102,96 @@ export function SettingsClient() {
     router.refresh();
   }
 
+  const header = (
+    <PageHeader
+      title="Settings"
+      description="Your account, your company's name in Signal, and sign-in."
+      action={<SettingsAreaTabs active="settings" />}
+    />
+  );
+
   if (loading) {
-    return <p className="text-sm text-ink-secondary">Loading account…</p>;
+    return (
+      <div>
+        {header}
+        <LoadingRows rows={3} />
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-1">
-        <h1 className=" text-4xl font-semibold tracking-[-0.035em] text-ink">
-          Settings
-        </h1>
-        <p className="text-sm text-ink-secondary">Your account, company, and security.</p>
-      </div>
+    <div>
+      {header}
 
       {message && (
         <p
-          className={`max-w-2xl rounded-[10px] px-4 py-3 text-sm ${
-            message.kind === "ok" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
-          }`}
+          role={message.kind === "error" ? "alert" : "status"}
+          className={
+            message.kind === "ok"
+              ? "mb-4 max-w-2xl rounded-[10px] bg-tint-mint px-4 py-3 text-[14px] text-outcome-hit"
+              : "mb-4 max-w-2xl rounded-[10px] bg-tint-rose px-4 py-3 text-[14px] text-status-critical"
+          }
         >
           {message.text}
         </p>
       )}
 
-      {/* Account */}
-      <form
-        onSubmit={saveName}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
-      >
-        <h2 className="text-sm font-semibold text-ink">Account</h2>
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          Email
-          <input
-            value={email}
-            disabled
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink-secondary opacity-70"
-          />
-        </label>
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          Display name
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy}
-          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-        >
-          Save name
-        </button>
-      </form>
+      <div className="flex max-w-2xl flex-col gap-4">
+        <Section title="Account" onSubmit={saveName}>
+          <TextInput label="Email" value={email} disabled readOnly />
+          <TextInput label="Display name" value={name} onChange={(e) => setName(e.target.value)} />
+          <Button type="submit" variant="primary" size="sm" disabled={busy} className="self-start">
+            Save name
+          </Button>
+        </Section>
 
-      {/* Workspace / company name */}
-      <form
-        onSubmit={saveWorkspaceName}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
-      >
-        <h2 className="text-sm font-semibold text-ink">Company</h2>
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          Company name
-          <input
-            value={workspaceName}
-            onChange={(e) => setWorkspaceName(e.target.value)}
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy || !workspace}
-          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-        >
-          Save company name
-        </button>
-      </form>
+        <Section title="Company" onSubmit={saveWorkspaceName}>
+          <TextInput label="Company name" value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} />
+          <Button type="submit" variant="primary" size="sm" disabled={busy || !workspace} className="self-start">
+            Save company name
+          </Button>
+        </Section>
 
-      {/* Security */}
-      <form
-        onSubmit={savePassword}
-        className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8"
-      >
-        <h2 className="text-sm font-semibold text-ink">Security</h2>
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          New password
-          <input
+        <Section title="Password" onSubmit={savePassword}>
+          <TextInput
+            label="New password"
             type="password"
+            autoComplete="new-password"
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
             placeholder="At least 6 characters"
           />
-        </label>
-        <label className="flex flex-col gap-2 text-sm font-semibold text-ink">
-          Confirm password
-          <input
+          <TextInput
+            label="Confirm password"
             type="password"
+            autoComplete="new-password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
-            className="rounded-full bg-surface-sunken px-4 py-3 text-sm font-normal text-ink outline-none focus:bg-accent-tint"
           />
-        </label>
-        <button
-          type="submit"
-          disabled={busy}
-          className="self-start rounded-lg bg-accent px-6 py-3 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
-        >
-          Update password
-        </button>
-      </form>
+          <Button type="submit" variant="primary" size="sm" disabled={busy} className="self-start">
+            Update password
+          </Button>
+        </Section>
 
-      {/* Session */}
-      <div className="flex max-w-2xl flex-col gap-4 rounded-[10px] border border-line bg-surface p-8">
-        <h2 className="text-sm font-semibold text-ink">Session</h2>
-        <button
-          onClick={signOut}
-          className="self-start rounded-full border border-red-200 bg-red-50 px-6 py-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100"
-        >
-          Sign out
-        </button>
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-line bg-surface p-5">
+          <div>
+            <h2 className="text-[15px] font-semibold text-ink">Sign out</h2>
+            <p className="mt-0.5 text-[13.5px] text-ink-muted">Signed in as {email || "you"}.</p>
+          </div>
+          <Button variant="danger" size="sm" onClick={signOut}>
+            Sign out
+          </Button>
+        </section>
       </div>
     </div>
+  );
+}
+
+function Section({ title, onSubmit, children }: { title: string; onSubmit: (event: FormEvent) => void; children: ReactNode }) {
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-5">
+      <h2 className="text-[15px] font-semibold text-ink">{title}</h2>
+      {children}
+    </form>
   );
 }
