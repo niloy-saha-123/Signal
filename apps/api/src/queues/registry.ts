@@ -70,6 +70,7 @@ export type QueueName =
   | "collect-website"
   | "collect-community"
   | "collect-postings"
+  | "collect-news"
   | "pipeline-entity-extraction"
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
@@ -210,6 +211,7 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "collect-website": COLLECTOR_CONFIG,
   "collect-community": COLLECTOR_CONFIG,
   "collect-postings": COLLECTOR_CONFIG,
+  "collect-news": COLLECTOR_CONFIG,
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,

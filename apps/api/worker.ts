@@ -10,6 +10,7 @@ import { initChangelogWorker, initPostingsWorker } from "./src/collectors/change
 import { initPricingWorker } from "./src/collectors/pricing";
 import { initGithubWorker } from "./src/collectors/github";
 import { initWebsiteWorker } from "./src/collectors/website";
+import { initNewsWorker } from "./src/collectors/news";
 import { initCommunityWorker } from "./src/collectors/community";
 import { initEntityExtractorWorker } from "./src/pipeline/entity-extractor";
 import { initQualityScorerWorker } from "./src/pipeline/quality-scorer";
@@ -69,6 +70,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initWebsiteWorker,
         initCommunityWorker,
         initPostingsWorker,
+        initNewsWorker,
         initEntityExtractorWorker,
         initQualityScorerWorker,
         initDeduplicatorWorker,

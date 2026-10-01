@@ -1,6 +1,6 @@
 // Cron schedule and per-queue rate-limit configuration for BullMQ.
 //
-// Only the 9 `collect-*` queues plus `pipeline-recovery` run on a schedule —
+// Only the `collect-*` queues plus `pipeline-recovery` run on a schedule —
 // competitor-discovery and company-profile-update are triggered by their API
 // routes, never cron'd (see registry.ts's queue doc comments). Collector queue
 // names are derived from registry.ts's QUEUE_CONFIG keys rather than
@@ -27,6 +27,8 @@ const COLLECTOR_DEFAULT_HOURS: Partial<Record<QueueName, number>> = {
   "collect-website": 24,
   "collect-community": 12,
   "collect-postings": 12,
+  // Press moves in hours and funding/launch news is time-sensitive.
+  "collect-news": 6,
 };
 
 export const COLLECTOR_QUEUE_NAMES: QueueName[] = (Object.keys(QUEUE_CONFIG) as QueueName[]).filter(
