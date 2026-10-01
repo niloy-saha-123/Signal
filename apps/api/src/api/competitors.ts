@@ -586,7 +586,7 @@ export function createCompetitorRouter(
       let pageText: string | null = null;
       if (url) {
         try {
-          pageText = (await deps.fetchPublicPageText(url, "field:fetch_url")) || null;
+          pageText = (await deps.fetchPublicPageText(url, `field:fetch_url:${req.workspaceId}`)) || null;
         } catch (err) {
           logger.warn("field intel page fetch failed — saving the note alone", {
             competitor_id: id,

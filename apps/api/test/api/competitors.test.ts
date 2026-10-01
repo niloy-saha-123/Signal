@@ -716,7 +716,7 @@ describe("POST /api/competitors/:id/field-intel", () => {
     });
     expect(res.status).toBe(201);
     expect(res.body.fetched).toBe(true);
-    expect(deps.fetchPublicPageText).toHaveBeenCalledWith("https://kestrel.dev/pricing", "field:fetch_url");
+    expect(deps.fetchPublicPageText).toHaveBeenCalledWith("https://kestrel.dev/pricing", `field:fetch_url:${WS_UUID}`);
     const signal = (deps.createSignal as any).mock.calls[0][0];
     expect(signal.source_url).toBe("https://kestrel.dev/pricing");
     expect(signal.raw_text).toContain("Linked page (https://kestrel.dev/pricing):\nKestrel doubled");
