@@ -112,7 +112,6 @@
   font-weight: 500;
   letter-spacing: -0.04em;
   line-height: 0.9;
-  color: var(--color-ink);
 }
 
 /* The headline highlight. Ink on sun; never sun on anything. */
