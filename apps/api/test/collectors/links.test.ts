@@ -37,6 +37,19 @@ describe("extractLinks", () => {
     });
   });
 
+  it("survives a malformed tag escape and ignores reserved/non-Mastodon paths", () => {
+    const html = `<a href="https://stackoverflow.com/questions/tagged/%E0%A4%A">x</a>
+<a href="https://medium.com/about">m</a><a href="https://dev.to/t">d</a>
+<a rel="me" href="https://instagram.com/@kestrel">i</a>
+<a href="https://bsky.app/profile/Kestrel.Dev">b</a>`;
+    expect(extractLinks(html, "https://kestrel.dev/")).toEqual({
+      blog_feeds: [],
+      social_feeds: [],
+      bluesky_handle: "kestrel.dev",
+      stackoverflow_tag: null,
+    });
+  });
+
   it("returns empty for an empty page", () => {
     expect(extractLinks("", "https://kestrel.dev/")).toEqual({
       blog_feeds: [],

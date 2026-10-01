@@ -13,7 +13,13 @@ const MAX_PER_LIST = 10;
 const BSKY_HANDLE = /^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 const SO_TAG = /^[a-z0-9][a-z0-9.#+-]{0,34}$/;
 // Hosts that use /@user paths but are not Mastodon.
-const NOT_MASTODON = ["medium.com", "youtube.com", "x.com", "twitter.com", "tiktok.com", "threads.net"];
+const NOT_MASTODON = [
+  "medium.com", "youtube.com", "x.com", "twitter.com", "tiktok.com", "threads.net",
+  "instagram.com", "linkedin.com", "threads.com", "facebook.com", "github.com",
+  "bsky.social", "bsky.app", "tumblr.com",
+];
+const MEDIUM_RESERVED = new Set(["about", "membership", "plans", "jobs", "m", "tag", "topics", "search", "me", "creators"]);
+const DEVTO_RESERVED = new Set(["about", "t", "tags", "top", "search", "settings", "enter", "faq"]);
 
 function resolve(href: string | undefined, base: string): URL | null {
   if (!href) return null;
@@ -57,12 +63,12 @@ export function extractLinks(html: string, pageUrl: string): DiscoveredLinks {
     }
     if (hostIs(url, "bsky.app")) {
       const handle = /^\/profile\/([^/]+)$/.exec(path)?.[1];
-      if (!bluesky && handle && BSKY_HANDLE.test(handle)) bluesky = handle;
+      if (!bluesky && handle && BSKY_HANDLE.test(handle)) bluesky = handle.toLowerCase();
       return;
     }
     if (hostIs(url, "medium.com")) {
       const seg = /^\/(@?[A-Za-z0-9_.-]+)$/.exec(path)?.[1];
-      if (seg) blog.add(`https://medium.com/feed/${seg}`);
+      if (seg && !MEDIUM_RESERVED.has(seg)) blog.add(`https://medium.com/feed/${seg}`);
       return;
     }
     if (url.hostname.toLowerCase().endsWith(".hashnode.dev")) {
@@ -71,12 +77,17 @@ export function extractLinks(html: string, pageUrl: string): DiscoveredLinks {
     }
     if (hostIs(url, "dev.to")) {
       const seg = /^\/([A-Za-z0-9_-]+)$/.exec(path)?.[1];
-      if (seg) blog.add(`https://dev.to/feed/${seg}`);
+      if (seg && !DEVTO_RESERVED.has(seg)) blog.add(`https://dev.to/feed/${seg}`);
       return;
     }
     if (hostIs(url, "stackoverflow.com")) {
       const tag = /^\/questions\/tagged\/([^/]+)$/.exec(path)?.[1];
-      const decoded = tag ? decodeURIComponent(tag) : null;
+      let decoded: string | null = null;
+      try {
+        decoded = tag ? decodeURIComponent(tag) : null;
+      } catch {
+        // Malformed escape: skip the tag rather than fail the whole scan.
+      }
       if (!soTag && decoded && SO_TAG.test(decoded)) soTag = decoded;
       return;
     }

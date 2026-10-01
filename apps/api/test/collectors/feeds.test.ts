@@ -58,7 +58,7 @@ vi.mock("rss-parser", () => ({
   },
 }));
 
-import { isCircuitOpen, recordFailure } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import { feedsCollectorProcessor, initFeedsWorker } from "@/collectors/feeds";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -156,7 +156,7 @@ describe("collectors/feeds", () => {
     expect(saveDiscoveredLinksMock).toHaveBeenCalledWith("c1", {});
   });
 
-  it("blog sweep continues past a failing feed and records the failure", async () => {
+  it("blog sweep continues past a failing feed without recording a failure", async () => {
     listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed", "https://b.example/feed"] })]);
     safeFetchMock.mockImplementation(async (url: string) => {
       if (url.startsWith("https://a.example")) throw new Error("boom");
@@ -168,6 +168,15 @@ describe("collectors/feeds", () => {
 
     expect(createSignalMock).toHaveBeenCalledTimes(1);
     expect(createSignalMock).toHaveBeenCalledWith(expect.objectContaining({ source: "blog" }));
+    expect(recordFailure).not.toHaveBeenCalledWith("blog", expect.anything());
+    expect(recordSuccess).toHaveBeenCalledWith("blog");
+  });
+
+  it("records a blog failure when all of a competitor's feeds fail", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed", "https://b.example/feed"] })]);
+    safeFetchMock.mockRejectedValue(new Error("boom"));
+    await feedsCollectorProcessor({} as never);
+    expect(createSignalMock).not.toHaveBeenCalled();
     expect(recordFailure).toHaveBeenCalledWith("blog", expect.any(String));
   });
 

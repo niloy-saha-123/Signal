@@ -64,7 +64,10 @@ async function collectFeeds(
       });
     }
   }
-  if (failed > 0) throw new Error(`${failed} of ${urls.length} ${source} feeds failed`);
+  // Auto-discovered feeds are speculative and circuits are shared across
+  // workspaces: one dead feed must not count against the source, only a
+  // competitor whose feeds all failed.
+  if (failed === urls.length) throw new Error(`${failed} of ${urls.length} ${source} feeds failed`);
 }
 
 const nonEmpty = (urls: string[]) => (urls.length ? urls : null);
