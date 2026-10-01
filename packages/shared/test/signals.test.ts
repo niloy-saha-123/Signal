@@ -320,6 +320,11 @@ describe("v5 sources", () => {
     expect(CompetitorSourceConfigSchema.safeParse({ [field]: value }).success).toBe(false);
   });
 
+  it("lowercases bluesky_handle", () => {
+    const parsed = CompetitorSourceConfigSchema.safeParse({ bluesky_handle: " Kestrel.Dev " });
+    expect(parsed.success && parsed.data.bluesky_handle).toBe("kestrel.dev");
+  });
+
   it("allows clearing bluesky_handle / forum_feeds on patch", () => {
     expect(
       CompetitorSourceConfigSchema.safeParse({ bluesky_handle: null, forum_feeds: [] }).success

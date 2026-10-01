@@ -61,6 +61,7 @@ const sourceConfigFields = {
   bluesky_handle: z
     .string()
     .trim()
+    .toLowerCase()
     .max(253)
     .regex(/^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/, "must be a Bluesky handle"),
   stackoverflow_tag: z.string().trim().regex(/^[a-z0-9][a-z0-9.#+-]{0,34}$/, "must be a Stack Overflow tag"),
