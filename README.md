@@ -174,7 +174,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 
 | | |
 |---|---|
-| **Next.js** | Landing, auth, Briefing, Alerts, Predictions (`/forecast`), Scorecard, Signal feed (`/intel`), Radar, Discovery, Chat, Company, Agent activity, Settings. Design system in [`DESIGN.md`](DESIGN.md) |
+| **Next.js** | Landing, auth and 3-step onboarding, then six areas: Home (`/briefing`), Forecasts (`/forecast`, `/scorecard`), Competitors (`/board`, `/discovery`, profile `/radar/[id]`), Evidence (`/intel`, `/alerts`), Ask Signal (`/chat` + slide-over panel with the Sig mascot), Your company (`/company`, `/company/compare`); Settings and Activity in the footer. Design system v5 in [`DESIGN.md`](DESIGN.md) |
 | **Recharts** | Signal Score sparklines, mention volume trends, sentiment over time, department hiring charts |
 | **Socket.io client** | Real-time alert display |
 
