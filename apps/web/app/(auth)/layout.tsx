@@ -1,40 +1,47 @@
 import Link from "next/link";
 
-import { SignalMark } from "@/components/landing/SignalMark";
-import { SignalTrace } from "@/components/landing/SignalTrace";
+import { Isobars } from "@/components/brand/Isobars";
+import { Sig } from "@/components/brand/Sig";
+import { Wordmark } from "@/components/brand/Wordmark";
 
 // Split layout for login, signup and onboarding. The form column is the only
-// thing that has to work; the right-hand panel is atmosphere, hidden below
-// `lg` so a phone gets the form and nothing competing with it.
-//
-// No testimonial or customer quote on the panel — there are no customers to
-// quote, and an invented one on a sign-in page is exactly the kind of claim
-// this product refuses to make.
+// thing that has to work; the right-hand panel is atmosphere, hidden below `lg`
+// so a phone gets the form and nothing competing with it. No testimonial: there
+// are no customers to quote, and an invented one is exactly the claim this
+// product refuses to make.
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid min-h-screen bg-ground lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <div className="flex flex-col px-5 py-8 sm:px-10">
+    <div className="grid min-h-screen bg-surface lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="flex flex-col px-5 py-7 sm:px-10">
         <Link href="/" aria-label="Signal home" className="w-fit">
-          <SignalMark />
+          <Wordmark size={28} />
         </Link>
         <div className="flex flex-1 items-center justify-center py-10">
-          <div className="w-full max-w-sm">{children}</div>
+          <div className="w-full max-w-[420px]">{children}</div>
         </div>
-        <p className="text-[12px] text-ink-muted">Probabilities, never certainties.</p>
+        <p className="text-[13px] text-ink-muted">Probabilities, never certainties.</p>
       </div>
 
-      <div className="relative hidden overflow-hidden border-l border-line bg-[var(--color-tint-teal)] lg:block">
-        <div aria-hidden="true" className="grid-backdrop absolute inset-0" />
-        <SignalTrace className="absolute inset-x-0 top-1/2 h-[520px] w-full -translate-y-1/2" />
-        <div className="absolute inset-x-12 bottom-12">
-          <p className="max-w-md text-[26px] leading-tight font-semibold tracking-[-0.025em] text-ink">
-            Know what your competitors ship{" "}
-            <span className="text-ink-muted">before they announce it.</span>
+      <div className="relative hidden overflow-hidden bg-sky lg:flex lg:flex-col lg:justify-center lg:px-16">
+        <Isobars />
+        <div className="relative max-w-[440px]">
+          <Sig mood="happy" size={64} decorative />
+          <p className="mt-6 font-display text-[40px] leading-[1.02] font-semibold tracking-[-0.035em] text-ink">
+            The weather forecast for your <span className="sun-mark">competitors.</span>
           </p>
-          <p className="mt-4 max-w-sm text-[14px] leading-relaxed text-ink-secondary">
-            Every prediction is dated, carries a probability, and is scored when it resolves
-            &mdash; whether it was right or not.
-          </p>
+          <div className="mt-8 rounded-[20px] bg-surface p-5 shadow-[var(--shadow-window)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[13px] font-semibold text-ink-muted">Kestrel · forecast</p>
+                <p className="mt-1 text-[16px] font-semibold text-ink">Ships a managed Postgres adapter by Dec 15</p>
+              </div>
+              <span className="metric text-[40px]">72%</span>
+            </div>
+            <p className="mt-3 text-[13px] text-ink-secondary">
+              Six independent sources. Scored automatically when the date arrives.
+            </p>
+          </div>
+          <p className="mt-3 text-[12.5px] text-ink-muted">Illustrative, with a fictional company.</p>
         </div>
       </div>
     </div>

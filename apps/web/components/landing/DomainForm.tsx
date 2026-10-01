@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useId, useState, type FormEvent } from "react";
 import { normalizeDomain } from "@/lib/domain";
+import { rememberPendingCompetitor } from "@/lib/pending-competitor";
 
 // The hero's call to action is the product's first move: name a competitor.
 // The domain rides along to sign-up so onboarding can start from it.
@@ -21,6 +22,7 @@ export function DomainForm({ cta = "Get their forecast", note }: { cta?: string;
       return;
     }
     setError(null);
+    rememberPendingCompetitor(domain);
     router.push(`/signup?domain=${encodeURIComponent(domain)}`);
   }
 
