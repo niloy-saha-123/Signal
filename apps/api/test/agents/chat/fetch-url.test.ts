@@ -15,7 +15,7 @@ vi.mock("@/agents/chat/input-budget", () => ({
   consumeChatInputBudget: (...args: unknown[]) => consumeBudgetMock(...args),
 }));
 
-import { FetchUrlError, fetchUrlPage, isVideoHost } from "@/agents/chat/fetch-url";
+import { FetchUrlError, fetchPublicPageText, fetchUrlPage, isVideoHost } from "@/agents/chat/fetch-url";
 
 const PUBLIC_ANSWER = [{ address: "93.184.216.34", family: 4 }];
 const WORKSPACE_ID = "00000000-0000-4000-8000-000000000000";
@@ -157,5 +157,36 @@ describe("agents/chat/fetch-url — fetchUrlPage", () => {
     await expect(fetchUrlPage("https://acme.com/api/plan", WORKSPACE_ID)).resolves.toBe(
       '{"plan":"pro"}'
     );
+  });
+});
+
+describe("agents/chat/fetch-url — fetchPublicPageText", () => {
+  beforeEach(() => {
+    lookupMock.mockResolvedValue(PUBLIC_ANSWER);
+    consumeBudgetMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("fetches and extracts text without touching the chat budget", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => htmlResponse("<html><body><main>Pricing doubled</main></body></html>"))
+    );
+    await expect(fetchPublicPageText("https://example.com/post", "field:fetch_url")).resolves.toBe(
+      "Pricing doubled"
+    );
+    expect(consumeBudgetMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses private addresses and video hosts", async () => {
+    lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
+    await expect(fetchPublicPageText("https://intranet.example/x", "field:fetch_url")).rejects.toMatchObject({
+      code: "ssrf",
+    });
+    // Video check runs after the address check, so the host must resolve publicly.
+    lookupMock.mockResolvedValue(PUBLIC_ANSWER);
+    await expect(fetchPublicPageText("https://youtu.be/abc", "field:fetch_url")).rejects.toMatchObject({
+      code: "video",
+    });
   });
 });

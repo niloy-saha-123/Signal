@@ -68,6 +68,11 @@ function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDep
     failRunIfRunning: vi.fn(async () => undefined) as any,
     enqueue: vi.fn(async () => undefined),
     isPublicHostname: vi.fn(async () => true),
+    signalExistsBySourceUrl: vi.fn(async () => false) as any,
+    createSignal: vi.fn(async () => ({ id: "sig-1" })) as any,
+    enqueueInitialSignalPipeline: vi.fn(async () => undefined) as any,
+    fetchPublicPageText: vi.fn(async () => "Kestrel doubled its Team plan price.") as any,
+    consumeBudget: vi.fn(async () => undefined) as any,
     ...over,
   };
 }
@@ -646,5 +651,95 @@ describe("GET /api/competitors/:id/hiring", () => {
     const res = await call(app(makeDeps()), "GET", `/api/competitors/${UUID}/hiring`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ data: [] });
+  });
+});
+
+describe("POST /api/competitors/:id/field-intel", () => {
+  const path = `/api/competitors/${UUID}/field-intel`;
+
+  it("rejects requests without a workspace", async () => {
+    const res = await call(
+      appWithUser({ id: USER_UUID, workspaceId: null }, createCompetitorRouter(makeDeps())),
+      "POST",
+      path,
+      { note: "x" }
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("404s for another workspace's competitor", async () => {
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
+    const res = await call(app(deps), "POST", path, { note: "Lost a deal" });
+    expect(res.status).toBe(404);
+    expect(deps.createSignal).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { note: "" }, { note: "x", url: "javascript:alert(1)" }, { note: "x", extra: 1 }])(
+    "400s on %j",
+    async (body) => {
+      expect((await call(app(makeDeps()), "POST", path, body)).status).toBe(400);
+    }
+  );
+
+  it("429s when the workspace budget is spent", async () => {
+    const deps = makeDeps({ consumeBudget: vi.fn(async () => { throw new Error("limit"); }) as any });
+    const res = await call(app(deps), "POST", path, { note: "Lost a deal" });
+    expect(res.status).toBe(429);
+    expect(deps.createSignal).not.toHaveBeenCalled();
+  });
+
+  it("saves a note-only submission", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "POST", path, { note: "Lost a deal to them on SSO\nmore" });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ signal_id: "sig-1", fetched: false });
+    expect(deps.fetchPublicPageText).not.toHaveBeenCalled();
+    expect(deps.createSignal).toHaveBeenCalledWith({
+      competitor_id: UUID,
+      source: "field",
+      source_url: null,
+      title: "Lost a deal to them on SSO",
+      raw_text: "Teammate note: Lost a deal to them on SSO\nmore",
+    });
+    expect(deps.enqueueInitialSignalPipeline).toHaveBeenCalledWith("sig-1");
+  });
+
+  it("stores the fetched page with the note", async () => {
+    const deps = makeDeps();
+    const res = await call(app(deps), "POST", path, {
+      note: "Their pricing page",
+      url: "https://kestrel.dev/pricing",
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.fetched).toBe(true);
+    expect(deps.fetchPublicPageText).toHaveBeenCalledWith("https://kestrel.dev/pricing", "field:fetch_url");
+    const signal = (deps.createSignal as any).mock.calls[0][0];
+    expect(signal.source_url).toBe("https://kestrel.dev/pricing");
+    expect(signal.raw_text).toContain("Linked page (https://kestrel.dev/pricing):\nKestrel doubled");
+  });
+
+  it("still saves the note when the page cannot be fetched (private address, video host, outage)", async () => {
+    const deps = makeDeps({
+      fetchPublicPageText: vi.fn(async () => { throw new Error("domain resolves to a non-public address"); }) as any,
+    });
+    const res = await call(app(deps), "POST", path, { note: "See this", url: "https://intranet.kestrel.dev/x" });
+    expect(res.status).toBe(201);
+    expect(res.body.fetched).toBe(false);
+    expect((deps.createSignal as any).mock.calls[0][0].raw_text).toBe("Teammate note: See this");
+  });
+
+  it("409s on a URL already submitted for this competitor", async () => {
+    const deps = makeDeps({ signalExistsBySourceUrl: vi.fn(async () => true) as any });
+    const res = await call(app(deps), "POST", path, { note: "dup", url: "https://kestrel.dev/pricing" });
+    expect(res.status).toBe(409);
+    expect(deps.fetchPublicPageText).not.toHaveBeenCalled();
+  });
+
+  it("returns 201 even if enqueueing fails — the outbox row recovers it", async () => {
+    const deps = makeDeps({
+      enqueueInitialSignalPipeline: vi.fn(async () => { throw new Error("redis down"); }) as any,
+    });
+    const res = await call(app(deps), "POST", path, { note: "Lost a deal" });
+    expect(res.status).toBe(201);
   });
 });

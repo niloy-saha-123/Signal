@@ -18,13 +18,22 @@
 //   (ordered by discovered_at) — one row per field CompetitorDiscoveryAgent
 //   attempted, with what it tried and what it found (or didn't). Polled by
 //   DiscoveryStatus.tsx every 3s while discovery_status is pending/in_progress.
+//
+// POST /competitors/:id/field-intel — teammate link/note → a 'field' signal.
 import express, { Router } from "express";
 import { z } from "zod";
-import { CompetitorCreateInputSchema, SignalScoreComponentsSchema } from "@signal/shared";
+import {
+  CompetitorCreateInputSchema,
+  FieldIntelInputSchema,
+  SignalScoreComponentsSchema,
+} from "@signal/shared";
 import * as queries from "../db/queries";
 import { isPublicHostname } from "../lib/safe-fetch";
 import { queues, type QueueName } from "../queues/registry";
 import { logger } from "../lib/logger";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
+import { fetchPublicPageText } from "../agents/chat/fetch-url";
+import { consumeChatInputBudget } from "../agents/chat/input-budget";
 import { wrap, fallbackErrorHandler, requireUuidParam } from "./http";
 
 // getLatestSignalScores takes a row-count limit, not a day range — one row per day in
@@ -139,6 +148,11 @@ export interface CompetitorRouterDeps {
   failRunIfRunning: typeof queries.failRunIfRunning;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
   isPublicHostname: typeof isPublicHostname;
+  signalExistsBySourceUrl: typeof queries.signalExistsBySourceUrl;
+  createSignal: typeof queries.createSignal;
+  enqueueInitialSignalPipeline: typeof enqueueInitialSignalPipeline;
+  fetchPublicPageText: typeof fetchPublicPageText;
+  consumeBudget: typeof consumeChatInputBudget;
 }
 
 export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
@@ -154,7 +168,20 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   failRunIfRunning: queries.failRunIfRunning,
   enqueue: (queue, data) => queues[queue].add(queue, data),
   isPublicHostname,
+  signalExistsBySourceUrl: queries.signalExistsBySourceUrl,
+  createSignal: queries.createSignal,
+  enqueueInitialSignalPipeline,
+  fetchPublicPageText,
+  consumeBudget: consumeChatInputBudget,
 };
+
+const FIELD_PAGE_MAX_CHARS = 12_000;
+
+function fieldIntelText(note: string, url: string | undefined, pageText: string | null): string {
+  const parts = [`Teammate note: ${note}`];
+  if (url && pageText) parts.push(`Linked page (${url}):\n${pageText.slice(0, FIELD_PAGE_MAX_CHARS)}`);
+  return parts.join("\n\n");
+}
 
 const CreateBodySchema = CompetitorCreateInputSchema.strict();
 
@@ -492,6 +519,69 @@ export function createCompetitorRouter(
       }
 
       res.status(202).json({ run_id: run.id, status: "running" });
+    })
+  );
+
+  router.post(
+    "/:id/field-intel",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (id === null) return;
+      const parsed = FieldIntelInputSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
+      if (!competitor) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      try {
+        await deps.consumeBudget("field_intel", req.workspaceId!);
+      } catch {
+        res.status(429).json({ error: "rate_limited" });
+        return;
+      }
+
+      const { note, url } = parsed.data;
+      if (url && (await deps.signalExistsBySourceUrl(id, "field", url))) {
+        res.status(409).json({ error: "duplicate_url" });
+        return;
+      }
+
+      // The note is the teammate's evidence; the page is context. A page that
+      // can't be fetched (private host, video, outage) never loses the note.
+      let pageText: string | null = null;
+      if (url) {
+        try {
+          pageText = (await deps.fetchPublicPageText(url, "field:fetch_url")) || null;
+        } catch (err) {
+          logger.warn("field intel page fetch failed — saving the note alone", {
+            competitor_id: id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const signal = await deps.createSignal({
+        competitor_id: id,
+        source: "field",
+        source_url: url ?? null,
+        title: note.split("\n")[0].slice(0, 120),
+        raw_text: fieldIntelText(note, url, pageText),
+      });
+      try {
+        await deps.enqueueInitialSignalPipeline(signal.id);
+      } catch (err) {
+        // createSignal wrote the outbox row in the same transaction;
+        // pipeline-recovery re-enqueues it.
+        logger.error("Failed to enqueue field intel pipeline — recovery will retry", {
+          signal_id: signal.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      res.status(201).json({ signal_id: signal.id, fetched: pageText !== null });
     })
   );
 

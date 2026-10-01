@@ -79,15 +79,11 @@ function toText(contentType: string, body: string): string {
   return body;
 }
 
-export async function fetchUrlPage(url: string, workspaceId: string): Promise<string> {
+// Shared page fetcher for any user-supplied URL (chat fetch_url, field intel).
+// Callers own their own rate budget; the circuit is per caller.
+export async function fetchPublicPageText(url: string, circuit: string): Promise<string> {
   await assertFetchableUrl(url);
-  try {
-    await consumeChatInputBudget("fetch_url", workspaceId);
-  } catch (err) {
-    throw new FetchUrlError(err instanceof Error ? err.message : String(err), "budget");
-  }
-
-  const res = await withCircuitBreaker("chat:fetch_url", () =>
+  const res = await withCircuitBreaker(circuit, () =>
     safeFetch(url, {
       signal: AbortSignal.timeout(FETCH_URL_TIMEOUT_MS),
       maxBytes: FETCH_URL_MAX_BYTES,
@@ -108,4 +104,15 @@ export async function fetchUrlPage(url: string, workspaceId: string): Promise<st
   }
 
   return toText(type, await res.text());
+}
+
+export async function fetchUrlPage(url: string, workspaceId: string): Promise<string> {
+  // Checked before the budget so a refused URL doesn't spend a slot.
+  await assertFetchableUrl(url);
+  try {
+    await consumeChatInputBudget("fetch_url", workspaceId);
+  } catch (err) {
+    throw new FetchUrlError(err instanceof Error ? err.message : String(err), "budget");
+  }
+  return fetchPublicPageText(url, "chat:fetch_url");
 }
