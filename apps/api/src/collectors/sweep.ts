@@ -95,3 +95,8 @@ export async function runSourceSweep<T>(
     throw err;
   }
 }
+
+// A rejected competitor config (e.g. a bad handle): retrying can't fix it and
+// it says nothing about the source's health, so callers warn instead of
+// charging the circuit.
+export class ConfigError extends Error {}

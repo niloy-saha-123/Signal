@@ -178,6 +178,8 @@ const OTHER_QUEUES: QueueName[] = [
   "collect-packages",
   "collect-docs",
   "collect-feeds",
+  "collect-bluesky",
+  "collect-stackoverflow",
   "pipeline-entity-extraction",
   "pipeline-quality-scoring",
   "pipeline-deduplication",
