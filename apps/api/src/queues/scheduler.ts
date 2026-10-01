@@ -33,6 +33,8 @@ const COLLECTOR_DEFAULT_HOURS: Partial<Record<QueueName, number>> = {
   "collect-packages": 12,
   // Docs sitemaps change at release pace; daily diffs catch every new page.
   "collect-docs": 24,
+  // Blogs, social feeds and forums move daily at most.
+  "collect-feeds": 12,
 };
 
 export const COLLECTOR_QUEUE_NAMES: QueueName[] = (Object.keys(QUEUE_CONFIG) as QueueName[]).filter(

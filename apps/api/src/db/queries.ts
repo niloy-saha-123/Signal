@@ -2060,6 +2060,16 @@ export async function setCompetitorDocsSitemapUrl(id: string, url: string): Prom
     .where(and(eq(competitorsTable.id, id), isNull(competitorsTable.docs_sitemap_url)));
 }
 
+export async function saveDiscoveredLinks(
+  id: string,
+  patch: Partial<Pick<Competitor, "blog_feeds" | "social_feeds" | "bluesky_handle" | "stackoverflow_tag">>
+): Promise<void> {
+  await db
+    .update(competitorsTable)
+    .set({ ...patch, links_scanned_at: new Date(), updated_at: new Date() })
+    .where(eq(competitorsTable.id, id));
+}
+
 // R1: the synthetic own-company row derives `name` from workspaces.name
 // (falling back to the literal "Own Company" when unavailable) and `domain`
 // from a deterministic per-workspace placeholder `own-company.<workspace_id>.invalid`.

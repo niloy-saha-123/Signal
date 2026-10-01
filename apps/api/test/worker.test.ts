@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
     initNews: makeInit(),
     initPackages: makeInit(),
     initDocs: makeInit(),
+    initFeeds: makeInit(),
     initEntity: makeInit(),
     initQuality: makeInit(),
     initDedup: makeInit(),
@@ -49,6 +50,7 @@ vi.mock("@/collectors/jobs", () => ({ initJobsWorker: mocks.initJobs }));
 vi.mock("@/collectors/news", () => ({ initNewsWorker: mocks.initNews }));
 vi.mock("@/collectors/packages", () => ({ initPackagesWorker: mocks.initPackages }));
 vi.mock("@/collectors/docs", () => ({ initDocsWorker: mocks.initDocs }));
+vi.mock("@/collectors/feeds", () => ({ initFeedsWorker: mocks.initFeeds }));
 vi.mock("@/collectors/changelog", () => ({
   initChangelogWorker: mocks.initChangelog,
   initPostingsWorker: mocks.initPostings,
@@ -116,6 +118,7 @@ describe("standalone worker runtime", () => {
     expect(mocks.initNews).toHaveBeenCalledTimes(1);
     expect(mocks.initPackages).toHaveBeenCalledTimes(1);
     expect(mocks.initDocs).toHaveBeenCalledTimes(1);
+    expect(mocks.initFeeds).toHaveBeenCalledTimes(1);
     expect(mocks.initEntity).toHaveBeenCalledTimes(1);
     expect(mocks.initQuality).toHaveBeenCalledTimes(1);
     expect(mocks.initDedup).toHaveBeenCalledTimes(1);
@@ -128,7 +131,7 @@ describe("standalone worker runtime", () => {
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(24);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(25);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);

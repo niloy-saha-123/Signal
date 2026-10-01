@@ -13,6 +13,7 @@ import { initWebsiteWorker } from "./src/collectors/website";
 import { initNewsWorker } from "./src/collectors/news";
 import { initPackagesWorker } from "./src/collectors/packages";
 import { initDocsWorker } from "./src/collectors/docs";
+import { initFeedsWorker } from "./src/collectors/feeds";
 import { initCommunityWorker } from "./src/collectors/community";
 import { initEntityExtractorWorker } from "./src/pipeline/entity-extractor";
 import { initQualityScorerWorker } from "./src/pipeline/quality-scorer";
@@ -75,6 +76,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initNewsWorker,
         initPackagesWorker,
         initDocsWorker,
+        initFeedsWorker,
         initEntityExtractorWorker,
         initQualityScorerWorker,
         initDeduplicatorWorker,
