@@ -47,7 +47,9 @@ export const PREVIEW_ALERTS: Alert[] = [
     interpretation:
       "Related evidence shows Northstar separating self-serve from enterprise plans, with commercial hiring moving in the same direction.",
     vulnerability_window_days: 14,
-    recommended_actions: [],
+    recommended_actions: [
+      { action: "Check whether your own self-serve tier still covers the SSO and audit-log asks Northstar now gates." },
+    ],
     supporting_cluster_ids: [],
     delivered: true,
     created_at: now,
@@ -132,19 +134,25 @@ export const PREVIEW_SIGNALS: Signal[] = [
 export function previewBriefingProps() {
   const names = new Map(PREVIEW_COMPETITORS.map((item) => [item.id, item.name]));
   return {
-    highestScore: 82,
-    highestScoreDelta: 11,
-    highestScoreCompetitor: "Northstar",
-    movements: PREVIEW_ALERTS.slice(0, 3).map((alert) => ({
+    summary: { competitors_tracked: 2, signals_this_week: 37, open_alerts: 3, pending_candidates: 2 },
+    movements: PREVIEW_ALERTS.map((alert) => ({
       id: alert.id,
+      competitorId: alert.competitor_id,
       competitor: names.get(alert.competitor_id) ?? "Unknown",
-      title: alert.pattern.replace(/_/g, " "),
+      pattern: alert.pattern,
       detail: alert.interpretation,
-      category: alert.pattern.split("_")[0] ?? "signal",
-      timestamp: alert.created_at,
       confidence: alert.confidence,
+      timestamp: alert.created_at,
+      action: typeof alert.recommended_actions[0]?.action === "string" ? (alert.recommended_actions[0].action as string) : null,
     })),
-    competitors: PREVIEW_COMPETITORS,
+    pulse: [
+      { id: PREVIEW_NORTHSTAR_ID, name: "Northstar", score: 82, delta: 11 },
+      { id: PREVIEW_LUMEN_ID, name: "Lumen", score: 61, delta: -3 },
+    ],
+    // Never preview forecasts: a fabricated track record is the one thing this
+    // product cannot show, even as an example.
+    forecasts: [],
+    competitorCount: PREVIEW_COMPETITORS.length,
   };
 }
 

@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { Sig } from "@/components/brand/Sig";
 import { Button, LinkButton, TextInput } from "@/components/ui/primitives";
-import { createCompetitor, resolveCompany, type Competitor } from "@/lib/api";
+import { addCompetitorByDomain } from "@/lib/add-competitor";
+import type { Competitor } from "@/lib/api";
 import { normalizeDomain } from "@/lib/domain";
 import { clearPendingCompetitor, readPendingCompetitor } from "@/lib/pending-competitor";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
@@ -164,9 +165,7 @@ function CompetitorStep({
     setPending(true);
     setError(null);
     try {
-      const resolved = await resolveCompany(domain).catch(() => null);
-      const name = resolved?.name?.trim() || domain.split(".")[0]!;
-      const competitor = await createCompetitor({ name, domain: normalizeDomain(resolved?.domain ?? "") ?? domain });
+      const competitor = await addCompetitorByDomain(domain);
       onAdded(competitor);
       clearPendingCompetitor();
       setValue("");
