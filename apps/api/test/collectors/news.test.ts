@@ -126,6 +126,27 @@ describe("news collector", () => {
     expect(createSignalMock.mock.calls[0][0].raw_text).toContain("Publisher: Wire");
   });
 
+  it("skips an own-company row with no news_query, but fetches one that has it", async () => {
+    listCompetitorsMock.mockResolvedValue([
+      { id: "own", name: "Us", news_query: null, is_active: true, is_own_company: true },
+      { id: "own2", name: "Us", news_query: '"Us Inc"', is_active: true, is_own_company: true },
+    ]);
+    parseStringMock.mockResolvedValue({ items: [] });
+
+    await newsCollectorProcessor(job);
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+    expect(new URL(safeFetchMock.mock.calls[0][0]).searchParams.get("q")).toBe('"Us Inc" when:7d');
+  });
+
+  it("caps the headline at 300 characters", async () => {
+    parseStringMock.mockResolvedValue({ items: [item(1, { title: "x".repeat(400) })] });
+
+    await newsCollectorProcessor(job);
+
+    expect(createSignalMock.mock.calls[0][0].title).toHaveLength(300);
+  });
+
   it("charges the circuit when Google News answers non-2xx", async () => {
     safeFetchMock.mockResolvedValue({ ...ok, status: 503 });
 

@@ -1,5 +1,5 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, gte, lte, count, sql, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, gte, lte, count, sql, isNull, type SQL } from "drizzle-orm";
 import { computeCalibration, type Calibration } from "../lib/calibration";
 import { z } from "zod";
 import type {
@@ -2051,7 +2051,8 @@ export async function setCompetitorDocsSitemapUrl(id: string, url: string): Prom
   await db
     .update(competitorsTable)
     .set({ docs_sitemap_url: url, updated_at: new Date() })
-    .where(eq(competitorsTable.id, id));
+    // Don't overwrite a URL a user PATCHed in while this probe ran.
+    .where(and(eq(competitorsTable.id, id), isNull(competitorsTable.docs_sitemap_url)));
 }
 
 // R1: the synthetic own-company row derives `name` from workspaces.name

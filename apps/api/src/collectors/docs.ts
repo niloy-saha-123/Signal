@@ -62,46 +62,97 @@ function onHost(url: string, host: string): boolean {
   }
 }
 
-async function fetchText(url: string, maxBytes: number): Promise<string> {
-  const res = await safeFetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), maxBytes });
-  if (res.status < 200 || res.status >= 300) throw new Error(`${url} returned ${res.status}`);
-  return res.text();
+export class HttpStatusError extends Error {
+  constructor(
+    url: string,
+    readonly status: number
+  ) {
+    super(`${url} returned ${status}`);
+  }
 }
 
-// null = not a sitemap (soft-404 page, wrong content).
-async function readSitemap(sitemapUrl: string): Promise<string[] | null> {
-  const root = parseSitemap(await withRetry(() => fetchText(sitemapUrl, MAX_SITEMAP_BYTES)));
+function isClientError(err: unknown): boolean {
+  return err instanceof HttpStatusError && err.status >= 400 && err.status < 500;
+}
+
+async function fetchText(url: string, maxBytes: number): Promise<{ body: string; url: string }> {
+  const res = await safeFetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), maxBytes });
+  if (res.status < 200 || res.status >= 300) throw new HttpStatusError(url, res.status);
+  return { body: await res.text(), url: res.url };
+}
+
+function fetchWithRetry(url: string, maxBytes: number) {
+  return withRetry(() => fetchText(url, maxBytes), { shouldRetry: (err) => !isClientError(err) });
+}
+
+type Sitemap = { urls: string[]; complete: boolean };
+
+// null = not a sitemap (soft-404 page, wrong content, nothing on-host).
+// complete: false = an index child couldn't be read; diffing a partial list
+// would report every page of the missing child as new once it comes back.
+async function readSitemap(sitemapUrl: string): Promise<Sitemap | null> {
+  const fetched = await fetchWithRetry(sitemapUrl, MAX_SITEMAP_BYTES);
+  const root = parseSitemap(fetched.body);
   if (!root) return null;
-  const host = new URL(sitemapUrl).hostname;
+  // The final URL, not the requested one: apex sitemaps often redirect to www.
+  const host = new URL(fetched.url).hostname;
 
   let locs = root.locs;
   if (root.kind === "index") {
     // .gz children would need decompression safeFetch doesn't do.
     const children = root.locs
       .filter((url) => onHost(url, host) && !url.endsWith(".gz"))
+      .sort()
       .slice(0, MAX_CHILD_SITEMAPS);
     locs = [];
     for (const child of children) {
-      const parsed = parseSitemap(await withRetry(() => fetchText(child, MAX_SITEMAP_BYTES)));
-      if (parsed?.kind === "urlset") locs.push(...parsed.locs);
+      let parsed: ReturnType<typeof parseSitemap> = null;
+      try {
+        parsed = parseSitemap((await fetchWithRetry(child, MAX_SITEMAP_BYTES)).body);
+      } catch (err) {
+        if (!isClientError(err)) throw err;
+      }
+      if (parsed?.kind !== "urlset") {
+        logger.warn("docs sitemap index child is not a readable urlset — skipping this run", {
+          sitemap: sitemapUrl,
+          child,
+        });
+        return { urls: [], complete: false };
+      }
+      locs.push(...parsed.locs);
     }
   }
-  return [...new Set(locs.filter((url) => onHost(url, host)))].sort().slice(0, MAX_URLS);
+  const urls = [...new Set(locs.filter((url) => onHost(url, host)))].sort().slice(0, MAX_URLS);
+  return urls.length ? { urls, complete: true } : null;
 }
 
 async function locateSitemap(
   competitor: Competitor
-): Promise<{ sitemapUrl: string; urls: string[] } | null> {
+): Promise<({ sitemapUrl: string } & Sitemap) | null> {
   for (const candidate of sitemapCandidates(competitor)) {
-    let urls: string[] | null;
+    let sitemap: Sitemap | null;
     try {
-      urls = await readSitemap(candidate);
+      sitemap = await readSitemap(candidate);
     } catch (err) {
-      // A configured sitemap failing is a real failure; a probe missing is not.
-      if (competitor.docs_sitemap_url) throw err;
+      // A configured sitemap failing is a real failure, and so is a probe that
+      // is down (5xx/network): falling through to the apex would write back
+      // the wrong sitemap. Only a definite 4xx means "not here".
+      if (competitor.docs_sitemap_url || !isClientError(err)) throw err;
+      logger.warn("docs sitemap probe candidate skipped", {
+        competitor_id: competitor.id,
+        candidate,
+        reason: err instanceof Error ? err.message : String(err),
+      });
       continue;
     }
-    if (urls) return { sitemapUrl: candidate, urls };
+    if (sitemap) return { sitemapUrl: candidate, ...sitemap };
+    if (!competitor.docs_sitemap_url) {
+      logger.warn("docs sitemap probe candidate skipped", {
+        competitor_id: competitor.id,
+        candidate,
+        reason: "not a sitemap",
+      });
+    }
   }
   return null;
 }
@@ -114,12 +165,21 @@ async function emit(competitorId: string, sourceUrl: string, title: string, rawT
     title,
     raw_text: rawText.slice(0, MAX_SIGNAL_CHARS),
   });
-  await enqueueInitialSignalPipeline(signal.id);
+  try {
+    await enqueueInitialSignalPipeline(signal.id);
+  } catch (err) {
+    // The signal row (and its outbox entry) is committed; pipeline recovery
+    // re-enqueues it, so this must not fail the collector.
+    logger.error("docs signal enqueue failed — left for pipeline recovery", {
+      signal_id: signal.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function emitPage(competitorId: string, pageUrl: string): Promise<void> {
   if (await signalExistsBySourceUrl(competitorId, SOURCE, pageUrl)) return;
-  const html = await withRetry(() => fetchText(pageUrl, MAX_PAGE_BYTES));
+  const html = (await fetchWithRetry(pageUrl, MAX_PAGE_BYTES)).body;
   const text = extractHtmlText(html);
   if (!text) return;
   const title = cheerio.load(html)("title").first().text().trim() || new URL(pageUrl).pathname;
@@ -132,7 +192,8 @@ async function collectDocs(competitor: Competitor): Promise<void> {
     logger.info("no docs sitemap found — skipping", { competitor_id: competitor.id });
     return;
   }
-  const { sitemapUrl, urls } = located;
+  const { sitemapUrl, urls, complete } = located;
+  if (!complete) return;
   if (!competitor.docs_sitemap_url) await setCompetitorDocsSitemapUrl(competitor.id, sitemapUrl);
 
   const content = urls.join("\n");
@@ -176,7 +237,12 @@ async function collectDocs(competitor: Competitor): Promise<void> {
 }
 
 export async function docsCollectorProcessor(_job: Job): Promise<void> {
-  return runSourceSweep(SOURCE, () => true, (competitor) => collectDocs(competitor));
+  return runSourceSweep(
+    SOURCE,
+    // Own-company rows are only watched when explicitly configured.
+    (c) => (c.is_own_company && !c.docs_sitemap_url ? null : true),
+    (competitor) => collectDocs(competitor)
+  );
 }
 
 export function initDocsWorker() {

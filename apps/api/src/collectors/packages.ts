@@ -57,17 +57,25 @@ async function emit(competitorId: string, sourceUrl: string, title: string, rawT
     title,
     raw_text: rawText,
   });
-  await enqueueInitialSignalPipeline(signal.id);
+  try {
+    await enqueueInitialSignalPipeline(signal.id);
+  } catch (err) {
+    // The signal row (and its outbox entry) is committed; pipeline recovery
+    // re-enqueues it, so this must not fail the package.
+    logger.error("packages signal enqueue failed — left for pipeline recovery", {
+      signal_id: signal.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function collectNpm(competitor: Competitor, name: string): Promise<void> {
   const url = `https://registry.npmjs.org/-/package/${name.replace("/", "%2F")}/dist-tags`;
-  const tags = (await withRetry(async () => (await registryGet(url)).json(), noRetryOn404)) as {
-    latest?: unknown;
-  };
-  const latest = tags.latest;
+  const body: unknown = await withRetry(async () => (await registryGet(url)).json(), noRetryOn404);
+  const latest = body && typeof body === "object" && "latest" in body ? body.latest : undefined;
   if (typeof latest !== "string" || !VERSION.test(latest)) {
-    throw new Error(`npm ${name} has no usable latest dist-tag`);
+    // Retrying won't change the registry's data — treat it like a 404.
+    throw new PackageNotFoundError(`npm ${name} has no usable latest dist-tag`);
   }
   const sourceUrl = `https://www.npmjs.com/package/${name}/v/${latest}`;
   if (await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl)) return;
@@ -122,6 +130,7 @@ async function collectPackages(competitor: Competitor, config: PackageConfig): P
         logger.warn("package not found on registry — check the competitor's package names", {
           competitor_id: competitor.id,
           package: name,
+          reason: err.message,
         });
         continue;
       }

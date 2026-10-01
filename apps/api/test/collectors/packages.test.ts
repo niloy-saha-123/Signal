@@ -33,6 +33,7 @@ vi.mock("rss-parser", () => ({
 }));
 
 import { recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
+import { enqueueInitialSignalPipeline } from "@/pipeline/recovery";
 import { packagesCollectorProcessor } from "@/collectors/packages";
 
 const job = {} as any;
@@ -96,7 +97,19 @@ describe("packages collector", () => {
     await packagesCollectorProcessor(job);
 
     expect(createSignalMock).not.toHaveBeenCalled();
-    expect(recordFailure).toHaveBeenCalled();
+    expect(recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("counts a committed signal even when its enqueue fails", async () => {
+    listCompetitorsMock.mockResolvedValue([competitor(["kestrel"])]);
+    safeFetchMock.mockResolvedValue(json({ latest: "2.4.0" }));
+    vi.mocked(enqueueInitialSignalPipeline).mockRejectedValueOnce(new Error("redis down"));
+
+    await packagesCollectorProcessor(job);
+
+    expect(createSignalMock).toHaveBeenCalledTimes(1);
+    expect(recordFailure).not.toHaveBeenCalled();
+    expect(recordSuccess).toHaveBeenCalledWith("packages");
   });
 
   it("on first run takes only the newest PyPI release", async () => {

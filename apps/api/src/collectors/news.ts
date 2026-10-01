@@ -42,7 +42,7 @@ function publisherOf(source: unknown): string | null {
     typeof source === "string"
       ? source
       : source && typeof source === "object" && "_" in source
-        ? (source as { _: unknown })._
+        ? source._
         : null;
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -86,7 +86,7 @@ async function collectNews(competitor: Competitor, feedUrl: string): Promise<voi
         competitor_id: competitor.id,
         source: SOURCE,
         source_url: link,
-        title: item.title ?? null,
+        title: item.title?.slice(0, 300) ?? null,
         raw_text: rawText,
       });
       await enqueueInitialSignalPipeline(signal.id);
@@ -101,7 +101,12 @@ async function collectNews(competitor: Competitor, feedUrl: string): Promise<voi
 }
 
 export async function newsCollectorProcessor(_job: Job): Promise<void> {
-  return runSourceSweep(SOURCE, newsFeedUrl, collectNews);
+  return runSourceSweep(
+    SOURCE,
+    // Own-company rows are only watched when explicitly configured.
+    (c) => (c.is_own_company && !c.news_query ? null : newsFeedUrl(c)),
+    collectNews
+  );
 }
 
 export function initNewsWorker() {
