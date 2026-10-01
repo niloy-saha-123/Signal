@@ -40,7 +40,7 @@ const json = (body: unknown, status = 200) => ({
 });
 
 function post(over: { handle?: string; text?: string; rkey?: string; reason?: unknown; createdAt?: string } = {}) {
-  const { handle = "kestrel.bsky.social", text = "Shipped v2\nmore", rkey = "3kabc", reason, createdAt = "2026-09-30T00:00:00Z" } = over;
+  const { handle = "kestrel.bsky.social", text = "Shipped v2\nmore", rkey = "3kabc", reason, createdAt = new Date(Date.now() - 60_000).toISOString() } = over;
   return {
     ...(reason ? { reason } : {}),
     post: {
@@ -121,5 +121,33 @@ describe("bluesky collector", () => {
     expect(createSignalMock).toHaveBeenCalledTimes(1);
     expect(recordFailure).not.toHaveBeenCalled();
     expect(recordSuccess).toHaveBeenCalledWith("bluesky");
+  });
+
+  it("lowercases a mixed-case configured handle", async () => {
+    listCompetitorsMock.mockResolvedValue([{ id: "c1", name: "K", is_active: true, bluesky_handle: "Kestrel.Bsky.Social" }]);
+    safeFetchMock.mockResolvedValue(json({ feed: [post()] }));
+    await blueskyCollectorProcessor(job);
+    expect(safeFetchMock.mock.calls[0][0]).toContain("actor=kestrel.bsky.social&");
+    expect(createSignalMock.mock.calls[0][0].source_url).toBe("https://bsky.app/profile/kestrel.bsky.social/post/3kabc");
+  });
+
+  it("titles from the first non-empty line", async () => {
+    safeFetchMock.mockResolvedValue(json({ feed: [post({ text: "\n  Shipped v3\nmore" })] }));
+    await blueskyCollectorProcessor(job);
+    expect(createSignalMock.mock.calls[0][0].title).toBe("Shipped v3");
+  });
+
+  it("skips posts older than 30 days", async () => {
+    safeFetchMock.mockResolvedValue(
+      json({ feed: [post({ createdAt: new Date(Date.now() - 40 * 86_400_000).toISOString() })] })
+    );
+    await blueskyCollectorProcessor(job);
+    expect(createSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("warns when the feed has posts but none by the configured author", async () => {
+    safeFetchMock.mockResolvedValue(json({ feed: [post({ handle: "other.bsky.social" })] }));
+    await blueskyCollectorProcessor(job);
+    expect(warnMock).toHaveBeenCalledWith(expect.stringMatching(/author/), expect.anything());
   });
 });
