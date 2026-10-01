@@ -41,6 +41,7 @@ import { getActivePrompt } from "../../llm/prompt-registry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
 import { withRetry } from "../../lib/retry";
+import { guardedMessages } from "../chat/untrusted";
 
 const AGENT_NAME = "forecaster" as const;
 const PREFERRED_MODEL = "claude-sonnet";
@@ -170,10 +171,7 @@ export async function forecasterNode(
 
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
-        structuredModel.invoke([
-          ["system", systemPrompt],
-          ["human", buildEvidenceText(signals)],
-        ])
+        structuredModel.invoke(guardedMessages(systemPrompt, buildEvidenceText(signals), "collected signals"))
       )
     );
 

@@ -28,6 +28,7 @@ import { selectModel, ANTHROPIC_MODEL_IDS } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { isLlmBudgetExhausted } from "./branch-node";
 import { ComparativeSynthesisSchema } from "./contracts";
+import { guardedMessages } from "../chat/untrusted";
 
 const AGENT_NAME = "comparative_synthesis" as const;
 
@@ -185,10 +186,7 @@ export async function comparativeSynthesisNode(
       identity: { kind: "run" as const, runId: state.run_id },
     };
     const { raw, parsed: maybeParsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
-      structuredModel.invoke([
-        ["system", systemPrompt],
-        ["human", contextText],
-      ])
+      structuredModel.invoke(guardedMessages(systemPrompt, contextText, "competitor signals"))
     );
 
     const usage = (raw as AIMessage).usage_metadata;

@@ -1,141 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import {
-  Badge,
-  Card,
-  EmptyState,
-  Metric,
-  Num,
-  PageHeader,
-  ProbabilityBar,
-  SectionLabel,
-} from "@/components/ui/primitives";
+import { ForecastAreaTabs, ForecastCard } from "@/components/forecast/parts";
+import { EmptyState, LinkButton, Metric, PageHeader, Select, Tabs } from "@/components/ui/primitives";
 import type { Calibration, PredictionRow } from "@/lib/api";
+import { formatDate, patternLabel } from "@/lib/format";
 
-const DATE = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-  timeZone: "UTC",
-});
-
-const PATTERN_LABEL: Record<string, string> = {
-  product_launch: "Product launch",
-  pricing_change: "Pricing change",
-  upmarket_pivot: "Upmarket pivot",
-  platform_expansion: "Platform expansion",
-  hiring_surge: "Hiring surge",
-  deprecation: "Deprecation",
-};
-
-function daysUntil(iso: string): number {
-  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
-}
-
-function OutcomeBadge({ status }: { status: PredictionRow["status"] }) {
-  if (status === "hit") return <Badge tone="hit">Hit</Badge>;
-  if (status === "miss") return <Badge tone="miss">Miss</Badge>;
-  if (status === "unresolved") return <Badge tone="unresolved">Unresolved</Badge>;
-  if (status === "void") return <Badge tone="neutral">Void</Badge>;
-  return <Badge tone="open">Open</Badge>;
-}
-
-function CompetitorName({
-  id,
-  competitors,
-}: {
-  id: string;
-  competitors: Array<{ id: string; name: string }>;
-}) {
-  const name = competitors.find((c) => c.id === id)?.name ?? "Unknown competitor";
-  return <span className="text-[13px] font-medium text-ink">{name}</span>;
-}
-
-function OpenPrediction({
-  prediction,
-  competitors,
-}: {
-  prediction: PredictionRow;
-  competitors: Array<{ id: string; name: string }>;
-}) {
-  const days = daysUntil(prediction.resolves_at);
-
-  return (
-    <Card as="li" className="transition-colors hover:bg-surface-sunken">
-      <Link href={`/forecast/${prediction.id}`} className="block p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-1.5 flex flex-wrap items-center gap-2">
-              <CompetitorName id={prediction.competitor_id} competitors={competitors} />
-              <Badge tone="neutral">
-                {PATTERN_LABEL[prediction.pattern_type] ?? prediction.pattern_type}
-              </Badge>
-            </div>
-            <p className="text-[15px] leading-snug text-ink">{prediction.statement}</p>
-          </div>
-          <div className="shrink-0 text-right">
-            <ProbabilityBar value={prediction.probability} />
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-line pt-3 text-[12px] text-ink-muted">
-          <span>
-            Resolves <Num className="text-ink-secondary">{DATE.format(new Date(prediction.resolves_at))}</Num>
-          </span>
-          <span>
-            {days > 0 ? (
-              <>
-                <Num className="text-ink-secondary">{days}</Num> day{days === 1 ? "" : "s"} out
-              </>
-            ) : (
-              "Due now"
-            )}
-          </span>
-          <span>
-            Based on <Num className="text-ink-secondary">{prediction.evidence_count}</Num> signals
-          </span>
-        </div>
-      </Link>
-    </Card>
-  );
-}
-
-function ResolvedPrediction({
-  prediction,
-  competitors,
-}: {
-  prediction: PredictionRow;
-  competitors: Array<{ id: string; name: string }>;
-}) {
-  return (
-    <Card as="li" className="transition-colors hover:bg-surface-sunken">
-      <Link href={`/forecast/${prediction.id}`} className="block p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-1.5 flex flex-wrap items-center gap-2">
-              <CompetitorName id={prediction.competitor_id} competitors={competitors} />
-              <OutcomeBadge status={prediction.status} />
-            </div>
-            <p className="text-[15px] leading-snug text-ink">{prediction.statement}</p>
-            {prediction.resolution_note ? (
-              <p className="mt-2 text-[13px] text-ink-secondary">{prediction.resolution_note}</p>
-            ) : null}
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="font-mono tabular text-[15px] font-medium text-ink">
-              {Math.round(prediction.probability * 100)}%
-            </div>
-            <div className="mt-0.5 text-[11px] text-ink-muted">said</div>
-          </div>
-        </div>
-      </Link>
-    </Card>
-  );
-}
-
-type Filter = "open" | "resolved" | "all";
+type View = "open" | "settled";
 
 export function ForecastClient({
   predictions,
@@ -146,145 +17,149 @@ export function ForecastClient({
   calibration: Calibration;
   competitors: Array<{ id: string; name: string }>;
 }) {
-  const [filter, setFilter] = useState<Filter>("open");
+  const [view, setView] = useState<View>("open");
+  const [competitorId, setCompetitorId] = useState("all");
+  const [pattern, setPattern] = useState("all");
+
+  const names = useMemo(() => new Map(competitors.map((c) => [c.id, c.name])), [competitors]);
 
   const open = useMemo(
     () =>
       predictions
         .filter((p) => p.status === "open")
-        .sort(
-          (a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime()
-        ),
+        .sort((a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime()),
     [predictions]
   );
-
-  const resolved = useMemo(
+  const settled = useMemo(
     () =>
       predictions
         .filter((p) => p.status !== "open")
         .sort(
           (a, b) =>
-            new Date(b.resolved_at ?? b.created_at).getTime() -
-            new Date(a.resolved_at ?? a.created_at).getTime()
+            new Date(b.resolved_at ?? b.created_at).getTime() - new Date(a.resolved_at ?? a.created_at).getTime()
         ),
     [predictions]
   );
 
+  const patterns = useMemo(() => Array.from(new Set(predictions.map((p) => p.pattern_type))).sort(), [predictions]);
+
+  const visible = (view === "open" ? open : settled).filter(
+    (p) => (competitorId === "all" || p.competitor_id === competitorId) && (pattern === "all" || p.pattern_type === pattern)
+  );
+
   const scored = calibration.resolved_count > 0 && calibration.brier !== null;
+  const nextStep =
+    competitors.length === 0 ? (
+      <LinkButton href="/board" variant="primary" size="sm">
+        Add a competitor
+      </LinkButton>
+    ) : (
+      <LinkButton href="/intel" size="sm">
+        See the evidence so far
+      </LinkButton>
+    );
+  const filtered = competitorId !== "all" || pattern !== "all";
 
   return (
     <div>
       <PageHeader
-        title="Predictions"
-        description="What Signal expects each competitor to do next, with the date it gets checked and the evidence behind it. Every one is scored when it resolves — whether it was right or not."
+        title="Forecasts"
+        description="What Signal expects each competitor to do next, with the date it gets checked. Every one is scored when it settles, right or wrong."
+        action={<ForecastAreaTabs active="forecasts" />}
       />
 
-      {/* The hero row leads with the track record, because a prediction is only
-          worth reading if you know how often the thing making it is right. */}
-      <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-4">
-        <div className="bg-surface p-5">
-          <Metric value={String(open.length)} label="Open" size="md" />
+      <div className="mb-8 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-[14px] bg-sky p-5">
+          <Metric value={String(open.length)} label="Open forecasts" size="md" />
         </div>
-        <div className="bg-surface p-5">
-          <Metric value={String(calibration.resolved_count)} label="Resolved" size="md" />
+        <div className="rounded-[14px] bg-sky p-5">
+          <Metric value={String(calibration.resolved_count)} label="Settled and scored" size="md" />
         </div>
-        <div className="bg-surface p-5">
+        <div className="rounded-[14px] bg-sky p-5">
           {scored ? (
-            <Metric value={calibration.brier!.toFixed(3)} label="Brier score" size="md" />
+            <Metric value={calibration.brier!.toFixed(3)} label={`Brier score (coin flip ${calibration.baseline_brier.toFixed(2)})`} size="md" />
           ) : (
-            <Metric value="—" label="Brier score" size="md" tone="muted" />
+            <Metric value="—" label="No score until something settles" size="md" tone="muted" />
           )}
-        </div>
-        <div className="bg-surface p-5">
-          <Metric
-            value={calibration.baseline_brier.toFixed(2)}
-            label="Coin-flip baseline"
-            size="md"
-            tone="muted"
-          />
         </div>
       </div>
 
-      {!scored ? (
-        <p className="mb-8 rounded-[10px] border border-line bg-surface-sunken px-4 py-3 text-[13px] text-ink-secondary">
-          No score yet — predictions have to resolve before an accuracy number means anything.
-          The first one resolves{" "}
-          {open.length > 0 ? (
-            <Num className="text-ink">{DATE.format(new Date(open[0].resolves_at))}</Num>
-          ) : (
-            "once Signal has enough evidence to make one"
-          )}
-          .
-        </p>
-      ) : null}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <Tabs
+          label="Forecast status"
+          active={view}
+          onChange={setView}
+          items={[
+            { value: "open", label: "Open", count: open.length },
+            { value: "settled", label: "Settled", count: settled.length },
+          ]}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Select label="Competitor" value={competitorId} onChange={setCompetitorId}>
+            <option value="all">All competitors</option>
+            {competitors.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+          <Select label="Kind of move" value={pattern} onChange={setPattern}>
+            <option value="all">Every kind of move</option>
+            {patterns.map((p) => (
+              <option key={p} value={p}>
+                {patternLabel(p)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
 
-      <div className="mb-4 flex gap-1">
-        {(
-          [
-            ["open", `Open (${open.length})`],
-            ["resolved", `Resolved (${resolved.length})`],
-            ["all", "All"],
-          ] as Array<[Filter, string]>
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setFilter(value)}
-            aria-pressed={filter === value}
-            className={
-              filter === value
-                ? "rounded-md bg-ink px-3 py-1.5 text-[13px] font-medium text-ink-inverse"
-                : "rounded-md px-3 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink"
+      {visible.length === 0 ? (
+        filtered ? (
+          <EmptyState
+            compact
+            title="Nothing matches these filters"
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  setCompetitorId("all");
+                  setPattern("all");
+                }}
+                className="text-[14px] font-semibold text-accent hover:underline"
+              >
+                Clear filters
+              </button>
             }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {filter !== "resolved" ? (
-        <section className="mb-8">
-          {filter === "all" ? <SectionLabel>Open</SectionLabel> : null}
-          {open.length === 0 ? (
-            <EmptyState
-              title="No open predictions"
-              note="Signal only forecasts above an evidence floor of five distinct signal clusters. Below that it stays quiet rather than guessing — which is most days, for most competitors."
+          />
+        ) : view === "open" ? (
+          <EmptyState
+            title="No open forecasts"
+            note="Signal only forecasts once several independent signals agree. Below that bar it stays quiet rather than guessing, which is most days for most competitors."
+            action={nextStep}
+          />
+        ) : (
+          <EmptyState
+            title="Nothing has settled yet"
+            note={
+              open[0]
+                ? `The first open forecast settles ${formatDate(open[0].resolves_at)}. Hits, misses and unresolved windows all show up here.`
+                : "Forecasts settle on their date against the evidence collected. Hits, misses and unresolved windows all show up here."
+            }
+            action={open[0] ? undefined : nextStep}
+          />
+        )
+      ) : (
+        <ul className="space-y-3">
+          {visible.map((prediction) => (
+            <ForecastCard
+              key={prediction.id}
+              prediction={prediction}
+              competitor={names.get(prediction.competitor_id) ?? "Unknown competitor"}
             />
-          ) : (
-            <ul className="space-y-2">
-              {open.map((prediction) => (
-                <OpenPrediction
-                  key={prediction.id}
-                  prediction={prediction}
-                  competitors={competitors}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : null}
-
-      {filter !== "open" ? (
-        <section>
-          {filter === "all" ? <SectionLabel>Resolved</SectionLabel> : null}
-          {resolved.length === 0 ? (
-            <EmptyState
-              title="Nothing has resolved yet"
-              note="Predictions are checked on their resolution date against evidence collected in the window. Hits and misses both appear here."
-            />
-          ) : (
-            <ul className="space-y-2">
-              {resolved.map((prediction) => (
-                <ResolvedPrediction
-                  key={prediction.id}
-                  prediction={prediction}
-                  competitors={competitors}
-                />
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : null}
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

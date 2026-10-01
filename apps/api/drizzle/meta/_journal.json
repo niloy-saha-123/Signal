@@ -120,6 +120,13 @@
       "when": 1790314248322,
       "tag": "0016_add_slack_installations",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790349034073,
+      "tag": "0017_add_website_community_postings",
+      "breakpoints": true
     }
   ]
 }

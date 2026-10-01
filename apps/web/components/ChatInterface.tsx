@@ -7,7 +7,9 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatAgentResult } from "@signal/shared";
-import { SOURCE_COLORS } from "../lib/chart-colors";
+import { Sig, type SigMood } from "./brand/Sig";
+import { Icon } from "./ui/icons";
+import { SourceChip } from "./ui/primitives";
 import { resumeChatThread, streamChatResult, type ChatMutationRequest } from "../lib/chat-stream";
 import { ThreadList } from "./ThreadList";
 import {
@@ -30,9 +32,21 @@ import {
 export interface ChatInterfaceProps {
   competitorIds: string[];
   showThreads?: boolean;
+  // Pre-fills the composer (from "Ask Signal about this"). Never auto-sent.
+  initialQuery?: string;
 }
 
 const GENERIC_ERROR_MESSAGE = "Signal couldn't answer that. Please try again.";
+
+const SUGGESTED_QUESTIONS = [
+  "What changed across my competitors this week?",
+  "Which competitor is most likely to change pricing next?",
+  "What's the strongest evidence behind my open forecasts?",
+  "Where are competitors hiring, and what does it suggest?",
+];
+
+const PAPERCLIP =
+  "M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13";
 
 interface Attachment {
   id: string;
@@ -66,16 +80,22 @@ interface ChatMessage {
   } | null;
 }
 
-export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfaceProps) {
+export function ChatInterface({ competitorIds, showThreads = true, initialQuery = "" }: ChatInterfaceProps) {
   const [threads, setThreads] = useState<ChatThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [submitting, setSubmitting] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  function fillComposer(text: string) {
+    setQuery(text);
+    composerRef.current?.focus();
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -327,7 +347,7 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
   return (
     <div className="flex h-full min-h-0">
       {showThreads && (
-        <div className="w-64 shrink-0 border-r border-studio-line bg-studio-paper">
+        <div className="hidden w-64 shrink-0 border-r border-line bg-surface md:block">
           <ThreadList
             threads={threads}
             activeThreadId={activeThreadId}
@@ -339,84 +359,88 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="flex-1 overflow-y-auto px-4 py-6" aria-live="polite">
           {messages.length === 0 && !submitting ? (
-            <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center text-center">
-              <h2 className="font-display text-2xl font-semibold tracking-tight text-studio-ink">
-                Ask Signal a question
+            <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center text-center">
+              <Sig size={56} decorative />
+              <h2 className="mt-4 font-display text-[24px] font-semibold tracking-[-0.02em] text-ink">
+                Ask about any competitor
               </h2>
-              <p className="mt-2 text-sm leading-relaxed text-studio-muted">
-                Answers are grounded in your collected competitor evidence, with citations.
+              <p className="mt-2 text-[14px] text-ink-secondary">
+                Answers come from the evidence Signal collected, with the sources cited. When the evidence is thin, it
+                says so.
               </p>
+              <div className="mt-6 flex w-full flex-col gap-2">
+                {SUGGESTED_QUESTIONS.map((question) => (
+                  <button
+                    key={question}
+                    type="button"
+                    onClick={() => fillComposer(question)}
+                    className="rounded-[12px] border border-line bg-surface px-4 py-3 text-left text-[14px] font-medium text-ink transition-colors hover:border-line-strong hover:bg-sky"
+                  >
+                    {question}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="mx-auto flex max-w-2xl flex-col gap-4">
+            <div className="mx-auto flex max-w-2xl flex-col gap-5">
               {messages.map((message) =>
                 message.role === "user" ? (
                   <div key={message.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-[10px] rounded-br-lg bg-studio-action-soft px-4 py-3">
+                    <div className="max-w-[85%] rounded-[14px] rounded-br-[4px] bg-sky px-4 py-3">
                       {message.attachments && message.attachments.length > 0 && (
                         <div className="mb-2 flex flex-wrap gap-1.5">
                           {message.attachments.map((a) => (
                             <span
                               key={a.name}
-                              className="inline-flex items-center gap-1 rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold text-studio-ink"
+                              className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-[12px] font-semibold text-ink"
                             >
-                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                              <svg aria-hidden="true" className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={PAPERCLIP} />
                               </svg>
                               {a.name}
                             </span>
                           ))}
                         </div>
                       )}
-                      <p className="text-sm text-studio-ink">{message.text}</p>
+                      <p className="text-[14.5px] break-words whitespace-pre-wrap text-ink">{message.text}</p>
                     </div>
                   </div>
                 ) : (
-                  <div key={message.id} className="group flex items-start gap-2">
-                    <div className="flex-1">
+                  <div key={message.id} className="group flex items-start gap-3">
+                    <Sig size={28} mood={assistantMood(message)} decorative className="mt-0.5 shrink-0" />
+                    <div className="min-w-0 flex-1">
                       {message.error ? (
-                        <p className="rounded-[10px] bg-red-50 px-4 py-3 text-sm text-red-700">
+                        <p role="alert" className="rounded-[12px] border border-[#f3c0ca] bg-tint-rose px-4 py-3 text-[14px] text-miss-text">
                           {message.error}
                         </p>
                       ) : message.refused ? (
-                        <div className="rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
-                          <p className="text-sm text-amber-900">{message.refused.reason}</p>
+                        <div className="rounded-[12px] border border-line bg-sky px-4 py-3">
+                          <p className="text-[14px] text-ink">{message.refused.reason}</p>
                           {message.refused.suggestedQuery && (
-                            <p className="mt-1 text-xs text-amber-800">
+                            <button
+                              type="button"
+                              onClick={() => fillComposer(message.refused!.suggestedQuery)}
+                              className="mt-2 text-left text-[13.5px] font-semibold text-accent hover:underline"
+                            >
                               Try instead: {message.refused.suggestedQuery}
-                            </p>
+                            </button>
                           )}
                         </div>
-                      ) : message.pending ? (
-                        <div className="flex items-center gap-2 px-1 py-2">
-                          <span className="flex gap-1">
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-studio-action [animation-delay:0ms]" />
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-studio-action [animation-delay:150ms]" />
-                            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-studio-action [animation-delay:300ms]" />
-                          </span>
-                          <span className="text-xs text-studio-muted">Signal is responding…</span>
-                        </div>
+                      ) : message.pending && !message.text ? (
+                        <p className="py-1 text-[13.5px] text-ink-muted">Signal is responding…</p>
                       ) : (
                         <>
-                          <p className="whitespace-pre-wrap text-sm leading-relaxed text-studio-ink">
+                          <p className="text-[14.5px] leading-relaxed break-words whitespace-pre-wrap text-ink">
                             {message.text}
                           </p>
                           {message.citations && message.citations.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-1.5">
+                            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                              <span className="text-[12px] font-semibold text-ink-muted">Sources</span>
                               {message.citations.map((citation) => (
-                                <span
-                                  key={citation.chunk_id}
-                                  title={citation.claim}
-                                  className="inline-flex items-center gap-1 rounded-full border border-studio-line bg-white px-2 py-0.5 text-xs text-studio-muted"
-                                >
-                                  <span
-                                    className="h-1.5 w-1.5 rounded-full"
-                                    style={{ backgroundColor: SOURCE_COLORS[citation.source as keyof typeof SOURCE_COLORS] ?? "#94a3b8" }}
-                                  />
-                                  {citation.source}
+                                <span key={citation.chunk_id} title={citation.claim}>
+                                  <SourceChip source={citation.source} />
                                 </span>
                               ))}
                             </div>
@@ -424,35 +448,28 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                         </>
                       )}
                       {message.confirmation && (
-                        <div
-                          data-testid="confirm-card"
-                          className="mt-2 rounded-[10px] border border-studio-line bg-white p-3"
-                        >
-                          <p className="text-xs font-medium text-studio-muted">
-                            Signal wants to run this action
-                          </p>
-                          <p className="mt-1 text-sm font-semibold text-studio-ink">
-                            {message.confirmation.description}
-                          </p>
+                        <div data-testid="confirm-card" className="mt-2 rounded-[12px] border border-line-strong bg-surface p-4">
+                          <p className="text-[12.5px] font-semibold text-ink-secondary">Signal wants to run this action</p>
+                          <p className="mt-1 text-[14px] font-semibold text-ink">{message.confirmation.description}</p>
                           {message.confirmation.status === "pending" ? (
                             <div className="mt-3 flex gap-2">
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "approve")}
-                                className="rounded-[10px] bg-studio-action px-3 py-1.5 text-xs font-semibold text-white hover:bg-studio-action-hover"
+                                className="h-8 rounded-[10px] bg-ink px-3 text-[13px] font-semibold text-white hover:bg-[#1d3047]"
                               >
                                 Confirm
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void handleConfirm(message, "deny")}
-                                className="rounded-[10px] border border-studio-line bg-studio-paper px-3 py-1.5 text-xs font-semibold text-studio-muted hover:text-studio-ink"
+                                className="h-8 rounded-[10px] border border-line-strong bg-surface px-3 text-[13px] font-semibold text-ink hover:bg-surface-sunken"
                               >
                                 Cancel
                               </button>
                             </div>
                           ) : (
-                            <p className="mt-2 text-xs text-studio-muted">
+                            <p className="mt-2 text-[12.5px] text-ink-muted">
                               {message.confirmation.status === "approved" ? "Action approved." : "Action cancelled."}
                             </p>
                           )}
@@ -463,12 +480,11 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
                       <button
                         type="button"
                         onClick={() => handleRegenerate(message)}
+                        aria-label="Regenerate answer"
                         title="Regenerate"
-                        className="shrink-0 rounded-full p-1 text-studio-muted opacity-0 transition-opacity hover:bg-studio-sky-soft hover:text-studio-ink group-hover:opacity-100"
+                        className="shrink-0 rounded-[8px] p-1.5 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface-sunken hover:text-ink focus-visible:opacity-100"
                       >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
+                        <Icon name="refresh" className="h-4 w-4" />
                       </button>
                     )}
                   </div>
@@ -479,24 +495,27 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
           <div ref={bottomRef} />
         </div>
 
-        {/* Composer */}
-        <div className="border-t border-studio-line bg-studio-paper px-4 py-3">
-          {attachError && <p className="mb-2 text-xs text-red-600">{attachError}</p>}
+        <div className="border-t border-line bg-surface px-4 py-3">
+          {attachError && (
+            <p role="alert" className="mb-2 text-[13px] text-miss-text">
+              {attachError}
+            </p>
+          )}
           {attachments.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
               {attachments.map((a) => (
                 <span
                   key={a.id}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-studio-line bg-studio-sky-soft px-3 py-1 text-xs text-studio-muted"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-sunken px-3 py-1 text-[12.5px] text-ink-secondary"
                 >
                   {a.name} · {formatBytes(a.size)}
                   <button
                     type="button"
                     onClick={() => setAttachments((current) => current.filter((x) => x.id !== a.id))}
                     aria-label={`Remove ${a.name}`}
-                    className="text-studio-muted hover:text-studio-ink"
+                    className="text-ink-muted hover:text-ink"
                   >
-                    ✕
+                    <Icon name="close" className="h-3.5 w-3.5" />
                   </button>
                 </span>
               ))}
@@ -518,50 +537,55 @@ export function ChatInterface({ competitorIds, showThreads = true }: ChatInterfa
               type="button"
               onClick={openFilePicker}
               disabled={submitting}
+              aria-label="Attach a file"
               title="Attach a document or image for this message only (not saved to company knowledge)"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-studio-muted transition-colors hover:bg-studio-sky-soft hover:text-studio-ink disabled:opacity-30"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] text-ink-secondary transition-colors hover:bg-surface-sunken hover:text-ink disabled:opacity-40"
             >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+              <svg aria-hidden="true" className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={PAPERCLIP} />
               </svg>
             </button>
-            <textarea
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e as unknown as FormEvent);
-                }
-              }}
-              placeholder="Ask Signal a question…"
-              rows={1}
-              className="max-h-40 w-full resize-none rounded-[10px] border border-studio-line bg-studio-sky-soft px-4 py-2.5 text-sm text-studio-ink placeholder:text-studio-muted focus:border-studio-action focus:outline-none"
-              disabled={submitting}
-            />
+            <label className="min-w-0 flex-1">
+              <span className="sr-only">Your question</span>
+              <textarea
+                ref={composerRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit(e as unknown as FormEvent);
+                  }
+                }}
+                placeholder="Ask Signal a question…"
+                rows={1}
+                className="block max-h-40 min-h-11 w-full resize-none rounded-[10px] border border-line-strong bg-surface px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                disabled={submitting}
+              />
+            </label>
             <button
               type="submit"
               disabled={submitting || (query.trim().length === 0 && attachments.length === 0)}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-studio-ink text-white transition-opacity hover:opacity-90 disabled:opacity-30"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] bg-ink text-white transition-colors hover:bg-[#1d3047] disabled:bg-ink-muted"
               title="Send"
               aria-label="Send message"
             >
-              {submitting ? (
-                <svg className="h-4 w-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              ) : (
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              )}
+              <Icon name="send" className="h-4 w-4" />
             </button>
           </form>
-          {submitting && (
-            <p className="mt-2 text-xs text-studio-muted">Signal is responding — this chat is locked until it finishes.</p>
-          )}
+          <p className="mt-2 text-[12px] text-ink-muted">
+            {submitting
+              ? "Signal is responding. This chat is locked until it finishes."
+              : "Enter to send, Shift+Enter for a new line."}
+          </p>
         </div>
       </div>
     </div>
   );
+}
+
+function assistantMood(message: ChatMessage): SigMood {
+  if (message.pending) return "thinking";
+  if (message.refused || message.error) return "unsure";
+  return "idle";
 }

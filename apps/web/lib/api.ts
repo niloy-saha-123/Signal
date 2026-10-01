@@ -302,9 +302,11 @@ export function listAlerts(
 
 // --- Company profile ---
 
-export async function getCompanyProfile(): Promise<CompanyProfile | null> {
+// Server Components must pass their token: without one the browser client has no
+// session on the server, the API answers 401 and the profile would read as empty.
+export async function getCompanyProfile(token?: string): Promise<CompanyProfile | null> {
   const res = await fetchWithTimeout(`${API_BASE}/api/company-profile`, {
-    headers: await authHeader(),
+    headers: await authHeader(token),
   });
   if (res.status === 404) return null;
   if (!res.ok) {

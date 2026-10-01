@@ -1,26 +1,19 @@
-// apps/web/app/signup/page.tsx
-// Thin server shell around SignupForm — mirrors app/login/page.tsx.
+// Thin server shell around SignupForm — mirrors login/page.tsx.
 import { Suspense } from "react";
 import { SignupForm } from "./signup-form";
 
 export default function Page() {
   return (
-    <div className="mx-auto flex max-w-sm flex-col gap-6 py-16">
-      <div className="text-center">
-        <span className="text-lg font-semibold text-studio-action">Signal</span>
-        <h1 className="mt-2 text-xl font-semibold text-studio-ink">Create an account</h1>
+    <div className="flex flex-col gap-8">
+      <div>
+        <h1 className="font-display text-[34px] leading-tight font-semibold tracking-[-0.03em] text-ink">
+          Create your workspace
+        </h1>
+        <p className="mt-1.5 text-[15px] text-ink-secondary">A minute to set up. Signal does the watching after that.</p>
       </div>
-      <div className="rounded-[10px] border border-studio-line bg-studio-paper p-6">
-        <Suspense
-          fallback={
-            <p role="status" className="py-12 text-center text-sm text-studio-muted">
-              Preparing account creation…
-            </p>
-          }
-        >
-          <SignupForm />
-        </Suspense>
-      </div>
+      <Suspense fallback={<p role="status" className="py-12 text-center text-[14px] text-ink-muted">Preparing account creation…</p>}>
+        <SignupForm />
+      </Suspense>
     </div>
   );
 }

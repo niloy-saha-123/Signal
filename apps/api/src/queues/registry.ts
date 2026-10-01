@@ -67,6 +67,9 @@ export type QueueName =
   | "collect-changelog"
   | "collect-pricing"
   | "collect-github"
+  | "collect-website"
+  | "collect-community"
+  | "collect-postings"
   | "pipeline-entity-extraction"
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
@@ -204,6 +207,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "collect-changelog": COLLECTOR_CONFIG,
   "collect-pricing": COLLECTOR_CONFIG,
   "collect-github": COLLECTOR_CONFIG,
+  "collect-website": COLLECTOR_CONFIG,
+  "collect-community": COLLECTOR_CONFIG,
+  "collect-postings": COLLECTOR_CONFIG,
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,
@@ -351,6 +357,9 @@ async function runDiscovery(job: Job<CompetitorDiscoveryJobData>): Promise<void>
       pricing_url: competitor.pricing_url,
       changelog_rss: competitor.changelog_rss,
       github_org: competitor.github_org,
+      website_urls: competitor.website_urls,
+      discourse_url: competitor.discourse_url,
+      postings_rss: competitor.postings_rss,
     },
   });
   const discoveryStatus = await finalizeDiscovery(competitor_id, result);

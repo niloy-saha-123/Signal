@@ -18,6 +18,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-jobs": {},
     "collect-changelog": {},
     "collect-pricing": {},
+    "collect-github": {},
     "pipeline-entity-extraction": {},
     "pipeline-recovery": {},
     analysis: {},
@@ -25,6 +26,9 @@ vi.mock("@/queues/registry", () => ({
     "daily-analysis-sweep": {},
     "pending-confirmation-expiry": {},
     "resolve-predictions": {},
+    "collect-website": {},
+    "collect-community": {},
+    "collect-postings": {},
   },
   queues: {
     "collect-reddit": { upsertJobScheduler: upsertJobSchedulerMock },
@@ -32,11 +36,15 @@ vi.mock("@/queues/registry", () => ({
     "collect-jobs": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-changelog": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-pricing": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-github": { upsertJobScheduler: upsertJobSchedulerMock },
     "pipeline-recovery": { upsertJobScheduler: upsertJobSchedulerMock },
     "own-company-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
     "daily-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
     "pending-confirmation-expiry": { upsertJobScheduler: upsertJobSchedulerMock },
     "resolve-predictions": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-website": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-community": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-postings": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -69,7 +77,17 @@ describe("queues/scheduler", () => {
 
   it("derives collector queue names from registry's QUEUE_CONFIG, not a hardcoded list", () => {
     expect(COLLECTOR_QUEUE_NAMES.slice().sort()).toEqual(
-      ["collect-reddit", "collect-hn", "collect-jobs", "collect-changelog", "collect-pricing"].sort()
+      [
+        "collect-reddit",
+        "collect-hn",
+        "collect-jobs",
+        "collect-changelog",
+        "collect-pricing",
+        "collect-github",
+        "collect-website",
+        "collect-community",
+        "collect-postings",
+      ].sort()
     );
   });
 
@@ -180,7 +198,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(10);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(14);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },

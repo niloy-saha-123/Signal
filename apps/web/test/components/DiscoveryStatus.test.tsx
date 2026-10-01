@@ -50,15 +50,15 @@ describe("DiscoveryStatus", () => {
   it("shows a loading state before the first poll resolves", () => {
     getCompetitorDiscoveryMock.mockReturnValue(new Promise(() => {}));
     render(<DiscoveryStatus competitorId="comp-1" pollIntervalMs={3000} />);
-    expect(screen.getByText("Checking discovery status…")).toBeInTheDocument();
+    expect(screen.getByText("Checking which sources were found…")).toBeInTheDocument();
   });
 
-  it("renders a found field with a checkmark and a not-found field with a manual-entry hint", async () => {
+  it("labels found and not-found fields in words, not glyphs", async () => {
     getCompetitorDiscoveryMock.mockResolvedValue(pending);
     render(<DiscoveryStatus competitorId="comp-1" pollIntervalMs={3000} />);
     await waitFor(() => expect(screen.getByText("Subreddits")).toBeInTheDocument());
-    expect(screen.getByText("✓")).toBeInTheDocument();
-    expect(screen.getByText(/not found — enter manually/)).toBeInTheDocument();
+    expect(screen.getByText("Subreddits").closest("li")).toHaveTextContent("Found");
+    expect(screen.getByText("RSS feed").closest("li")).toHaveTextContent("Not found");
   });
 
   it("polls again after pollIntervalMs and stops once discovery_status is complete", async () => {
@@ -84,7 +84,13 @@ describe("DiscoveryStatus", () => {
       <DiscoveryStatus competitorId="comp-1" pollIntervalMs={3000} onManualEntry={onManualEntry} />
     );
     await waitFor(() => expect(screen.getByText("Subreddits")).toBeInTheDocument());
-    screen.getByRole("button", { name: "Enter rss_url manually" }).click();
+    screen.getByRole("button", { name: "Enter RSS feed manually" }).click();
     expect(onManualEntry).toHaveBeenCalledWith("rss_url");
+  });
+
+  it("says it couldn't check instead of hanging when the poll fails", async () => {
+    getCompetitorDiscoveryMock.mockRejectedValue(new Error("down"));
+    render(<DiscoveryStatus competitorId="comp-1" pollIntervalMs={3000} />);
+    await waitFor(() => expect(screen.getByText("Couldn't check discovery right now. Retrying.")).toBeInTheDocument());
   });
 });

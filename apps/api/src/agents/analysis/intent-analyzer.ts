@@ -12,6 +12,7 @@ import { selectModel } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
+import { guardedMessages } from "../chat/untrusted";
 
 const AGENT_NAME = "intent_analyzer" as const;
 const MODEL = "gpt-4.1";
@@ -76,10 +77,7 @@ export async function intentAnalyzerNode(
     };
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
-        structuredModel.invoke([
-          ["system", systemPrompt],
-          ["human", buildPostingsText(postings)],
-        ])
+        structuredModel.invoke(guardedMessages(systemPrompt, buildPostingsText(postings), "job postings"))
       )
     );
 

@@ -43,4 +43,24 @@ describe("IntelFilters", () => {
     fireEvent.change(screen.getByLabelText("Source"), { target: { value: "hn" } });
     expect(pushMock).toHaveBeenCalledWith("/intel?source=hn");
   });
+
+  it("names sources in words, not ids", () => {
+    render(<IntelFilters competitors={competitors} />);
+    expect(screen.getByRole("option", { name: "Hacker News" })).toHaveValue("hn");
+  });
+
+  it("filters to strong evidence only", () => {
+    render(<IntelFilters competitors={competitors} />);
+    fireEvent.change(screen.getByLabelText("Quality"), { target: { value: "0.7" } });
+    expect(pushMock).toHaveBeenCalledWith("/intel?source=reddit&min_quality=0.7");
+  });
+
+  it("searches on submit, not on every keystroke", () => {
+    render(<IntelFilters competitors={competitors} />);
+    const search = screen.getByLabelText("Search evidence");
+    fireEvent.change(search, { target: { value: "sso" } });
+    expect(pushMock).not.toHaveBeenCalled();
+    fireEvent.submit(search);
+    expect(pushMock).toHaveBeenCalledWith("/intel?source=reddit&q=sso");
+  });
 });

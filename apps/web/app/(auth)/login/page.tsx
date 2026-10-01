@@ -4,22 +4,14 @@ import { LoginForm } from "../login-form";
 
 export default function Page() {
   return (
-    <div className="mx-auto flex max-w-sm flex-col gap-6 py-16">
-      <div className="text-center">
-        <span className="text-lg font-semibold text-studio-action">Signal</span>
-        <h1 className="mt-2 text-xl font-semibold text-studio-ink">Log in</h1>
+    <div className="flex flex-col gap-8">
+      <div>
+        <h1 className="font-display text-[34px] leading-tight font-semibold tracking-[-0.03em] text-ink">Welcome back</h1>
+        <p className="mt-1.5 text-[15px] text-ink-secondary">Log in to see what moved.</p>
       </div>
-      <div className="rounded-[10px] border border-studio-line bg-studio-paper p-6">
-        <Suspense
-          fallback={
-            <p role="status" className="py-12 text-center text-sm text-studio-muted">
-              Preparing secure sign in…
-            </p>
-          }
-        >
-          <LoginForm />
-        </Suspense>
-      </div>
+      <Suspense fallback={<p role="status" className="py-12 text-center text-[14px] text-ink-muted">Preparing secure sign in…</p>}>
+        <LoginForm />
+      </Suspense>
     </div>
   );
 }

@@ -61,6 +61,9 @@ const emptyExisting = {
   pricing_url: null,
   changelog_rss: null,
   github_org: null,
+  website_urls: [],
+  discourse_url: null,
+  postings_rss: null,
 };
 
 function logFor(result: Awaited<ReturnType<typeof discoverCompetitor>>, field: string) {
@@ -104,7 +107,7 @@ describe("agents/discovery/competitor-discovery", () => {
     expect(normalizeDomain("https://acme.com")).toBe("acme.com");
   });
 
-  it("discovers all six fields and ranks subreddits by mention count", async () => {
+  it("discovers all nine fields and ranks subreddits by mention count", async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes("reddit.com") && url.includes("type=sr")) {
         return response({
@@ -138,6 +141,13 @@ describe("agents/discovery/competitor-discovery", () => {
       if (url === "https://api.github.com/orgs/acme") {
         return response({ json: { login: "acme", blog: "https://acme.com" } });
       }
+      if (url === "https://acme.com/" || url === "https://acme.com/product") {
+        return response({ text: "<html><main>Acme</main></html>" });
+      }
+      if (url === "https://forum.acme.com/latest.json") {
+        return response({ json: { topic_list: { topics: [] } } });
+      }
+      if (url === "https://acme.com/newsroom/rss") return response({ text: FEED_XML });
       return response({ status: 404 });
     });
 
@@ -164,7 +174,13 @@ describe("agents/discovery/competitor-discovery", () => {
       "pricing_url",
       "rss_url",
       "github_org",
+      "website_urls",
+      "discourse_url",
+      "postings_rss",
     ]);
+    expect(result.website_urls).toEqual(["https://acme.com/", "https://acme.com/product"]);
+    expect(result.discourse_url).toBe("https://forum.acme.com");
+    expect(result.postings_rss).toBe("https://acme.com/newsroom/rss");
     expect(result.logs.every((entry) => entry.status === "found")).toBe(true);
   });
 
@@ -316,6 +332,9 @@ describe("agents/discovery/competitor-discovery", () => {
         greenhouse_token: "acme-gh",
         lever_token: "acme-lever",
         pricing_url: "https://acme.com/pricing",
+        website_urls: ["https://acme.com/"],
+        discourse_url: "https://forum.acme.com",
+        postings_rss: "https://acme.com/newsroom/rss",
       },
     });
 
@@ -364,6 +383,9 @@ describe("agents/discovery/competitor-discovery", () => {
         pricing_url: "https://acme.com/custom-pricing",
         changelog_rss: "https://acme.com/custom-feed.xml",
         github_org: "acme-oss",
+        website_urls: ["https://acme.com/"],
+        discourse_url: "https://forum.acme.com",
+        postings_rss: "https://acme.com/newsroom/rss",
       },
     });
 
@@ -374,6 +396,9 @@ describe("agents/discovery/competitor-discovery", () => {
       pricing_url: "https://acme.com/custom-pricing",
       changelog_rss: "https://acme.com/custom-feed.xml",
       github_org: "acme-oss",
+      website_urls: ["https://acme.com/"],
+      discourse_url: "https://forum.acme.com",
+      postings_rss: "https://acme.com/newsroom/rss",
       logs: [],
     });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -559,7 +584,7 @@ describe("agents/discovery/competitor-discovery — SSRF guard", () => {
       existing: emptyExisting,
     });
 
-    for (const field of ["pricing_url", "rss_url"]) {
+    for (const field of ["pricing_url", "rss_url", "website_urls", "discourse_url", "postings_rss"]) {
       expect(logFor(result, field)).toMatchObject({
         status: "error",
         error_message: "domain resolves to a non-public address",

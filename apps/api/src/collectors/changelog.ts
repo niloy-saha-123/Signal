@@ -1,4 +1,11 @@
-// BullMQ collector — parses competitor RSS/Atom changelog feeds every 12h.
+// BullMQ collectors — parse competitor RSS/Atom feeds every 12h.
+//
+// Two feeds, one parser. A changelog (engineering: what shipped) and a newsroom
+// or press feed (company: what it wants announced) are both RSS, and both need
+// the same careful full-text resolution below. They are kept as separate
+// sources rather than merged because they say different things — a press
+// release states intent, a changelog entry states fact — and the quality
+// scorer weights them differently for exactly that reason.
 import type { Job } from "bullmq";
 import * as cheerio from "cheerio";
 import Parser from "rss-parser";
@@ -15,8 +22,7 @@ import {
 } from "../db/queries";
 import { assertPublicUrl, safeFetch } from "../lib/safe-fetch";
 
-const SERVICE_NAME = "changelog";
-const SOURCE = "changelog" as const;
+type FeedSource = "changelog" | "postings";
 const MAX_CHANGELOG_BYTES = 2_000_000;
 
 // rss-parser stashes RSS2's <content:encoded> under a literal
@@ -82,15 +88,15 @@ async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: 
   return withRetry(() => fetchArticleText(sourceUrl));
 }
 
-async function collectForCompetitor(competitor: {
-  id: string;
-  name: string;
-  changelog_rss: string;
-}): Promise<void> {
-  const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, SOURCE);
+async function collectForCompetitor(
+  competitor: { id: string; name: string },
+  feedUrl: string,
+  source: FeedSource
+): Promise<void> {
+  const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, source);
   // parseURL follows redirects internally and cannot re-check their targets.
   // Fetch the bounded body through safeFetch, then parse the inert string.
-  const feed = await withRetry(() => fetchFeed(competitor.changelog_rss));
+  const feed = await withRetry(() => fetchFeed(feedUrl));
 
   for (const item of feed.items ?? []) {
     const sourceUrl = item.link;
@@ -109,7 +115,7 @@ async function collectForCompetitor(competitor: {
       // Validate links even when content:encoded means no article fetch. The
       // URL is persisted and later rendered as evidence/source metadata.
       await assertPublicUrl(sourceUrl);
-      const alreadyCollected = await signalExistsBySourceUrl(competitor.id, SOURCE, sourceUrl);
+      const alreadyCollected = await signalExistsBySourceUrl(competitor.id, source, sourceUrl);
       if (alreadyCollected) continue;
 
       const rawText = await resolveRawText(item, sourceUrl);
@@ -117,7 +123,7 @@ async function collectForCompetitor(competitor: {
 
       const signal = await createSignal({
         competitor_id: competitor.id,
-        source: SOURCE,
+        source,
         source_url: sourceUrl,
         title: item.title ?? null,
         raw_text: rawText,
@@ -125,7 +131,7 @@ async function collectForCompetitor(competitor: {
 
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
-      logger.error("changelog collector failed to process one item — continuing with the rest", {
+      logger.error(`${source} collector failed to process one item — continuing with the rest`, {
         competitor_id: competitor.id,
         competitor_name: competitor.name,
         source_url: sourceUrl,
@@ -135,48 +141,53 @@ async function collectForCompetitor(competitor: {
   }
 }
 
-interface ChangelogCollectJobData {
+interface FeedCollectJobData {
   // No fields needed — every run sweeps all active competitors.
 }
 
-async function recordCircuitFailure(err: unknown): Promise<void> {
+async function recordCircuitFailure(service: string, err: unknown): Promise<void> {
   try {
-    await recordFailure(SERVICE_NAME, err instanceof Error ? err.message : String(err));
+    await recordFailure(service, err instanceof Error ? err.message : String(err));
   } catch (recordErr) {
     // recordFailure makes unguarded Redis calls that can themselves throw —
     // never let that mask the real error below.
-    logger.error("Failed to record circuit-breaker failure for changelog", { error: recordErr });
+    logger.error(`Failed to record circuit-breaker failure for ${service}`, { error: recordErr });
   }
 }
 
-export async function changelogCollectorProcessor(_job: Job<ChangelogCollectJobData>): Promise<void> {
-  if (await isCircuitOpen(SERVICE_NAME)) {
-    throw new Error(`${SERVICE_NAME} circuit is open — skipping job`);
+// One sweep implementation for both feeds. Each keeps its own circuit — a
+// broken press feed host must not stop changelog collection, and vice versa.
+async function runFeedSweep(
+  source: FeedSource,
+  feedOf: (competitor: Awaited<ReturnType<typeof listCompetitors>>[number]) => string | null
+): Promise<void> {
+  const service = source;
+  if (await isCircuitOpen(service)) {
+    throw new Error(`${service} circuit is open — skipping job`);
   }
 
   try {
     const competitors = (await listCompetitors()).filter(
-      (c): c is typeof c & { changelog_rss: string } => c.is_active && Boolean(c.changelog_rss)
+      (c) => c.is_active && Boolean(feedOf(c))
     );
 
     // One competitor's feed failing (after withRetry exhausts its attempts)
     // must not abort collection for every other competitor in this run —
     // same per-competitor isolation as hn.ts/reddit.ts.
     let hadFailure = false;
-    // Set when the loop exits via the mid-run circuit trip below, rather
-    // than by running out of competitors — that's not a clean run, so it
-    // must not let the trailing recordSuccess() force-close a circuit that
-    // was correctly just observed open (e.g. tripped by a concurrent run of
-    // this same collector — collect-changelog runs at concurrency 2).
+    // Set when the loop exits via the mid-run circuit trip below, rather than
+    // by running out of competitors — that's not a clean run, so it must not
+    // let the trailing recordSuccess() force-close a circuit that was
+    // correctly just observed open.
     let circuitTrippedMidRun = false;
     for (const competitor of competitors) {
       // The breaker can trip mid-run off an earlier competitor's failures —
-      // re-check before every attempt so the remaining competitors don't
-      // each still pay the full withRetry cost against a dependency the
-      // breaker just confirmed is down.
-      if (await isCircuitOpen(SERVICE_NAME)) {
+      // re-check before every attempt so the remaining competitors don't each
+      // still pay the full withRetry cost against a dependency the breaker
+      // just confirmed is down.
+      if (await isCircuitOpen(service)) {
         circuitTrippedMidRun = true;
-        logger.warn("changelog circuit opened mid-run — stopping before remaining competitors", {
+        logger.warn(`${service} circuit opened mid-run — stopping before remaining competitors`, {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
         });
@@ -184,34 +195,44 @@ export async function changelogCollectorProcessor(_job: Job<ChangelogCollectJobD
       }
 
       try {
-        await collectForCompetitor(competitor);
+        await collectForCompetitor(competitor, feedOf(competitor) as string, source);
       } catch (err) {
         hadFailure = true;
-        logger.error("changelog collector failed for one competitor — continuing with the rest", {
+        logger.error(`${service} collector failed for one competitor — continuing with the rest`, {
           competitor_id: competitor.id,
           competitor_name: competitor.name,
           error: err instanceof Error ? err.message : String(err),
         });
-        await recordCircuitFailure(err);
+        await recordCircuitFailure(service, err);
       }
     }
 
     if (!hadFailure && !circuitTrippedMidRun) {
-      await recordSuccess(SERVICE_NAME);
+      await recordSuccess(service);
     }
   } catch (err) {
     // Failure outside the per-competitor loop (e.g. listCompetitors() itself)
     // — a real job-level failure, not one competitor's problem, so this one
     // still rethrows.
-    await recordCircuitFailure(err);
+    await recordCircuitFailure(service, err);
     throw err;
   }
 }
 
-// Extension point — must only be called from the standalone worker process
-// entrypoint (not built yet), same as registry.ts's initWorkers(). Not
-// called here so importing this module never starts a live Worker as a
-// side effect.
+export async function changelogCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
+  return runFeedSweep("changelog", (c) => c.changelog_rss);
+}
+
+export async function postingsCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
+  return runFeedSweep("postings", (c) => c.postings_rss);
+}
+
+// Extension points — only called from the standalone worker entrypoint, so
+// importing this module never starts a live Worker as a side effect.
 export function initChangelogWorker() {
   return registerWorker("collect-changelog", changelogCollectorProcessor);
+}
+
+export function initPostingsWorker() {
+  return registerWorker("collect-postings", postingsCollectorProcessor);
 }

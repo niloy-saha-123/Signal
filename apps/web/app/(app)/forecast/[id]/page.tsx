@@ -1,221 +1,179 @@
-// One prediction, with the evidence it was made from.
-//
-// The evidence list is the reason a prediction is worth anything, so it is the
-// body of the page rather than a drawer. A forecast you cannot audit is just an
-// assertion with a percentage attached.
+// One forecast, with the evidence it was made from. The evidence is the body of
+// the page rather than a drawer: a forecast you cannot audit is an assertion
+// with a percentage attached.
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getPrediction } from "@/lib/api";
+import { AskButton } from "@/components/AskButton";
+import { OutcomeBadge } from "@/components/forecast/parts";
+import { Icon } from "@/components/ui/icons";
+import { Badge, Card, CardBody, CardHeader, Probability, SourceChip } from "@/components/ui/primitives";
+import { ApiError, getPrediction, type ResolutionCriteria } from "@/lib/api";
+import { sourceLabel } from "@/lib/chart-colors";
+import { daysUntil, formatDate, patternLabel } from "@/lib/format";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
-import { Badge, Card, CardBody, CardHeader, Metric, Num } from "@/components/ui/primitives";
-import type { ResolutionCriteria } from "@/lib/api";
-import { SOURCE_COLORS } from "@/lib/chart-colors";
 
-const DATE = new Intl.DateTimeFormat("en-US", {
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-  timeZone: "UTC",
-});
-
-const PATTERN_LABEL: Record<string, string> = {
-  product_launch: "Product launch",
-  pricing_change: "Pricing change",
-  upmarket_pivot: "Upmarket pivot",
-  platform_expansion: "Platform expansion",
-  hiring_surge: "Hiring surge",
-  deprecation: "Deprecation",
-};
-
-// Typed as the real union so TypeScript narrows on `kind` and the exhaustive
-// check below fails to compile if a variant is ever added. Casting this to
-// Record<string, unknown> and re-deriving field shapes with `as string[]` threw
-// away exactly the safety the shared schema exists to provide.
+// Typed as the real union so TypeScript narrows on `kind`; the exhaustive check
+// fails to compile if a variant is ever added.
 function criteriaSummary(criteria: ResolutionCriteria): string {
   switch (criteria.kind) {
     case "signal_match":
-      return `Resolves as a hit if every one of these appears in collected signal: ${criteria.all_of.join(", ")} — searching ${criteria.sources.join(", ")}.`;
+      return `It counts as a hit if collected evidence mentions all of: ${criteria.all_of.join(", ")} — searching ${criteria.sources.map(sourceLabel).join(", ")}.`;
     case "github_release":
-      return `Resolves as a hit if ${criteria.repo} publishes a release mentioning ${criteria.mentions.join(" or ")}.`;
+      return `It counts as a hit if ${criteria.repo} publishes a release mentioning ${criteria.mentions.join(" or ")}.`;
     case "pricing_change":
       return criteria.direction === "any"
-        ? "Resolves as a hit if any pricing change is recorded in the window."
-        : `Resolves as a hit if a pricing ${criteria.direction} is recorded in the window.`;
+        ? "It counts as a hit if any pricing change is recorded in the window."
+        : `It counts as a hit if a pricing ${criteria.direction} is recorded in the window.`;
     default: {
       const exhaustive: never = criteria;
       void exhaustive;
-      return "Resolution criteria are not recognised by this version of the app.";
+      return "These settlement rules aren't recognised by this version of the app.";
     }
   }
 }
 
-export default async function PredictionDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function PredictionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const token = await getOptionalAccessToken();
   if (!token) notFound();
 
-  const prediction = await getPrediction(id, token).catch(() => null);
+  const prediction = await getPrediction(id, token).catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
   if (!prediction) notFound();
 
-  const resolved = prediction.status !== "open";
+  const open = prediction.status === "open";
+  const days = daysUntil(prediction.resolves_at);
+  const bySource = Object.entries(
+    prediction.evidence.reduce<Record<string, number>>((acc, signal) => {
+      acc[signal.source] = (acc[signal.source] ?? 0) + 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b[1] - a[1]);
 
   return (
     <div className="max-w-4xl">
-      <Link
-        href="/forecast"
-        className="mb-6 inline-block text-[13px] text-ink-secondary hover:text-ink"
-      >
-        Back to predictions
+      <Link href="/forecast" className="mb-6 inline-flex items-center gap-1.5 text-[14px] font-semibold text-ink-secondary hover:text-ink">
+        <Icon name="arrowLeft" className="h-4 w-4" />
+        Forecasts
       </Link>
 
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Badge tone="neutral">
-          {PATTERN_LABEL[prediction.pattern_type] ?? prediction.pattern_type}
-        </Badge>
-        {prediction.status === "hit" ? <Badge tone="hit">Hit</Badge> : null}
-        {prediction.status === "miss" ? <Badge tone="miss">Miss</Badge> : null}
-        {prediction.status === "unresolved" ? <Badge tone="unresolved">Unresolved</Badge> : null}
-        {prediction.status === "void" ? <Badge tone="neutral">Void</Badge> : null}
-        {prediction.status === "open" ? <Badge tone="open">Open</Badge> : null}
-      </div>
-
-      <h1 className="mb-6 text-[28px] font-semibold leading-tight tracking-[-0.02em] text-ink">
-        {prediction.statement}
-      </h1>
-
-      <div className="mb-8 grid grid-cols-2 gap-px overflow-hidden rounded-[10px] border border-line bg-line sm:grid-cols-4">
-        <div className="bg-surface p-5">
-          <Metric
-            value={`${Math.round(prediction.probability * 100)}%`}
-            label={resolved ? "Signal said" : "Likely"}
-            size="md"
-          />
+      <div className="rounded-[20px] bg-sky p-6 sm:p-8">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge>{patternLabel(prediction.pattern_type)}</Badge>
+          <OutcomeBadge status={prediction.status} />
         </div>
-        <div className="bg-surface p-5">
-          <Metric value={String(prediction.evidence_count)} label="Signals behind it" size="md" />
+        <div className="mt-4 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+          <h1 className="max-w-2xl font-display text-[30px] leading-[1.1] font-semibold tracking-[-0.03em] text-ink sm:text-[36px]">
+            {prediction.statement}
+          </h1>
+          <div className="shrink-0 sm:text-right">
+            <Probability value={prediction.probability} size="lg" />
+            <p className="mt-1 text-[13px] text-ink-muted">{open ? "likely" : "what Signal said"}</p>
+          </div>
         </div>
-        <div className="bg-surface p-5">
-          <Metric
-            value={DATE.format(new Date(prediction.resolves_at))}
-            label={resolved ? "Resolved on" : "Resolves"}
-            size="sm"
-          />
-        </div>
-        <div className="bg-surface p-5">
+        <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-2 text-[14px] text-ink-secondary">
+          <span suppressHydrationWarning>
+            {open ? (days > 0 ? `${days} day${days === 1 ? "" : "s"} left · ` : "Due now · ") : ""}
+            {open ? "settles" : "settled"} <span className="font-semibold text-ink">{formatDate(open ? prediction.resolves_at : prediction.resolved_at ?? prediction.resolves_at)}</span>
+          </span>
+          <span>
+            <span className="font-semibold text-ink">{prediction.evidence_count}</span> signals behind it
+          </span>
           {prediction.brier_score !== null ? (
-            <Metric
-              value={prediction.brier_score.toFixed(3)}
-              label="Brier score"
-              size="md"
-              tone={prediction.status === "hit" ? "hit" : "miss"}
-            />
-          ) : (
-            <Metric value="—" label="Brier score" size="md" tone="muted" />
-          )}
+            <span>
+              Brier <span className="tnum font-semibold text-ink">{prediction.brier_score.toFixed(3)}</span>
+            </span>
+          ) : null}
+          <span className="ml-auto">
+            <AskButton prompt={`Walk me through the evidence for: "${prediction.statement}". What would change your mind?`} />
+          </span>
         </div>
       </div>
 
-      {resolved ? (
-        <Card className="mb-6">
-          <CardHeader title="What actually happened" />
+      <div className="mt-6 grid gap-6">
+        {open ? (
+          <Card>
+            <CardHeader title="How this settles" />
+            <CardBody>
+              <p className="text-[15px] text-ink">{criteriaSummary(prediction.resolution_criteria)}</p>
+              <p className="mt-2 text-[14px] text-ink-secondary">
+                Checked automatically on the date by matching collected evidence. No model decides the outcome.
+              </p>
+            </CardBody>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader title="What actually happened" />
+            <CardBody>
+              <p className="text-[15px] text-ink">{prediction.resolution_note}</p>
+              {prediction.resolution_evidence_urls.length > 0 ? (
+                <ul className="mt-3 space-y-1">
+                  {prediction.resolution_evidence_urls.map((url) => (
+                    <li key={url}>
+                      <a href={url} target="_blank" rel="noopener noreferrer" className="break-all text-[14px] text-accent hover:underline">
+                        {url}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {prediction.status === "unresolved" ? (
+                <p className="mt-3 text-[14px] text-ink-muted">
+                  No score was recorded. A window that closed with no evidence either way says nothing about whether
+                  the forecast was good, so it is left out of the scorecard rather than counted as a miss.
+                </p>
+              ) : null}
+            </CardBody>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader
+            title="Evidence"
+            description="The signals this forecast was made from, as they were at the time."
+            action={
+              bySource.length ? (
+                <div className="hidden flex-wrap justify-end gap-1.5 sm:flex">
+                  {bySource.map(([source, count]) => (
+                    <span key={source} className="inline-flex items-center gap-1">
+                      <SourceChip source={source} />
+                      <span className="tnum text-[12px] text-ink-muted">×{count}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : null
+            }
+          />
           <CardBody>
-            <p className="text-[14px] text-ink">{prediction.resolution_note}</p>
-            {prediction.resolution_evidence_urls.length > 0 ? (
-              <ul className="mt-3 space-y-1">
-                {prediction.resolution_evidence_urls.map((url) => (
-                  <li key={url}>
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="break-all text-[13px] text-accent hover:underline"
-                    >
-                      {url}
-                    </a>
+            {prediction.evidence.length === 0 ? (
+              <p className="text-[14px] text-ink-muted">The underlying signals are no longer available.</p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {prediction.evidence.map((signal) => (
+                  <li key={signal.id} className="py-4 first:pt-0 last:pb-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SourceChip source={signal.source} />
+                      <span className="text-[12.5px] text-ink-muted">{formatDate(signal.collected_at)}</span>
+                    </div>
+                    <p className="mt-2 text-[15px] font-semibold text-ink">
+                      {signal.source_url ? (
+                        <a href={signal.source_url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                          {signal.title ?? "(untitled)"}
+                        </a>
+                      ) : (
+                        (signal.title ?? "(untitled)")
+                      )}
+                    </p>
+                    <p className="mt-1 line-clamp-3 text-[14px] text-ink-secondary">{signal.raw_text}</p>
                   </li>
                 ))}
               </ul>
-            ) : null}
-            {prediction.status === "unresolved" ? (
-              <p className="mt-3 text-[13px] text-ink-muted">
-                No score was recorded. A window that closed with no evidence either way says
-                nothing about whether the forecast was good, so it is excluded from the
-                scorecard rather than counted as a miss.
-              </p>
-            ) : null}
+            )}
           </CardBody>
         </Card>
-      ) : (
-        <Card className="mb-6">
-          <CardHeader title="How this gets settled" />
-          <CardBody>
-            <p className="text-[14px] text-ink">
-              {criteriaSummary(prediction.resolution_criteria)}
-            </p>
-            <p className="mt-2 text-[13px] text-ink-secondary">
-              Checked automatically on the resolution date by matching collected evidence — no
-              model decides the outcome.
-            </p>
-          </CardBody>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader
-          title="Evidence"
-          description="The signals this prediction was made from, as they were at the time."
-        />
-        <CardBody>
-          {prediction.evidence.length === 0 ? (
-            <p className="text-[13px] text-ink-muted">
-              The underlying signals are no longer available.
-            </p>
-          ) : (
-            <ul className="space-y-3">
-              {prediction.evidence.map((signal) => (
-                <li key={signal.id} className="flex gap-3 border-b border-line pb-3 last:border-b-0 last:pb-0">
-                  <span
-                    className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
-                    style={{
-                      backgroundColor:
-                        SOURCE_COLORS[signal.source as keyof typeof SOURCE_COLORS] ?? "#8a8780",
-                    }}
-                    aria-label={signal.source}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-ink">
-                      {signal.title ?? "(untitled)"}
-                    </div>
-                    <p className="mt-0.5 line-clamp-2 text-[13px] text-ink-secondary">
-                      {signal.raw_text}
-                    </p>
-                    <div className="mt-1 flex items-center gap-3 text-[11px] text-ink-muted">
-                      <span>{signal.source}</span>
-                      {signal.source_url ? (
-                        <a
-                          href={signal.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-accent hover:underline"
-                        >
-                          source
-                        </a>
-                      ) : null}
-                      <Num className="text-ink-muted">
-                        quality {signal.quality_score.toFixed(2)}
-                      </Num>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardBody>
-      </Card>
+      </div>
     </div>
   );
 }

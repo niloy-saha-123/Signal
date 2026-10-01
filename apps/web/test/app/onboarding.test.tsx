@@ -17,6 +17,16 @@ vi.mock("../../lib/supabase-browser", () => ({
   }),
 }));
 
+const { resolveCompanyMock, createCompetitorMock } = vi.hoisted(() => ({
+  resolveCompanyMock: vi.fn(),
+  createCompetitorMock: vi.fn(),
+}));
+
+vi.mock("../../lib/api", () => ({
+  resolveCompany: resolveCompanyMock,
+  createCompetitor: createCompetitorMock,
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock, refresh: refreshMock }),
 }));
@@ -35,6 +45,8 @@ describe("OnboardingForm", () => {
     refreshSessionMock.mockReset().mockResolvedValue({ data: { session: null } });
     pushMock.mockReset();
     refreshMock.mockReset();
+    resolveCompanyMock.mockReset();
+    createCompetitorMock.mockReset();
   });
 
   afterEach(() => {
@@ -45,19 +57,73 @@ describe("OnboardingForm", () => {
     vi.unstubAllGlobals();
   });
 
-  it("creates a workspace and redirects home on success", async () => {
+  it("creates a workspace, refreshes the session and moves to the competitor step", async () => {
     getSessionMock.mockResolvedValue({ data: { session: { access_token: "token-123" } } });
     mockFetchOnce(true);
     render(<OnboardingForm />);
     fireEvent.change(screen.getByLabelText("Workspace name"), { target: { value: "Acme Inc" } });
     fireEvent.click(screen.getByRole("button", { name: "Create workspace" }));
-    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/briefing"));
+    await screen.findByRole("heading", { name: "Who should Signal watch first?" });
     expect(fetch).toHaveBeenCalledWith(`${BASE}/api/workspaces`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer token-123" },
       body: JSON.stringify({ name: "Acme Inc" }),
     });
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(refreshSessionMock).toHaveBeenCalledTimes(1);
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  async function reachCompetitorStep() {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: "token-123" } } });
+    mockFetchOnce(true);
+    render(<OnboardingForm />);
+    fireEvent.change(screen.getByLabelText("Workspace name"), { target: { value: "Acme Inc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create workspace" }));
+    await screen.findByRole("heading", { name: "Who should Signal watch first?" });
+  }
+
+  it("pre-fills the competitor typed on the landing page", async () => {
+    window.localStorage.setItem("signal:first-competitor", "Kestrel.dev");
+    await reachCompetitorStep();
+    await waitFor(() => expect(screen.getByLabelText("Competitor website")).toHaveValue("kestrel.dev"));
+    window.localStorage.clear();
+  });
+
+  it("adds a competitor, then finishes on the ready step and goes home", async () => {
+    resolveCompanyMock.mockResolvedValue({ name: "Kestrel", domain: "kestrel.dev" });
+    createCompetitorMock.mockResolvedValue({ id: "c1", name: "Kestrel", domain: "kestrel.dev" });
+    await reachCompetitorStep();
+    fireEvent.change(screen.getByLabelText("Competitor website"), { target: { value: "https://www.kestrel.dev/x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add competitor" }));
+    await screen.findByText("Added");
+    expect(createCompetitorMock).toHaveBeenCalledWith({ name: "Kestrel", domain: "kestrel.dev" });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Go to Home" }));
+    expect(pushMock).toHaveBeenCalledWith("/briefing");
+    expect(refreshMock).toHaveBeenCalled();
+  });
+
+  it("rejects an invalid website without calling the API", async () => {
+    await reachCompetitorStep();
+    fireEvent.change(screen.getByLabelText("Competitor website"), { target: { value: "nope" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add competitor" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/like kestrel\.dev/);
+    expect(createCompetitorMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a name from the domain when resolution fails", async () => {
+    resolveCompanyMock.mockRejectedValue(new Error("down"));
+    createCompetitorMock.mockResolvedValue({ id: "c2", name: "lumen", domain: "lumen.ai" });
+    await reachCompetitorStep();
+    fireEvent.change(screen.getByLabelText("Competitor website"), { target: { value: "lumen.ai" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add competitor" }));
+    await waitFor(() => expect(createCompetitorMock).toHaveBeenCalledWith({ name: "lumen", domain: "lumen.ai" }));
+  });
+
+  it("lets someone skip adding a competitor", async () => {
+    await reachCompetitorStep();
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    expect(pushMock).toHaveBeenCalledWith("/briefing");
   });
 
   it("renders an inline error and never calls fetch when there is no active session", async () => {
@@ -83,5 +149,26 @@ describe("OnboardingForm", () => {
       expect(screen.getByRole("alert")).toHaveTextContent("Could not create your workspace — try again.")
     );
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes at the competitor step when the workspace already exists (reload mid-setup)", async () => {
+    const payload = btoa(JSON.stringify({ workspace_id: "ws-1" })).replace(/=+$/, "");
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: `h.${payload}.s` } } });
+    vi.stubGlobal("fetch", vi.fn());
+    render(<OnboardingForm />);
+    await screen.findByRole("heading", { name: "Who should Signal watch first?" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("doesn't promise a Slack setup that isn't built yet", async () => {
+    createCompetitorMock.mockResolvedValue({ id: "c1", name: "Kestrel", domain: "kestrel.dev" });
+    resolveCompanyMock.mockResolvedValue({ name: "Kestrel", domain: "kestrel.dev" });
+    await reachCompetitorStep();
+    fireEvent.change(screen.getByLabelText("Competitor website"), { target: { value: "kestrel.dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add competitor" }));
+    await screen.findByText("Added");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByRole("button", { name: "Go to Home" });
+    expect(screen.queryByRole("link", { name: /Slack/ })).toBeNull();
   });
 });

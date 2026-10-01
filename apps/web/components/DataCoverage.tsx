@@ -18,31 +18,28 @@ export function DataCoverage({ dates }: { dates: string[] }) {
     });
   }
 
-  const first = days.findIndex((d) => d.active);
-  const last = days.map((d) => d.active).lastIndexOf(true);
+  const activeCount = days.filter((d) => d.active).length;
 
   return (
-    <div className="flex flex-col gap-3 rounded-[1.6rem] border border-studio-line bg-studio-paper p-6">
+    <div className="flex flex-col gap-3 rounded-[14px] border border-line bg-surface p-5">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-bold text-studio-ink">Data coverage</h2>
-        {first === -1 ? (
-          <span className="text-xs text-studio-muted">No signals in the last 30 days</span>
+        <h2 className="text-[15px] font-semibold text-ink">Days with new evidence</h2>
+        {activeCount === 0 ? (
+          <span className="text-[12.5px] text-ink-muted">None in the last 30 days</span>
         ) : (
-          <span className="text-xs text-studio-muted">
-            {days[first].label} — {days[last].label}
+          <span className="text-[12.5px] text-ink-muted">
+            {activeCount} of the last 30
           </span>
         )}
       </div>
-      <div className="flex gap-1">
+      <div className="flex gap-1" role="img" aria-label={`Evidence collected on ${activeCount} of the last 30 days`}>
         {days.map((day, index) => (
           <div key={index} className="flex flex-1 flex-col items-center gap-1.5">
             <div
-              className={`h-10 w-full rounded-md ${
-                day.active ? "bg-studio-action" : "bg-studio-sky"
-              }`}
+              className={`h-8 w-full rounded-[4px] ${day.active ? "bg-ink" : "bg-surface-sunken"}`}
               title={day.active ? "Has signals" : "No signals"}
             />
-            <span className="text-[10px] text-studio-muted">{index % 5 === 0 ? day.label : ""}</span>
+            <span className="text-[10px] text-ink-muted" aria-hidden="true">{index % 5 === 0 ? day.label : ""}</span>
           </div>
         ))}
       </div>

@@ -1,41 +1,38 @@
 import type { Metadata, Viewport } from "next";
-import { JetBrains_Mono, Public_Sans } from "next/font/google";
+import { Funnel_Display, Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
-// Two families, both doing real work. Public Sans carries the UI; the mono
-// carries every number that means something — probabilities, Brier scores,
-// dates, counts. In a product whose content is measurements, the numerals are
-// the interface, so they get a typeface chosen for them rather than whatever
-// the body font happens to do with digits.
-const publicSans = Public_Sans({
+// Funnel Display carries headlines and the big probabilities; Hanken Grotesk
+// carries everything else, with tabular figures wherever numbers line up.
+const funnel = Funnel_Display({
   subsets: ["latin"],
-  variable: "--font-public-sans",
+  variable: "--font-funnel",
+  display: "swap",
+  weight: ["400", "500", "600", "700", "800"],
+});
+
+const hanken = Hanken_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-hanken",
   display: "swap",
   weight: ["400", "500", "600", "700"],
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
-  display: "swap",
-  weight: ["400", "500", "600"],
-});
-
 export const metadata: Metadata = {
-  title: "Signal — Competitive Intelligence",
+  title: "Signal — the weather forecast for your competitors",
   description:
-    "Signal predicts what your competitors will ship, writes it down, and scores itself when the date arrives.",
+    "Signal reads competitors' code, hiring, pricing and docs, says what they will ship next with a probability and a date, and scores itself when the date arrives.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#faf9f7",
+  themeColor: "#eef5fa",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${publicSans.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${funnel.variable} ${hanken.variable}`}>
       <body className="min-h-screen bg-ground font-sans text-[15px] leading-normal text-ink antialiased">
         {children}
       </body>

@@ -13,6 +13,7 @@ import { selectModel } from "../../llm/adaptive-router";
 import { getActivePrompt } from "../../llm/prompt-registry";
 import { withCircuitBreaker } from "../../reliability/circuit-breaker";
 import { runBranchNode, isLlmBudgetExhausted } from "./branch-node";
+import { guardedMessages } from "../chat/untrusted";
 
 const AGENT_NAME = "change_detector" as const;
 const MODEL = "gpt-4o-mini";
@@ -130,10 +131,7 @@ export async function changeDetectorNode(
     };
     const { raw, parsed } = await trackLatency(AGENT_NAME, telemetryContext, () =>
       withCircuitBreaker(`analysis:${AGENT_NAME}`, () =>
-        structuredModel.invoke([
-          ["system", systemPrompt],
-          ["human", buildDiffText(diffPayload)],
-        ])
+        structuredModel.invoke(guardedMessages(systemPrompt, buildDiffText(diffPayload), "pricing page diff"))
       )
     );
 

@@ -160,6 +160,10 @@ describe("CompetitorDiscoveryResultSchema", () => {
       lever_token: "acme",
       pricing_url: "https://acme.com/pricing",
       changelog_rss: "https://acme.com/changelog.rss",
+      github_org: "acme",
+      website_urls: ["https://acme.com/", "https://acme.com/product"],
+      discourse_url: "https://forum.acme.com",
+      postings_rss: null,
       logs: [
         log({ field_name: "subreddits", discovered_value: "saas,startups", status: "found" }),
         log({ field_name: "greenhouse", discovered_value: "acmeco", status: "found" }),
@@ -188,6 +192,10 @@ describe("CompetitorDiscoveryResultSchema", () => {
         lever_token: null,
         pricing_url: null,
         changelog_rss: null,
+        github_org: null,
+        website_urls: [],
+        discourse_url: null,
+        postings_rss: null,
         logs: [log({ status: "partial" })],
       }),
     ).toThrow();
@@ -200,9 +208,14 @@ describe("CompetitorDiscoveryResultSchema", () => {
       lever_token: null,
       pricing_url: null,
       changelog_rss: null,
+      github_org: null,
+      website_urls: [],
+      discourse_url: null,
+      postings_rss: null,
       logs: [],
     });
     expect(result.subreddits).toEqual([]);
+    expect(result.website_urls).toEqual([]);
     expect(result.greenhouse_token).toBeNull();
     expect(result.logs).toEqual([]);
   });
@@ -216,5 +229,30 @@ describe("CompetitorDiscoveryResultSchema", () => {
       logs: [],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+import { CompetitorCreateInputSchema } from "../src/signals";
+
+describe("CompetitorCreateInputSchema URL fields", () => {
+  const base = { name: "Kestrel", domain: "kestrel.dev" };
+
+  it.each([
+    ["pricing_url", "javascript:alert(1)"],
+    ["rss_url", "file:///etc/passwd"],
+    ["discourse_url", "data:text/html,hi"],
+    ["postings_rss", "ftp://kestrel.dev/feed"],
+    ["website_urls", ["javascript:alert(1)"]],
+  ])("rejects a non-web scheme in %s", (field, value) => {
+    expect(CompetitorCreateInputSchema.safeParse({ ...base, [field]: value }).success).toBe(false);
+  });
+
+  it("accepts http and https URLs", () => {
+    const parsed = CompetitorCreateInputSchema.safeParse({
+      ...base,
+      website_urls: ["https://kestrel.dev/", "http://kestrel.dev/product"],
+      discourse_url: "https://forum.kestrel.dev",
+    });
+    expect(parsed.success).toBe(true);
   });
 });

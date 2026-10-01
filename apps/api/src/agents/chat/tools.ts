@@ -9,7 +9,7 @@
 //   - wraps existing route/query logic rather than reimplementing it.
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
-import { CompetitorCreateInputSchema } from "@signal/shared";
+import { CompetitorCreateInputSchema, type PredictionStatus } from "@signal/shared";
 import * as queries from "../../db/queries";
 import { type QueueName } from "../../queues/registry";
 
@@ -28,6 +28,12 @@ export interface ChatToolDeps {
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
   enqueueDiscovery: (workspaceId: string) => Promise<void>;
   fetchUrlPage: (url: string, workspaceId: string) => Promise<string>;
+  listPredictionsForWorkspace: typeof queries.listPredictionsForWorkspace;
+  getPredictionForWorkspace: typeof queries.getPredictionForWorkspace;
+  voidPredictionForWorkspace: typeof queries.voidPredictionForWorkspace;
+  getCalibration: typeof queries.getCalibration;
+  listAlertFeed: typeof queries.listAlertFeed;
+  getWorkspaceActivity: typeof queries.getWorkspaceActivity;
 }
 
 // Enqueue deps resolved lazily (dynamic import) rather than via a static registry
@@ -37,6 +43,12 @@ export interface ChatToolDeps {
 export const defaultChatToolDeps: ChatToolDeps = {
   listCompetitorsForWorkspace: queries.listCompetitorsForWorkspace,
   getCompetitorByIdForWorkspace: queries.getCompetitorByIdForWorkspace,
+  listPredictionsForWorkspace: queries.listPredictionsForWorkspace,
+  getPredictionForWorkspace: queries.getPredictionForWorkspace,
+  voidPredictionForWorkspace: queries.voidPredictionForWorkspace,
+  getCalibration: queries.getCalibration,
+  listAlertFeed: queries.listAlertFeed,
+  getWorkspaceActivity: queries.getWorkspaceActivity,
   getLatestSignalScores: queries.getLatestSignalScores,
   getSignalVolumeByDay: queries.getSignalVolumeByDay,
   createCompetitorForWorkspace: queries.createCompetitorForWorkspace,
@@ -74,6 +86,10 @@ export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   "trigger_competitor_analysis",
   "update_company_goals",
   "trigger_discovery_search",
+  // Voiding retires a prediction from the ledger. It cannot erase a settled
+  // hit or miss (the query guards on status = 'open'), but it is still the user
+  // editing their own track record, so it never happens without an explicit yes.
+  "void_prediction",
 ]);
 
 // Safe-rollout kill switch for chat's mutating tools. Default ON — honored only
@@ -277,8 +293,170 @@ export function buildChatTools(workspaceId: string, deps: ChatToolDeps = default
     }
   );
 
+  // ── prediction ledger ──────────────────────────────────────────────────
+
+  const listPredictions = tool(
+    async ({
+      status,
+      competitor_id,
+    }: {
+      status?: PredictionStatus;
+      competitor_id?: string;
+    }) => {
+      const rows = await deps.listPredictionsForWorkspace({
+        workspace_id: workspaceId,
+        status,
+        competitor_id,
+        limit: 50,
+      });
+      return JSON.stringify(
+        rows.map((row) => ({
+          id: row.id,
+          competitor_id: row.competitor_id,
+          statement: row.statement,
+          pattern_type: row.pattern_type,
+          probability: row.probability,
+          status: row.status,
+          resolves_at: row.resolves_at,
+          evidence_count: row.evidence_count,
+          // Present for hit/miss only. null means unscored, NEVER zero — say
+          // "not scored", never "0", if you mention it.
+          brier_score: row.brier_score,
+          resolution_note: row.resolution_note,
+        }))
+      );
+    },
+    {
+      name: "list_predictions",
+      description:
+        "List this workspace's predictions — what Signal expects competitors to do next, " +
+        "and how past predictions resolved. Filter by status (open, hit, miss, unresolved, void) " +
+        "or competitor. A null brier_score means the prediction was not scored, which is not the " +
+        "same as a score of zero.",
+      schema: z.object({
+        status: z.enum(["open", "hit", "miss", "unresolved", "void"]).optional(),
+        competitor_id: z.string().uuid().optional(),
+      }),
+    }
+  );
+
+  const getPredictionDetail = tool(
+    async ({ prediction_id }: { prediction_id: string }) => {
+      const row = await deps.getPredictionForWorkspace(prediction_id, workspaceId);
+      if (!row) return "no prediction with that id in this workspace";
+      return JSON.stringify({
+        id: row.id,
+        statement: row.statement,
+        probability: row.probability,
+        status: row.status,
+        resolves_at: row.resolves_at,
+        resolution_criteria: row.resolution_criteria,
+        resolution_note: row.resolution_note,
+        resolution_evidence_urls: row.resolution_evidence_urls,
+        evidence_count: row.evidence_count,
+        brier_score: row.brier_score,
+      });
+    },
+    {
+      name: "get_prediction",
+      description:
+        "Get one prediction in full, including how it will be resolved and — once settled — " +
+        "what actually happened and the evidence for it.",
+      schema: z.object({ prediction_id: z.string().uuid() }),
+    }
+  );
+
+  const getCalibrationTool = tool(
+    async ({ competitor_id }: { competitor_id?: string }) => {
+      const calibration = await deps.getCalibration(workspaceId, { competitorId: competitor_id });
+      return JSON.stringify(calibration);
+    },
+    {
+      name: "get_calibration",
+      description:
+        "Get Signal's own forecasting track record: Brier score against the 0.25 coin-flip " +
+        "baseline, how many predictions have resolved, and calibration by confidence band. " +
+        "A null brier means nothing has resolved yet — report that as 'no track record yet', " +
+        "never as a score of zero, which would read as perfect accuracy.",
+      schema: z.object({ competitor_id: z.string().uuid().optional() }),
+    }
+  );
+
+  const voidPrediction = tool(
+    async ({ prediction_id }: { prediction_id: string }) => {
+      const voided = await deps.voidPredictionForWorkspace(prediction_id, workspaceId);
+      return voided
+        ? "prediction voided; it is excluded from the track record"
+        : "could not void it — either it is not this workspace's, or it has already resolved";
+    },
+    {
+      name: "void_prediction",
+      description:
+        "Mark an OPEN prediction as moot — the competitor was acquired, the product line " +
+        "was cancelled, the question stopped being meaningful. Cannot void a prediction that " +
+        "has already resolved: a recorded hit or miss stays on the track record permanently.",
+      schema: z.object({ prediction_id: z.string().uuid() }),
+    }
+  );
+
+  // ── alerts and system state ────────────────────────────────────────────
+
+  const listAlerts = tool(
+    async ({ competitor_ids }: { competitor_ids: string[] }) => {
+      const rows = await deps.listAlertFeed({
+        workspace_id: workspaceId,
+        competitor_ids,
+        limit: 25,
+      });
+      return JSON.stringify(
+        rows.map((row) => ({
+          id: row.id,
+          competitor_id: row.competitor_id,
+          pattern: row.pattern,
+          confidence: row.confidence,
+          interpretation: row.interpretation,
+          created_at: row.created_at,
+        }))
+      );
+    },
+    {
+      name: "list_alerts",
+      description:
+        "List recent alerts — competitor movements that already happened and were judged " +
+        "worth surfacing. Requires competitor ids; call list_competitors first.",
+      schema: z.object({ competitor_ids: z.array(z.string().uuid()).min(1).max(50) }),
+    }
+  );
+
+  const getActivity = tool(
+    async () => {
+      const activity = await deps.getWorkspaceActivity(workspaceId);
+      return JSON.stringify({
+        recent_runs: activity.runs.length,
+        spend_today_usd: activity.spend_today_usd,
+        daily_budget_usd: activity.daily_budget_usd,
+        open_circuits: activity.open_circuits,
+        latest: activity.runs.slice(0, 5),
+      });
+    },
+    {
+      name: "get_agent_activity",
+      description:
+        "Check what Signal itself has been doing: recent analysis runs, today's model spend " +
+        "against the daily budget, and whether any dependency is currently circuit-broken. " +
+        "Use this when the user asks why nothing is happening or whether the system is healthy.",
+      schema: z.object({}),
+    }
+  );
+
   const all = [
     { name: "list_competitors", mutating: false, tool: listCompetitors },
+    { name: "list_predictions", mutating: false, tool: listPredictions },
+    { name: "get_prediction", mutating: false, tool: getPredictionDetail },
+    { name: "get_calibration", mutating: false, tool: getCalibrationTool },
+    { name: "list_alerts", mutating: false, tool: listAlerts },
+    { name: "get_agent_activity", mutating: false, tool: getActivity },
+    { name: "void_prediction", mutating: MUTATING_TOOL_NAMES.has("void_prediction"), tool: voidPrediction },
     { name: "get_competitor_score", mutating: false, tool: getCompetitorScore },
     { name: "get_competitor_trend", mutating: false, tool: getCompetitorTrend },
     { name: "list_company_goals", mutating: false, tool: listCompanyGoals },
@@ -311,6 +489,8 @@ export function describeMutation(
     }
     case "trigger_discovery_search":
       return `Start a discovery search (goal: "${String(args.goal ?? "").slice(0, 120)}")?`;
+    case "void_prediction":
+      return "Void this prediction so it no longer counts toward the track record? Already-resolved predictions cannot be voided.";
     default:
       return `Run ${toolName}?`;
   }

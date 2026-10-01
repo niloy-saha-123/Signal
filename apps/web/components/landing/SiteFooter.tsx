@@ -1,76 +1,51 @@
 import Link from "next/link";
+import { Wordmark } from "@/components/brand/Wordmark";
 
-import { SignalMark } from "@/components/landing/SignalMark";
+const PRODUCT = [
+  { href: "/briefing", label: "Home" },
+  { href: "/forecast", label: "Forecasts" },
+  { href: "/board", label: "Competitors" },
+  { href: "/chat", label: "Ask Signal" },
+];
 
-const productLinks = [
-  { href: "#product", label: "Product" },
-  { href: "#workflow", label: "How it works" },
-  { href: "#research", label: "Research chat" },
-  { href: "#questions", label: "Questions" },
-] as const;
-
-const workspaceLinks = [
-  { href: "/briefing", label: "Briefing" },
-  { href: "/intel", label: "Intel" },
-  { href: "/discovery", label: "Discovery" },
-  { href: "/alerts", label: "Alerts" },
-] as const;
+const ACCOUNT = [
+  { href: "/signup", label: "Create a workspace" },
+  { href: "/login", label: "Log in" },
+];
 
 export function SiteFooter() {
   return (
-    <footer className="border-t border-studio-line bg-studio-paper">
-      <div className="mx-auto grid max-w-[86rem] gap-12 px-5 py-14 sm:px-8 md:grid-cols-[1.4fr_repeat(3,minmax(0,0.7fr))] lg:px-12">
+    <footer className="border-t border-line bg-surface">
+      <div className="mx-auto flex max-w-[1200px] flex-col gap-8 px-5 py-10 sm:px-8 md:flex-row md:items-start md:justify-between">
         <div className="max-w-sm">
-          <SignalMark />
-          <p className="mt-5 text-sm leading-relaxed text-studio-muted">
-            Signal watches the sources where competitors change first, groups related
-            evidence, and puts a cited briefing on the desk in the morning.
+          <Wordmark size={26} />
+          <p className="mt-3 text-[14px] text-ink-secondary">
+            Signal states probabilities, never certainties, and scores every one of them.
           </p>
         </div>
-        <nav aria-label="Product">
-          <p className="text-sm font-bold text-studio-ink">Product</p>
-          <ul className="mt-4 space-y-3">
-            {productLinks.map((link) => (
-              <li key={link.href}>
-                <a href={link.href} className="text-sm font-semibold text-studio-muted hover:text-studio-ink">
-                  {link.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <nav aria-label="Workspace">
-          <p className="text-sm font-bold text-studio-ink">Workspace</p>
-          <ul className="mt-4 space-y-3">
-            {workspaceLinks.map((link) => (
-              <li key={link.href}>
-                <Link href={link.href} className="text-sm font-semibold text-studio-muted hover:text-studio-ink">
-                  {link.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <nav aria-label="Account">
-          <p className="text-sm font-bold text-studio-ink">Account</p>
-          <ul className="mt-4 space-y-3">
-            <li>
-              <Link href="/login" className="text-sm font-semibold text-studio-muted hover:text-studio-ink">
-                Sign in
-              </Link>
-            </li>
-            <li>
-              <Link href="/signup" className="text-sm font-semibold text-studio-muted hover:text-studio-ink">
-                Create a workspace
-              </Link>
-            </li>
-          </ul>
-        </nav>
-      </div>
-      <div className="border-t border-studio-line">
-        <div className="mx-auto flex max-w-[86rem] flex-col gap-2 px-5 py-6 text-xs text-studio-muted sm:flex-row sm:items-center sm:justify-between sm:px-8 lg:px-12">
-          <p>© 2026 Signal. Competitive intelligence with the sources still attached.</p>
-          <p>Illustrative workspace views use example competitor movements.</p>
+        <div className="flex gap-14">
+          <nav aria-label="Product">
+            <ul className="space-y-2 text-[14px]">
+              {PRODUCT.map((link) => (
+                <li key={link.href}>
+                  <Link href={link.href} className="text-ink-secondary hover:text-ink">
+                    {link.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
+          <nav aria-label="Account">
+            <ul className="space-y-2 text-[14px]">
+              {ACCOUNT.map((link) => (
+                <li key={link.href}>
+                  <Link href={link.href} className="text-ink-secondary hover:text-ink">
+                    {link.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
         </div>
       </div>
     </footer>

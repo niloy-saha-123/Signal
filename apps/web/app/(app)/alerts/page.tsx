@@ -1,14 +1,26 @@
-import { listAlerts, listCompetitors } from "@/lib/api";
+// Alerts — moves that crossed the confidence bar, each with what to do about it.
+// Preview data only without a session.
+import Link from "next/link";
+import { listAlerts, listCompetitors, type Alert, type Competitor } from "@/lib/api";
+import { AskButton } from "@/components/AskButton";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
+import { EvidenceAreaTabs } from "@/components/evidence/parts";
+import { Badge, EmptyState, LinkButton, PageHeader } from "@/components/ui/primitives";
 import { PREVIEW_ALERTS, PREVIEW_COMPETITORS } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
+import { patternLabel, relativeTime } from "@/lib/format";
 
-function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PREVIEW_ALERTS) {
+function firstAction(alert: Alert): string | null {
+  const action = alert.recommended_actions[0]?.action;
+  return typeof action === "string" ? action : null;
+}
+
+function renderAlerts(competitors: Competitor[], alerts: Alert[]) {
   const names = new Map(competitors.map((competitor) => [competitor.id, competitor.name]));
 
   const exportRows = alerts.map((alert) => ({
     competitor: names.get(alert.competitor_id) ?? "Unknown",
-    pattern: alert.pattern.replace(/_/g, " "),
+    pattern: patternLabel(alert.pattern),
     interpretation: alert.interpretation,
     confidence: Math.round(alert.confidence * 100),
     vulnerability_window_days: alert.vulnerability_window_days ?? "",
@@ -16,17 +28,13 @@ function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PR
   }));
 
   return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-2">
-          <h1 className="font-display text-4xl font-semibold tracking-[-0.035em] text-studio-ink">
-            Alerts
-          </h1>
-          <p className="max-w-xl text-sm leading-relaxed text-studio-muted">
-            Movements that crossed the confidence bar. Each one still points at the evidence
-            that produced it.
-          </p>
-        </div>
+    <div>
+      <PageHeader
+        title="Evidence"
+        description="Alerts are moves that crossed the confidence bar. Each says what changed and what to do about it."
+        action={<EvidenceAreaTabs active="alerts" />}
+      />
+      <div className="mb-5 flex justify-end">
         <ExportCsvButton
           rows={exportRows}
           columns={[
@@ -41,38 +49,64 @@ function renderAlerts(competitors: typeof PREVIEW_COMPETITORS, alerts: typeof PR
         />
       </div>
       {alerts.length === 0 ? (
-        <div className="flex items-center justify-center rounded-[1.6rem] border border-studio-line bg-studio-paper px-8 py-16">
-          <p className="text-sm text-studio-muted">No alerts yet.</p>
-        </div>
+        <EmptyState
+          title="No alerts yet"
+          note={
+            competitors.length === 0
+              ? "Alerts start once you're watching a competitor."
+              : "Signal alerts only when several sources point the same way. Quiet is the normal state."
+          }
+          action={
+            competitors.length === 0 ? (
+              <LinkButton href="/board" variant="primary" size="sm">
+                Add a competitor
+              </LinkButton>
+            ) : (
+              <LinkButton href="/intel" size="sm">
+                See the raw evidence
+              </LinkButton>
+            )
+          }
+        />
       ) : (
-        <div className="flex flex-col gap-4">
-          {alerts.map((alert) => (
-            <div
-              key={alert.id}
-              className="rounded-[1.6rem] border border-studio-line bg-studio-paper p-6"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <p className="text-sm font-extrabold text-studio-ink">
-                    {names.get(alert.competitor_id) ?? "Unknown competitor"}
-                  </p>
-                  <p className="mt-2 text-base leading-snug font-semibold text-studio-ink capitalize">
-                    {alert.pattern.replace(/_/g, " ")}
-                  </p>
-                  <p className="mt-2 text-sm leading-relaxed text-studio-muted">
-                    {alert.interpretation}
-                  </p>
-                  <p className="mt-3 text-xs text-studio-muted">
-                    {new Date(alert.created_at).toLocaleString()}
-                  </p>
+        <ul className="space-y-3">
+          {alerts.map((alert) => {
+            const competitor = names.get(alert.competitor_id) ?? "Unknown competitor";
+            const action = firstAction(alert);
+            const move = patternLabel(alert.pattern);
+            return (
+              <li key={alert.id} className="rounded-[14px] border border-line bg-surface p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link href={`/radar/${alert.competitor_id}`} className="text-[13.5px] font-bold text-ink hover:underline">
+                    {competitor}
+                  </Link>
+                  <Badge>{move}</Badge>
+                  <span className="text-[12.5px] text-ink-muted" suppressHydrationWarning>
+                    {relativeTime(alert.created_at)}
+                  </span>
+                  <span className="tnum ml-auto text-[13px] font-semibold text-ink">
+                    {Math.round(alert.confidence * 100)}% confident
+                  </span>
                 </div>
-                <span className="shrink-0 rounded-full bg-studio-sky-soft px-3 py-1 text-xs font-bold text-studio-ink">
-                  {Math.round(alert.confidence * 100)}% confidence
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
+                <p className="mt-2 text-[15px] leading-relaxed break-words text-ink">{alert.interpretation}</p>
+                {action ? (
+                  <div className="mt-3 rounded-[10px] bg-sky px-4 py-3">
+                    <p className="text-[12.5px] font-semibold text-ink-secondary">What to do</p>
+                    <p className="mt-0.5 text-[14px] text-ink">{action}</p>
+                  </div>
+                ) : null}
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <AskButton prompt={`${competitor}: "${move}". What's the evidence, and how should we respond?`} />
+                  {alert.vulnerability_window_days ? (
+                    <span className="text-[13px] text-ink-muted">
+                      Window to respond: about {alert.vulnerability_window_days} days
+                    </span>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );
@@ -88,9 +122,7 @@ export default async function Page() {
   const competitors = await listCompetitors(token);
   const competitorIds = competitors.map((competitor) => competitor.id);
   const alerts =
-    competitorIds.length > 0
-      ? (await listAlerts({ competitor_ids: competitorIds, limit: 100 }, token)).data
-      : [];
+    competitorIds.length > 0 ? (await listAlerts({ competitor_ids: competitorIds, limit: 100 }, token)).data : [];
 
   return renderAlerts(competitors, alerts);
 }

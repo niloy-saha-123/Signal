@@ -53,6 +53,16 @@ export const competitorsTable = pgTable(
     // evidence of what a technical competitor is actually building, typically weeks
     // ahead of the changelog entry or launch post that describes it.
     github_org: text("github_org"),
+    // Pages on the competitor's own site to watch for copy changes. Stored as a
+    // list because positioning lives across several pages — homepage, product,
+    // docs landing — and a change on any of them is the signal.
+    website_urls: text("website_urls").array().notNull().default(sql`'{}'::text[]`),
+    // Base URL of a public Discourse forum, e.g. https://forum.example.com.
+    discourse_url: text("discourse_url"),
+    // RSS/Atom feed for newsroom or press announcements, kept separate from
+    // changelog_rss: a press feed and an engineering changelog say different
+    // things and deserve different quality weights.
+    postings_rss: text("postings_rss"),
     // Pause monitoring without losing history — hard delete would orphan
     // every signal/alert/score row a RESTRICT/CASCADE choice below depends on.
     is_active: boolean("is_active").notNull().default(true),
@@ -105,7 +115,7 @@ export const signalsTable = pgTable(
   (table) => [
     check(
       "signals_source_check",
-      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github')`
+      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github', 'website', 'community', 'postings')`
     ),
     check(
       "signals_quality_score_check",
@@ -519,6 +529,29 @@ export const slackInstallationsTable = pgTable(
   (table) => [
     uniqueIndex("slack_installations_team_id_uidx").on(table.team_id),
     index("slack_installations_workspace_id_idx").on(table.workspace_id),
+  ]
+);
+
+// ── website_snapshots ────────────────────────────────────────────────────
+// The last extracted text of a watched page, per competitor per URL.
+//
+// Only the latest snapshot per URL is needed — the collector diffs current
+// against it and then replaces it. Keeping full history would grow without
+// bound for no gain: the interesting artifact is the *change*, and that already
+// becomes a durable signal row with its own evidence trail.
+export const websiteSnapshotsTable = pgTable(
+  "website_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    competitor_id: uuid("competitor_id")
+      .notNull()
+      .references(() => competitorsTable.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    content: text("content").notNull(),
+    captured_at: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("website_snapshots_competitor_url_idx").on(table.competitor_id, table.url),
   ]
 );
 

@@ -1,7 +1,9 @@
-// Thread rail — list, select, new, and delete chat threads. Kept in the studio
-// token system (studio-*) to match the rest of the app.
+// Thread rail — list, select, new, and delete chat threads.
 "use client";
+import { Icon } from "./ui/icons";
+import { Button, cx } from "./ui/primitives";
 import type { ChatThreadSummary } from "../lib/api";
+import { relativeTime } from "../lib/format";
 
 export interface ThreadListProps {
   threads: ChatThreadSummary[];
@@ -11,70 +13,49 @@ export interface ThreadListProps {
   onDelete: (id: string) => void;
 }
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const minutes = Math.floor(ms / 60000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
 export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete }: ThreadListProps) {
   return (
-    <div className="flex h-full flex-col">
-      <button
-        onClick={onNew}
-        className="m-3 inline-flex items-center justify-center gap-2 rounded-full bg-studio-ink px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#071625]"
-      >
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14m-7-7h14" />
-        </svg>
-        New chat
-      </button>
+    <nav aria-label="Chats" className="flex h-full flex-col">
+      <div className="p-3">
+        <Button variant="primary" size="md" onClick={onNew} className="w-full">
+          <Icon name="plus" className="h-4 w-4" />
+          New chat
+        </Button>
+      </div>
 
-      <ul className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 pb-3">
+      <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-3">
         {threads.map((thread) => {
           const isActive = activeThreadId === thread.id;
+          const title = thread.title ?? "Untitled chat";
           return (
             <li key={thread.id} className="group relative">
               <button
+                type="button"
                 onClick={() => onSelect(thread.id)}
-                className={`w-full rounded-[10px] px-3 py-2.5 text-left text-sm transition-colors ${
-                  isActive
-                    ? "bg-studio-action-soft text-studio-ink"
-                    : "text-studio-muted hover:bg-studio-sky-soft hover:text-studio-ink"
-                }`}
+                aria-current={isActive ? "true" : undefined}
+                className={cx(
+                  "w-full rounded-[10px] py-2.5 pr-9 pl-3 text-left transition-colors",
+                  isActive ? "bg-sky text-ink" : "text-ink-secondary hover:bg-surface-sunken hover:text-ink"
+                )}
               >
-                <span className="block truncate font-semibold">
-                  {thread.title ?? "Untitled chat"}
+                <span className="block truncate text-[14px] font-semibold">{title}</span>
+                <span className="block text-[12px] text-ink-muted" suppressHydrationWarning>
+                  {relativeTime(thread.updated_at)}
                 </span>
-                <span className="block text-xs opacity-70">{relativeTime(thread.updated_at)}</span>
               </button>
               <button
+                type="button"
                 onClick={() => onDelete(thread.id)}
-                aria-label="Delete chat"
-                className="absolute top-2 right-2 hidden rounded-full p-1 text-studio-muted hover:bg-studio-sky hover:text-studio-ink group-hover:block"
+                aria-label={`Delete chat: ${title}`}
+                className="absolute top-2.5 right-2 rounded-[8px] p-1 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface hover:text-miss-text focus-visible:opacity-100"
               >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
+                <Icon name="trash" className="h-4 w-4" />
               </button>
             </li>
           );
         })}
-        {threads.length === 0 && (
-          <p className="px-3 py-4 text-xs text-studio-muted">No chats yet. Ask Signal something.</p>
-        )}
+        {threads.length === 0 && <p className="px-3 py-4 text-[13px] text-ink-muted">Your chats show up here.</p>}
       </ul>
-    </div>
+    </nav>
   );
 }

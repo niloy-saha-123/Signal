@@ -39,6 +39,19 @@
 //        <link rel="alternate" type="application/rss+xml">
 //     3. First candidate that parses as valid RSS/Atom XML wins
 //
+//   WEBSITE PAGES
+//     1. The homepage, if it answers
+//     2. The first of /product, /features, /platform that answers
+//     Both are watched for copy changes; positioning lives across several pages.
+//
+//   COMMUNITY FORUM
+//     GET /latest.json on forum., community., discuss. and discourse. subdomains;
+//     a JSON body with a topic_list confirms a public Discourse instance.
+//
+//   NEWSROOM / PRESS FEED
+//     /newsroom, /press and /news feed paths, confirmed by parsing as RSS/Atom.
+//     Kept distinct from the changelog feed: they say different things.
+//
 //   GITHUB ORG
 //     1. GET api.github.com/orgs/{slug} for each slug variant, then /users/{slug}
 //     2. Confirm identity before accepting: the account's `blog` URL must resolve
@@ -60,7 +73,13 @@ import Parser from "rss-parser";
 import type { CompetitorDiscoveryResult, DiscoveryLog } from "@signal/shared";
 import { withRetry } from "../../lib/retry";
 import { logger } from "../../lib/logger";
-import { safeFetch, type SafeFetchInit, type SafeFetchResult } from "../../lib/safe-fetch";
+import {
+  NON_PUBLIC_ADDRESS_MESSAGE,
+  isPublicHostname,
+  safeFetch,
+  type SafeFetchInit,
+  type SafeFetchResult,
+} from "../../lib/safe-fetch";
 
 type FieldName = DiscoveryLog["field_name"];
 
@@ -80,6 +99,9 @@ const FIELD_ORDER: FieldName[] = [
   "pricing_url",
   "rss_url",
   "github_org",
+  "website_urls",
+  "discourse_url",
+  "postings_rss",
 ];
 
 const PRICING_PATHS = ["/pricing", "/plans", "/price", "/pricing-plans", "/en/pricing", "/en/plans"];
@@ -467,6 +489,134 @@ async function discoverRss(
   }
 }
 
+// --- WEBSITE / COMMUNITY / NEWSROOM ------------------------------------------
+
+const PRODUCT_PAGE_PATHS = ["/product", "/features", "/platform"];
+const FORUM_SUBDOMAINS = ["forum", "community", "discuss", "discourse"];
+const POSTINGS_PATHS = [
+  "/newsroom/rss",
+  "/newsroom/feed",
+  "/newsroom/rss.xml",
+  "/press/rss",
+  "/press/feed",
+  "/news/rss",
+  "/news/feed",
+  "/news/rss.xml",
+];
+
+async function answers(url: string, runSignal: AbortSignal): Promise<boolean> {
+  try {
+    return isOk(await probe(url, runSignal));
+  } catch {
+    return false;
+  }
+}
+
+async function isDiscourse(base: string, runSignal: AbortSignal): Promise<boolean> {
+  try {
+    const res = await probe(`${base}/latest.json`, runSignal, {
+      headers: { Accept: "application/json" },
+    });
+    if (!isOk(res)) return false;
+    const body = (await res.json()) as { topic_list?: unknown };
+    return typeof body === "object" && body !== null && "topic_list" in body;
+  } catch {
+    return false;
+  }
+}
+
+// These three strategies probe paths and subdomains *derived from* the
+// competitor's domain. If the apex itself resolves to a non-public address, the
+// whole family is refused up front: probing forum.<domain> or <domain>/newsroom
+// for a domain already known to point inward is pointless at best, and a
+// wildcard-DNS host (169.254.169.254.nip.io) makes every derived name resolve
+// inward too. It also keeps these fields reporting "error" exactly like the
+// other domain-based strategies, rather than an ambiguous "not_found".
+function nonPublicDomainLog(field: FieldName): DiscoveryLog {
+  return {
+    field_name: field,
+    attempted_urls: [],
+    discovered_value: null,
+    status: "error",
+    error_message: NON_PUBLIC_ADDRESS_MESSAGE,
+  };
+}
+
+function outcome<T>(
+  field: FieldName,
+  attempted: string[],
+  value: T,
+  found: boolean
+): StrategyOutcome<T> {
+  return {
+    value,
+    log: {
+      field_name: field,
+      attempted_urls: attempted,
+      discovered_value: found ? String(Array.isArray(value) ? value.join(", ") : value) : null,
+      status: found ? "found" : "not_found",
+      error_message: null,
+    },
+  };
+}
+
+async function discoverWebsite(
+  domain: string | null,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string[]>> {
+  if (!domain) return { value: [], log: invalidDomainLog("website_urls") };
+  if (!(await isPublicHostname(domain))) return { value: [], log: nonPublicDomainLog("website_urls") };
+  const home = `https://${domain}/`;
+  const product = PRODUCT_PAGE_PATHS.map((path) => `https://${domain}${path}`);
+  const attempted = [home, ...product];
+  // Probed together: a serial walk would multiply one slow host's timeout.
+  const [homeOk, ...productOk] = await Promise.all(
+    attempted.map((url) => answers(url, runSignal))
+  );
+  const pages = [
+    ...(homeOk ? [home] : []),
+    ...product.filter((_, i) => productOk[i]).slice(0, 1),
+  ];
+  return outcome("website_urls", attempted, pages, pages.length > 0);
+}
+
+async function discoverDiscourse(
+  domain: string | null,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string | null>> {
+  if (!domain) return { value: null, log: invalidDomainLog("discourse_url") };
+  if (!(await isPublicHostname(domain))) {
+    return { value: null, log: nonPublicDomainLog("discourse_url") };
+  }
+  const bases = FORUM_SUBDOMAINS.map((sub) => `https://${sub}.${domain}`);
+  const attempted = bases.map((base) => `${base}/latest.json`);
+  const matches = await Promise.all(bases.map((base) => isDiscourse(base, runSignal)));
+  const first = matches.findIndex(Boolean);
+  return first >= 0
+    ? outcome("discourse_url", attempted, bases[first], true)
+    : outcome<string | null>("discourse_url", attempted, null, false);
+}
+
+async function discoverPostings(
+  domain: string | null,
+  changelogFeed: string | null,
+  runSignal: AbortSignal
+): Promise<StrategyOutcome<string | null>> {
+  if (!domain) return { value: null, log: invalidDomainLog("postings_rss") };
+  if (!(await isPublicHostname(domain))) {
+    return { value: null, log: nonPublicDomainLog("postings_rss") };
+  }
+  const urls = POSTINGS_PATHS.map((path) => `https://${domain}${path}`).filter(
+    // Never record the changelog feed a second time under another name.
+    (url) => url !== changelogFeed
+  );
+  const matches = await Promise.all(urls.map((url) => parsesAsFeed(url, runSignal)));
+  const first = matches.findIndex(Boolean);
+  return first >= 0
+    ? outcome("postings_rss", urls, urls[first], true)
+    : outcome<string | null>("postings_rss", urls, null, false);
+}
+
 // --- GITHUB ORG -----------------------------------------------------------
 
 interface GithubAccount {
@@ -600,6 +750,9 @@ export async function discoverCompetitor(input: {
     pricing_url: string | null;
     changelog_rss: string | null;
     github_org: string | null;
+    website_urls: string[];
+    discourse_url: string | null;
+    postings_rss: string | null;
   };
 }, opts: { signal?: AbortSignal } = {}): Promise<CompetitorDiscoveryResult> {
   // One deadline for the whole run, threaded into every probe. A strategy still
@@ -622,6 +775,9 @@ export async function discoverCompetitor(input: {
     pricing_url: ex.pricing_url,
     changelog_rss: ex.changelog_rss,
     github_org: ex.github_org,
+    website_urls: ex.website_urls,
+    discourse_url: ex.discourse_url,
+    postings_rss: ex.postings_rss,
     logs,
   };
 
@@ -675,6 +831,27 @@ export async function discoverCompetitor(input: {
     tasks.push(
       discoverGithubOrg(probeDomain, input.name, runSignal).then(
         record<string | null>((v) => (result.github_org = v))
+      )
+    );
+  }
+  if (ex.website_urls.length === 0) {
+    tasks.push(
+      discoverWebsite(probeDomain, runSignal).then(
+        record<string[]>((v) => (result.website_urls = v))
+      )
+    );
+  }
+  if (!isSet(ex.discourse_url)) {
+    tasks.push(
+      discoverDiscourse(probeDomain, runSignal).then(
+        record<string | null>((v) => (result.discourse_url = v))
+      )
+    );
+  }
+  if (!isSet(ex.postings_rss)) {
+    tasks.push(
+      discoverPostings(probeDomain, ex.changelog_rss, runSignal).then(
+        record<string | null>((v) => (result.postings_rss = v))
       )
     );
   }

@@ -31,6 +31,7 @@ import {
   predictionsTable,
   slackInstallationsTable,
   circuitEventsTable,
+  websiteSnapshotsTable,
   agentLatenciesTable,
   agentRunsTable,
   companyProfileTable,
@@ -1289,6 +1290,71 @@ export async function getWorkspaceActivity(workspaceId: string): Promise<Workspa
   };
 }
 
+// ── website snapshots ────────────────────────────────────────────────────
+
+export async function getLatestWebsiteSnapshot(
+  competitorId: string,
+  url: string
+): Promise<{ content: string; captured_at: Date } | undefined> {
+  const [row] = await db
+    .select({
+      content: websiteSnapshotsTable.content,
+      captured_at: websiteSnapshotsTable.captured_at,
+    })
+    .from(websiteSnapshotsTable)
+    .where(
+      and(
+        eq(websiteSnapshotsTable.competitor_id, competitorId),
+        eq(websiteSnapshotsTable.url, url)
+      )
+    )
+    .orderBy(desc(websiteSnapshotsTable.captured_at))
+    .limit(1);
+  return row;
+}
+
+// Replaces rather than appends: only the latest snapshot is ever read, so
+// keeping history would grow unboundedly for no benefit. The change itself is
+// already durable as a signal row.
+interface WebsiteSnapshotInput {
+  competitor_id: string;
+  url: string;
+  content: string;
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function replaceWebsiteSnapshot(tx: Tx, input: WebsiteSnapshotInput): Promise<void> {
+  await tx
+    .delete(websiteSnapshotsTable)
+    .where(
+      and(
+        eq(websiteSnapshotsTable.competitor_id, input.competitor_id),
+        eq(websiteSnapshotsTable.url, input.url)
+      )
+    );
+  await tx.insert(websiteSnapshotsTable).values(input);
+}
+
+export async function createWebsiteSnapshot(input: WebsiteSnapshotInput): Promise<void> {
+  await db.transaction((tx) => replaceWebsiteSnapshot(tx, input));
+}
+
+// The signal and the new baseline commit together. Written separately, a
+// snapshot that failed after its signal landed would leave the old baseline in
+// place, and tomorrow's diff would report the same change a second time.
+export async function createWebsiteChangeSignal(
+  signal: CreateSignalInput,
+  snapshot: WebsiteSnapshotInput
+): Promise<Signal> {
+  return db.transaction(async (tx) => {
+    const [row] = await tx.insert(signalsTable).values(signal).returning();
+    await tx.insert(signalPipelineOutboxTable).values({ signal_id: row.id });
+    await replaceWebsiteSnapshot(tx, snapshot);
+    return row;
+  });
+}
+
 // ── slack ────────────────────────────────────────────────────────────────
 
 export async function getSlackInstallation(
@@ -1798,7 +1864,10 @@ export async function finalizeDiscovery(
     result.lever_token != null ||
     result.pricing_url != null ||
     result.changelog_rss != null ||
-    result.github_org != null;
+    result.github_org != null ||
+    result.website_urls.length > 0 ||
+    result.discourse_url != null ||
+    result.postings_rss != null;
   const discoveryStatus = result.logs.length === 0 || anyValue ? "complete" : "failed";
 
   await db.transaction(async (tx) => {
@@ -1811,6 +1880,9 @@ export async function finalizeDiscovery(
         pricing_url: result.pricing_url,
         changelog_rss: result.changelog_rss,
         github_org: result.github_org,
+        website_urls: result.website_urls,
+        discourse_url: result.discourse_url,
+        postings_rss: result.postings_rss,
         discovery_status: discoveryStatus,
         discovered_at: new Date(),
         updated_at: new Date(),
@@ -1944,6 +2016,9 @@ export async function createCompetitorForWorkspace(
       ...(input.pricing_url === undefined ? {} : { pricing_url: input.pricing_url }),
       ...(input.rss_url === undefined ? {} : { changelog_rss: input.rss_url }),
       ...(input.github_org === undefined ? {} : { github_org: input.github_org }),
+      ...(input.website_urls === undefined ? {} : { website_urls: input.website_urls }),
+      ...(input.discourse_url === undefined ? {} : { discourse_url: input.discourse_url }),
+      ...(input.postings_rss === undefined ? {} : { postings_rss: input.postings_rss }),
       discovery_status: "pending",
     })
     .returning();

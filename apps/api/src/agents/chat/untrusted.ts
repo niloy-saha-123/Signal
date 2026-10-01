@@ -2,6 +2,8 @@
 // fetched pages, attached docs, image OCR/captions) is delimited by a
 // per-turn nonce and has the tokens the model is told to treat as structure
 // stripped so a body cannot forge a closer.
+import { randomUUID } from "node:crypto";
+
 const MAX_UNTRUSTED_LENGTH = 40_000;
 
 export function neutralize(value: string): string {
@@ -24,4 +26,20 @@ export function formatUntrustedText(text: string, nonce: string, source: string)
   const header = `source: ${neutralize(source)}\n\n`;
   const body = neutralize(text).slice(0, Math.max(0, MAX_UNTRUSTED_LENGTH - header.length));
   return `${open}\n${header}${body}\n${close}`;
+}
+
+// The analysis graph reads the same kind of text as chat — a competitor's own
+// homepage, forum threads, job posts — so every node's model call gets the
+// same boundary: a fresh nonce, the security rule appended to the system
+// prompt, and the evidence delimited in the human turn.
+export function guardedMessages(
+  systemPrompt: string,
+  evidence: string,
+  source: string
+): [["system", string], ["human", string]] {
+  const nonce = randomUUID().replaceAll("-", "");
+  return [
+    ["system", `${systemPrompt}\n\n${evidenceSecurityPrompt(nonce)}`],
+    ["human", formatUntrustedText(evidence, nonce, source)],
+  ];
 }

@@ -33,14 +33,22 @@ export type CompanyProfile = z.infer<typeof CompanyProfileSchema>;
 // POST /api/competitors body. Only name + domain are required — everything
 // else is filled in asynchronously by CompetitorDiscoveryAgent, but callers
 // may still supply a field directly to skip discovery for that one field.
+// z.string().url() accepts any parseable scheme (javascript:, file:, data:).
+// These URLs are fetched by collectors, so only the web is allowed in.
+const webUrl = z
+  .string()
+  .url()
+  .max(2_048)
+  .refine((value) => /^https?:\/\//i.test(value), "must be an http(s) URL");
+
 export const CompetitorCreateInputSchema = z.object({
   name: z.string().trim().min(1).max(200),
   domain: z.string().trim().min(1).max(253),
   subreddits: z.array(z.string().trim().min(1).max(100)).max(25).optional(),
   greenhouse_token: z.string().trim().min(1).max(200).optional(),
   lever_token: z.string().trim().min(1).max(200).optional(),
-  pricing_url: z.string().url().max(2_048).optional(),
-  rss_url: z.string().url().max(2_048).optional(),
+  pricing_url: webUrl.optional(),
+  rss_url: webUrl.optional(),
   // A GitHub org/user login, not a URL — GitHub's own limit is 39 characters of
   // alphanumerics and single hyphens.
   github_org: z
@@ -48,6 +56,9 @@ export const CompetitorCreateInputSchema = z.object({
     .trim()
     .regex(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/, "must be a GitHub org or user login")
     .optional(),
+  website_urls: z.array(webUrl).max(10).optional(),
+  discourse_url: webUrl.optional(),
+  postings_rss: webUrl.optional(),
 });
 export type CompetitorCreateInput = z.infer<typeof CompetitorCreateInputSchema>;
 
@@ -65,6 +76,9 @@ export const DiscoveryLogSchema = z.object({
     "pricing_url",
     "rss_url",
     "github_org",
+    "website_urls",
+    "discourse_url",
+    "postings_rss",
   ]),
   attempted_urls: z.array(z.string()),
   discovered_value: z.string().nullable(),
@@ -84,6 +98,9 @@ export const CompetitorDiscoveryResultSchema = z.object({
   pricing_url: z.string().nullable(),
   changelog_rss: z.string().nullable(),
   github_org: z.string().nullable(),
+  website_urls: z.array(z.string()),
+  discourse_url: z.string().nullable(),
+  postings_rss: z.string().nullable(),
   logs: z.array(DiscoveryLogSchema),
 });
 export type CompetitorDiscoveryResult = z.infer<typeof CompetitorDiscoveryResultSchema>;
@@ -97,6 +114,18 @@ export const SignalSourceSchema = z.enum([
   "changelog",
   "pricing",
   "github",
+  // The competitor's own marketing site — homepage, product and docs pages —
+  // watched for meaningful copy changes. Positioning shifts show up here before
+  // anyone writes a post about them.
+  "website",
+  // Public community platforms the competitor runs: Discourse forums and GitHub
+  // Discussions. Distinct from `reddit`, which is a third-party venue; a
+  // company's own forum carries support load and roadmap complaints it cannot
+  // moderate away.
+  "community",
+  // Public company postings — newsroom, press and announcement feeds that are
+  // not the engineering changelog.
+  "postings",
 ]);
 export type SignalSource = z.infer<typeof SignalSourceSchema>;
 

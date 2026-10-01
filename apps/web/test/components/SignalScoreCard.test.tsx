@@ -10,17 +10,18 @@ const history = [
 ];
 
 describe("SignalScoreCard", () => {
-  it("renders the competitor name and score", () => {
+  it("renders the score with its plain-language label", () => {
     render(
-      <SignalScoreCard competitorName="Acme" score={72} delta7d={7} history={history} />
+      <SignalScoreCard score={72} delta7d={7} history={history} />
     );
-    expect(screen.getByText("Acme")).toBeInTheDocument();
+    expect(screen.getByText("Activity score")).toBeInTheDocument();
     expect(screen.getByText("72")).toBeInTheDocument();
+    expect(screen.getByText("Up 7 this week")).toBeInTheDocument();
   });
 
   it("colors a rising delta as critical (more competitor threat) and shows an up mark", () => {
     render(
-      <SignalScoreCard competitorName="Acme" score={72} delta7d={7} history={history} />
+      <SignalScoreCard score={72} delta7d={7} history={history} />
     );
     const mark = screen.getByText("▲");
     expect(mark).toHaveStyle({ color: SCORE_DELTA_COLORS.rising });
@@ -28,7 +29,7 @@ describe("SignalScoreCard", () => {
 
   it("colors a falling delta as good (less competitor threat) and shows a down mark", () => {
     render(
-      <SignalScoreCard competitorName="Acme" score={58} delta7d={-4} history={history} />
+      <SignalScoreCard score={58} delta7d={-4} history={history} />
     );
     const mark = screen.getByText("▼");
     expect(mark).toHaveStyle({ color: SCORE_DELTA_COLORS.falling });
@@ -36,14 +37,15 @@ describe("SignalScoreCard", () => {
 
   it("shows a neutral dash when delta7d is null", () => {
     render(
-      <SignalScoreCard competitorName="Acme" score={60} delta7d={null} history={history} />
+      <SignalScoreCard score={60} delta7d={null} history={history} />
     );
     expect(screen.getByText("–")).toBeInTheDocument();
+    expect(screen.getByText("Steady this week")).toBeInTheDocument();
   });
 
   it("does not render a sparkline container when history is empty", () => {
     const { container } = render(
-      <SignalScoreCard competitorName="Acme" score={60} delta7d={null} history={[]} />
+      <SignalScoreCard score={60} delta7d={null} history={[]} />
     );
     expect(container.querySelector(".recharts-responsive-container")).toBeNull();
   });
