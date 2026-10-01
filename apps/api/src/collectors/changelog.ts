@@ -10,17 +10,17 @@ import type { Job } from "bullmq";
 import * as cheerio from "cheerio";
 import Parser from "rss-parser";
 import { withRetry } from "../lib/retry";
-import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
-  listCompetitors,
   getLatestSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
 } from "../db/queries";
+import type { Competitor } from "../db/queries";
 import { assertPublicUrl, safeFetch } from "../lib/safe-fetch";
+import { runSourceSweep } from "./sweep";
 
 type FeedSource = "changelog" | "postings";
 const MAX_CHANGELOG_BYTES = 2_000_000;
@@ -89,7 +89,7 @@ async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: 
 }
 
 async function collectForCompetitor(
-  competitor: { id: string; name: string },
+  competitor: Competitor,
   feedUrl: string,
   source: FeedSource
 ): Promise<void> {
@@ -145,86 +145,16 @@ interface FeedCollectJobData {
   // No fields needed — every run sweeps all active competitors.
 }
 
-async function recordCircuitFailure(service: string, err: unknown): Promise<void> {
-  try {
-    await recordFailure(service, err instanceof Error ? err.message : String(err));
-  } catch (recordErr) {
-    // recordFailure makes unguarded Redis calls that can themselves throw —
-    // never let that mask the real error below.
-    logger.error(`Failed to record circuit-breaker failure for ${service}`, { error: recordErr });
-  }
-}
-
-// One sweep implementation for both feeds. Each keeps its own circuit — a
-// broken press feed host must not stop changelog collection, and vice versa.
-async function runFeedSweep(
-  source: FeedSource,
-  feedOf: (competitor: Awaited<ReturnType<typeof listCompetitors>>[number]) => string | null
-): Promise<void> {
-  const service = source;
-  if (await isCircuitOpen(service)) {
-    throw new Error(`${service} circuit is open — skipping job`);
-  }
-
-  try {
-    const competitors = (await listCompetitors()).filter(
-      (c) => c.is_active && Boolean(feedOf(c))
-    );
-
-    // One competitor's feed failing (after withRetry exhausts its attempts)
-    // must not abort collection for every other competitor in this run —
-    // same per-competitor isolation as hn.ts/reddit.ts.
-    let hadFailure = false;
-    // Set when the loop exits via the mid-run circuit trip below, rather than
-    // by running out of competitors — that's not a clean run, so it must not
-    // let the trailing recordSuccess() force-close a circuit that was
-    // correctly just observed open.
-    let circuitTrippedMidRun = false;
-    for (const competitor of competitors) {
-      // The breaker can trip mid-run off an earlier competitor's failures —
-      // re-check before every attempt so the remaining competitors don't each
-      // still pay the full withRetry cost against a dependency the breaker
-      // just confirmed is down.
-      if (await isCircuitOpen(service)) {
-        circuitTrippedMidRun = true;
-        logger.warn(`${service} circuit opened mid-run — stopping before remaining competitors`, {
-          competitor_id: competitor.id,
-          competitor_name: competitor.name,
-        });
-        break;
-      }
-
-      try {
-        await collectForCompetitor(competitor, feedOf(competitor) as string, source);
-      } catch (err) {
-        hadFailure = true;
-        logger.error(`${service} collector failed for one competitor — continuing with the rest`, {
-          competitor_id: competitor.id,
-          competitor_name: competitor.name,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        await recordCircuitFailure(service, err);
-      }
-    }
-
-    if (!hadFailure && !circuitTrippedMidRun) {
-      await recordSuccess(service);
-    }
-  } catch (err) {
-    // Failure outside the per-competitor loop (e.g. listCompetitors() itself)
-    // — a real job-level failure, not one competitor's problem, so this one
-    // still rethrows.
-    await recordCircuitFailure(service, err);
-    throw err;
-  }
-}
-
 export async function changelogCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
-  return runFeedSweep("changelog", (c) => c.changelog_rss);
+  return runSourceSweep("changelog", (c) => c.changelog_rss || null, (c, url) =>
+    collectForCompetitor(c, url, "changelog")
+  );
 }
 
 export async function postingsCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
-  return runFeedSweep("postings", (c) => c.postings_rss);
+  return runSourceSweep("postings", (c) => c.postings_rss || null, (c, url) =>
+    collectForCompetitor(c, url, "postings")
+  );
 }
 
 // Extension points — only called from the standalone worker entrypoint, so
