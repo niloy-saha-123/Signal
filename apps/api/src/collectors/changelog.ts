@@ -19,10 +19,10 @@ import {
   createSignal,
 } from "../db/queries";
 import type { Competitor } from "../db/queries";
+import type { SignalSource } from "@signal/shared";
 import { assertPublicUrl, safeFetch } from "../lib/safe-fetch";
 import { runSourceSweep } from "./sweep";
 
-type FeedSource = "changelog" | "postings";
 const MAX_CHANGELOG_BYTES = 2_000_000;
 
 // rss-parser stashes RSS2's <content:encoded> under a literal
@@ -67,7 +67,17 @@ async function fetchFeed(url: string) {
   return parser.parseString(await response.text());
 }
 
-async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: string): Promise<string> {
+async function resolveRawText(
+  item: Parser.Item & ChangelogFeedItem,
+  sourceUrl: string,
+  fullText: boolean
+): Promise<string> {
+  if (!fullText) {
+    const body =
+      parseArticleContent(item["content:encoded"] ?? item.content ?? "") || (item.contentSnippet ?? "");
+    return item.title ? `${item.title}\n\n${body}` : body;
+  }
+
   // content:encoded is RSS2's dedicated full-body field — spec-guaranteed
   // complete, so trust it outright, no length check. A short one (e.g.
   // "v2.1: bug fixes") is still complete text, not a truncated summary.
@@ -88,17 +98,28 @@ async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: 
   return withRetry(() => fetchArticleText(sourceUrl));
 }
 
-async function collectForCompetitor(
+export async function collectFeed(
   competitor: Competitor,
   feedUrl: string,
-  source: FeedSource
+  source: SignalSource,
+  opts: { fullText?: boolean; maxItems?: number } = {}
 ): Promise<void> {
+  const { fullText = true, maxItems } = opts;
   const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, source);
   // parseURL follows redirects internally and cannot re-check their targets.
   // Fetch the bounded body through safeFetch, then parse the inert string.
   const feed = await withRetry(() => fetchFeed(feedUrl));
 
-  for (const item of feed.items ?? []) {
+  let items = feed.items ?? [];
+  if (maxItems !== undefined) {
+    const ts = (i: (typeof items)[number]) => {
+      const t = new Date(i.isoDate ?? i.pubDate ?? "").getTime();
+      return Number.isNaN(t) ? -Infinity : t;
+    };
+    items = [...items].sort((a, b) => ts(b) - ts(a)).slice(0, maxItems);
+  }
+
+  for (const item of items) {
     const sourceUrl = item.link;
     if (!sourceUrl) continue;
 
@@ -118,7 +139,7 @@ async function collectForCompetitor(
       const alreadyCollected = await signalExistsBySourceUrl(competitor.id, source, sourceUrl);
       if (alreadyCollected) continue;
 
-      const rawText = await resolveRawText(item, sourceUrl);
+      const rawText = await resolveRawText(item, sourceUrl, fullText);
       if (!rawText) continue;
 
       const signal = await createSignal({
@@ -147,13 +168,13 @@ interface FeedCollectJobData {
 
 export async function changelogCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
   return runSourceSweep("changelog", (c) => c.changelog_rss || null, (c, url) =>
-    collectForCompetitor(c, url, "changelog")
+    collectFeed(c, url, "changelog")
   );
 }
 
 export async function postingsCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
   return runSourceSweep("postings", (c) => c.postings_rss || null, (c, url) =>
-    collectForCompetitor(c, url, "postings")
+    collectFeed(c, url, "postings")
   );
 }
 

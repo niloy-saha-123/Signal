@@ -479,3 +479,48 @@ describe("postings collector (newsroom feeds)", () => {
     expect(safeFetchMock).not.toHaveBeenCalled();
   });
 });
+
+import { collectFeed } from "@/collectors/changelog";
+
+describe("collectFeed options", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
+    signalExistsBySourceUrlMock.mockResolvedValue(false);
+    createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({ id: "s1", ...input }));
+    enqueueInitialSignalPipelineMock.mockResolvedValue("added");
+    assertPublicUrlMock.mockResolvedValue(undefined);
+    safeFetchMock.mockResolvedValue({ status: 200, text: async () => "<feed />" });
+  });
+
+  const comp = { id: "c1", name: "Acme" } as never;
+
+  it("fullText:false never fetches the article and uses title + snippet", async () => {
+    parseStringMock.mockResolvedValue(
+      feed([{ link: "https://acme.example.com/p/1", title: "Hello", contentSnippet: "A short snippet" }])
+    );
+
+    await collectFeed(comp, "https://acme.example.com/feed", "blog", { fullText: false });
+
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+    expect(createSignalMock).toHaveBeenCalledTimes(1);
+    const raw = createSignalMock.mock.calls[0][0].raw_text as string;
+    expect(raw).toContain("Hello");
+    expect(raw).toContain("A short snippet");
+  });
+
+  it("maxItems keeps only the newest items", async () => {
+    parseStringMock.mockResolvedValue(
+      feed([
+        { link: "https://acme.example.com/p/old", title: "old", isoDate: "2026-01-01T00:00:00.000Z", "content:encoded": "<p>old</p>" },
+        { link: "https://acme.example.com/p/new", title: "new", isoDate: "2026-03-01T00:00:00.000Z", "content:encoded": "<p>new</p>" },
+        { link: "https://acme.example.com/p/mid", title: "mid", isoDate: "2026-02-01T00:00:00.000Z", "content:encoded": "<p>mid</p>" },
+      ])
+    );
+
+    await collectFeed(comp, "https://acme.example.com/feed", "blog", { maxItems: 2 });
+
+    const urls = createSignalMock.mock.calls.map((c) => c[0].source_url).sort();
+    expect(urls).toEqual(["https://acme.example.com/p/mid", "https://acme.example.com/p/new"]);
+  });
+});
