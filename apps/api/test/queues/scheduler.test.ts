@@ -30,6 +30,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-community": {},
     "collect-postings": {},
     "collect-news": {},
+    "collect-packages": {},
   },
   queues: {
     "collect-reddit": { upsertJobScheduler: upsertJobSchedulerMock },
@@ -47,6 +48,7 @@ vi.mock("@/queues/registry", () => ({
     "collect-community": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-postings": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-news": { upsertJobScheduler: upsertJobSchedulerMock },
+    "collect-packages": { upsertJobScheduler: upsertJobSchedulerMock },
   },
 }));
 
@@ -90,6 +92,7 @@ describe("queues/scheduler", () => {
         "collect-community",
         "collect-postings",
         "collect-news",
+        "collect-packages",
       ].sort()
     );
   });
@@ -201,7 +204,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(15);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(16);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },

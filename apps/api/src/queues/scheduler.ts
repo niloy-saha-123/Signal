@@ -29,6 +29,8 @@ const COLLECTOR_DEFAULT_HOURS: Partial<Record<QueueName, number>> = {
   "collect-postings": 12,
   // Press moves in hours and funding/launch news is time-sensitive.
   "collect-news": 6,
+  // Releases land a few times a week at most.
+  "collect-packages": 12,
 };
 
 export const COLLECTOR_QUEUE_NAMES: QueueName[] = (Object.keys(QUEUE_CONFIG) as QueueName[]).filter(

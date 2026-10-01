@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     initCommunity: makeInit(),
     initPostings: makeInit(),
     initNews: makeInit(),
+    initPackages: makeInit(),
     initEntity: makeInit(),
     initQuality: makeInit(),
     initDedup: makeInit(),
@@ -45,6 +46,7 @@ vi.mock("@/collectors/reddit", () => ({ initRedditWorker: mocks.initReddit }));
 vi.mock("@/collectors/hn", () => ({ initHnWorker: mocks.initHn }));
 vi.mock("@/collectors/jobs", () => ({ initJobsWorker: mocks.initJobs }));
 vi.mock("@/collectors/news", () => ({ initNewsWorker: mocks.initNews }));
+vi.mock("@/collectors/packages", () => ({ initPackagesWorker: mocks.initPackages }));
 vi.mock("@/collectors/changelog", () => ({
   initChangelogWorker: mocks.initChangelog,
   initPostingsWorker: mocks.initPostings,
@@ -94,7 +96,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 22 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 23 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -110,6 +112,7 @@ describe("standalone worker runtime", () => {
     expect(mocks.initCommunity).toHaveBeenCalledTimes(1);
     expect(mocks.initPostings).toHaveBeenCalledTimes(1);
     expect(mocks.initNews).toHaveBeenCalledTimes(1);
+    expect(mocks.initPackages).toHaveBeenCalledTimes(1);
     expect(mocks.initEntity).toHaveBeenCalledTimes(1);
     expect(mocks.initQuality).toHaveBeenCalledTimes(1);
     expect(mocks.initDedup).toHaveBeenCalledTimes(1);
@@ -122,7 +125,7 @@ describe("standalone worker runtime", () => {
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(22);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(23);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);
