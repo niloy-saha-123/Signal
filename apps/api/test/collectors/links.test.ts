@@ -58,4 +58,33 @@ describe("extractLinks", () => {
       stackoverflow_tag: null,
     });
   });
+
+  it("skips comment feeds", () => {
+    const html = `<link rel="alternate" type="application/rss+xml" title="Kestrel &raquo; Feed" href="/feed/">
+<link rel="alternate" type="application/rss+xml" title="Kestrel &raquo; Comments Feed" href="/feed/x/">
+<link rel="alternate" type="application/rss+xml" title="Post" href="/comments/feed/">
+<link rel="alternate" type="application/rss+xml" title="Post" href="/2026/hello/comment">`;
+    expect(extractLinks(html, "https://kestrel.dev/").blog_feeds).toEqual(["https://kestrel.dev/feed/"]);
+  });
+
+  it("maps Medium subdomains to their own feed and checks reserved segments case-insensitively", () => {
+    const html = `<a href="https://kestrel.medium.com/some-post">sub</a>
+<a href="https://www.medium.com/@Kestrel">www</a>
+<a href="https://medium.com/About">reserved</a><a href="https://dev.to/Search">reserved</a>`;
+    expect(extractLinks(html, "https://kestrel.dev/").blog_feeds).toEqual([
+      "https://kestrel.medium.com/feed",
+      "https://medium.com/feed/@Kestrel",
+    ]);
+  });
+
+  it("takes the first of several Stack Overflow tags, keeping an encoded plus", () => {
+    expect(extractLinks(`<a href="https://stackoverflow.com/questions/tagged/kestrel+postgres">s</a>`, "https://kestrel.dev/").stackoverflow_tag).toBe("kestrel");
+    expect(extractLinks(`<a href="https://stackoverflow.com/questions/tagged/kestrel%20postgres">s</a>`, "https://kestrel.dev/").stackoverflow_tag).toBe("kestrel");
+    expect(extractLinks(`<a href="https://stackoverflow.com/questions/tagged/c%2b%2b">s</a>`, "https://kestrel.dev/").stackoverflow_tag).toBe("c++");
+  });
+
+  it("upgrades http links to https", () => {
+    const html = `<link rel="alternate" type="application/rss+xml" href="http://kestrel.dev/rss.xml">`;
+    expect(extractLinks(html, "http://kestrel.dev/").blog_feeds).toEqual(["https://kestrel.dev/rss.xml"]);
+  });
 });

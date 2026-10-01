@@ -25,7 +25,9 @@ function resolve(href: string | undefined, base: string): URL | null {
   if (!href) return null;
   try {
     const url = new URL(href, base);
-    return url.protocol === "https:" || url.protocol === "http:" ? url : null;
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.protocol = "https:";
+    return url;
   } catch {
     return null;
   }
@@ -46,8 +48,9 @@ export function extractLinks(html: string, pageUrl: string): DiscoveredLinks {
   $('link[rel~="alternate"]').each((_, el) => {
     const type = ($(el).attr("type") ?? "").toLowerCase();
     if (!type.includes("rss") && !type.includes("atom")) return;
+    if (/comment/i.test($(el).attr("title") ?? "")) return;
     const url = resolve($(el).attr("href"), pageUrl);
-    if (url) blog.add(url.href);
+    if (url && !/\/comments?(\/|$)/i.test(url.pathname)) blog.add(url.href);
   });
 
   $("a[href]").each((_, el) => {
@@ -67,8 +70,13 @@ export function extractLinks(html: string, pageUrl: string): DiscoveredLinks {
       return;
     }
     if (hostIs(url, "medium.com")) {
+      const host = url.hostname.toLowerCase();
+      if (host !== "medium.com" && host !== "www.medium.com") {
+        blog.add(`https://${host}/feed`);
+        return;
+      }
       const seg = /^\/(@?[A-Za-z0-9_.-]+)$/.exec(path)?.[1];
-      if (seg && !MEDIUM_RESERVED.has(seg)) blog.add(`https://medium.com/feed/${seg}`);
+      if (seg && !MEDIUM_RESERVED.has(seg.toLowerCase())) blog.add(`https://medium.com/feed/${seg}`);
       return;
     }
     if (url.hostname.toLowerCase().endsWith(".hashnode.dev")) {
@@ -77,11 +85,12 @@ export function extractLinks(html: string, pageUrl: string): DiscoveredLinks {
     }
     if (hostIs(url, "dev.to")) {
       const seg = /^\/([A-Za-z0-9_-]+)$/.exec(path)?.[1];
-      if (seg && !DEVTO_RESERVED.has(seg)) blog.add(`https://dev.to/feed/${seg}`);
+      if (seg && !DEVTO_RESERVED.has(seg.toLowerCase())) blog.add(`https://dev.to/feed/${seg}`);
       return;
     }
     if (hostIs(url, "stackoverflow.com")) {
-      const tag = /^\/questions\/tagged\/([^/]+)$/.exec(path)?.[1];
+      // A raw "+" or space joins several tags; an encoded %2B is a literal plus (c++).
+      const tag = /^\/questions\/tagged\/([^/]+)$/.exec(path)?.[1]?.split(/\+|%20/i)[0];
       let decoded: string | null = null;
       try {
         decoded = tag ? decodeURIComponent(tag) : null;

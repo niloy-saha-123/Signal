@@ -317,7 +317,7 @@ describe("collectors/changelog", () => {
     vi.clearAllMocks();
     listCompetitorsMock.mockResolvedValue([activeCompetitor]);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
-    parseStringMock.mockRejectedValue(new Error("feed unreachable"));
+    safeFetchMock.mockRejectedValue(new Error("feed unreachable"));
 
     await expect(changelogCollectorProcessor({} as never)).resolves.toBeUndefined();
     expect(recordFailure).toHaveBeenCalledWith("changelog", expect.any(String));
@@ -481,6 +481,7 @@ describe("postings collector (newsroom feeds)", () => {
 });
 
 import { collectFeed } from "@/collectors/changelog";
+import { ConfigError } from "@/collectors/sweep";
 
 describe("collectFeed options", () => {
   beforeEach(() => {
@@ -522,5 +523,55 @@ describe("collectFeed options", () => {
 
     const urls = createSignalMock.mock.calls.map((c) => c[0].source_url).sort();
     expect(urls).toEqual(["https://acme.example.com/p/mid", "https://acme.example.com/p/new"]);
+  });
+
+  const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+
+  it("maxItems path ignores the shared watermark and applies maxAgeDays instead", async () => {
+    getLatestSignalCollectedAtMock.mockResolvedValue(new Date());
+    parseStringMock.mockResolvedValue(
+      feed([
+        { link: "https://acme.example.com/p/new", isoDate: daysAgo(1), "content:encoded": "<p>new</p>" },
+        { link: "https://acme.example.com/p/old", isoDate: daysAgo(40), "content:encoded": "<p>old</p>" },
+        { link: "https://acme.example.com/p/undated", "content:encoded": "<p>undated</p>" },
+        { link: "https://acme.example.com/p/bad", pubDate: "not a date", "content:encoded": "<p>bad</p>" },
+      ])
+    );
+
+    const created = await collectFeed(comp, "https://acme.example.com/feed", "blog", { maxItems: 20, maxAgeDays: 30 });
+
+    expect(getLatestSignalCollectedAtMock).not.toHaveBeenCalled();
+    expect(created).toBe(1);
+    expect(createSignalMock.mock.calls.map((c) => c[0].source_url)).toEqual(["https://acme.example.com/p/new"]);
+  });
+
+  it("without maxItems keeps the watermark behaviour and returns the created count", async () => {
+    getLatestSignalCollectedAtMock.mockResolvedValue(new Date("2026-08-10T00:00:00.000Z"));
+    parseStringMock.mockResolvedValue(
+      feed([
+        { link: "https://acme.example.com/p/a", isoDate: "2026-08-01T00:00:00.000Z", "content:encoded": "<p>a</p>" },
+        { link: "https://acme.example.com/p/b", isoDate: "2026-08-20T00:00:00.000Z", "content:encoded": "<p>b</p>" },
+      ])
+    );
+    const created = await collectFeed(comp, "https://acme.example.com/feed", "changelog");
+    expect(getLatestSignalCollectedAtMock).toHaveBeenCalled();
+    expect(created).toBe(1);
+  });
+
+  it.each([404, 403, 410])("a %s feed response is a ConfigError", async (status) => {
+    safeFetchMock.mockResolvedValue({ status, text: async () => "" });
+    await expect(collectFeed(comp, "https://acme.example.com/feed", "blog", { maxItems: 20 })).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it("an unparseable feed body is a ConfigError", async () => {
+    parseStringMock.mockRejectedValue(new Error("Non-whitespace before first tag"));
+    await expect(collectFeed(comp, "https://acme.example.com/feed", "blog", { maxItems: 20 })).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it.each([429, 503])("a %s feed response stays a plain Error", async (status) => {
+    safeFetchMock.mockResolvedValue({ status, text: async () => "" });
+    const err = await collectFeed(comp, "https://acme.example.com/feed", "blog", { maxItems: 20 }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ConfigError);
   });
 });

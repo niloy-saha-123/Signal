@@ -81,7 +81,7 @@ describe("community collector", () => {
     expect(signal.source_url).toBe("https://forum.kestrel.dev/t/migration-pain-7/7");
   });
 
-  it("skips topics created before the last collected signal", async () => {
+  it("ignores the shared community watermark — other collectors write the same source", async () => {
     cutoffMock.mockResolvedValue(new Date("2026-09-10T00:00:00Z"));
     safeFetchMock.mockResolvedValue(
       latest([topic(1, "2026-09-01T00:00:00Z"), topic(2, "2026-09-15T00:00:00Z")])
@@ -89,8 +89,8 @@ describe("community collector", () => {
 
     await communityCollectorProcessor(job);
 
-    expect(createSignalMock).toHaveBeenCalledTimes(1);
-    expect(createSignalMock.mock.calls[0][0].title).toBe("Migration pain 2");
+    expect(cutoffMock).not.toHaveBeenCalled();
+    expect(createSignalMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not store a thread twice", async () => {

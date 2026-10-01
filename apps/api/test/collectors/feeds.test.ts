@@ -7,9 +7,10 @@ vi.mock("@/reliability/circuit-breaker", () => ({
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/lib/retry", () => ({ withRetry: (fn: () => unknown) => fn() }));
-vi.mock("@/lib/logger", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+const { loggerMock } = vi.hoisted(() => ({
+  loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
 
 const { listCompetitorsMock, saveDiscoveredLinksMock, getLatestSignalCollectedAtMock, signalExistsBySourceUrlMock, createSignalMock } =
   vi.hoisted(() => ({
@@ -62,6 +63,7 @@ import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circu
 import { feedsCollectorProcessor, initFeedsWorker } from "@/collectors/feeds";
 
 const DAY = 24 * 60 * 60 * 1000;
+const RECENT = new Date(Date.now() - DAY).toISOString();
 const LONG_TEXT = "Post body text. ".repeat(40);
 
 function comp(over: Record<string, unknown> = {}) {
@@ -87,7 +89,7 @@ const item = {
   link: "https://kestrel.dev/p/1",
   title: "Post",
   "content:encoded": `<p>${LONG_TEXT}</p>`,
-  isoDate: "2026-09-01T00:00:00.000Z",
+  isoDate: RECENT,
 };
 
 const HOMEPAGE = `<head>
@@ -107,7 +109,7 @@ describe("collectors/feeds", () => {
     createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({ id: "s1", ...input }));
     enqueueInitialSignalPipelineMock.mockResolvedValue("added");
     parseStringMock.mockResolvedValue({ items: [item] });
-    safeFetchMock.mockResolvedValue({ status: 200, text: async () => HOMEPAGE });
+    safeFetchMock.mockResolvedValue({ status: 200, url: "https://kestrel.dev/", text: async () => HOMEPAGE });
     assertPublicUrlMock.mockResolvedValue(undefined);
   });
 
@@ -136,7 +138,7 @@ describe("collectors/feeds", () => {
     expect(patch.bluesky_handle).toBe("kestrel.dev");
   });
 
-  it("skips the scan when recent or own company, rescans after 30 days", async () => {
+  it("scans once: never rescans a stamped competitor, never scans the own company", async () => {
     listCompetitorsMock.mockResolvedValue([
       comp({ links_scanned_at: new Date(Date.now() - 5 * DAY) }),
       comp({ id: "own", is_own_company: true, links_scanned_at: null }),
@@ -144,9 +146,10 @@ describe("collectors/feeds", () => {
     await feedsCollectorProcessor({} as never);
     expect(saveDiscoveredLinksMock).not.toHaveBeenCalled();
 
+    // A rescan would refill a list the user deliberately cleared.
     listCompetitorsMock.mockResolvedValue([comp({ links_scanned_at: new Date(Date.now() - 31 * DAY) })]);
     await feedsCollectorProcessor({} as never);
-    expect(saveDiscoveredLinksMock).toHaveBeenCalledTimes(1);
+    expect(saveDiscoveredLinksMock).not.toHaveBeenCalled();
   });
 
   it("stamps the scan even when nothing is found", async () => {
@@ -183,7 +186,7 @@ describe("collectors/feeds", () => {
   it("social sweep never fetches the item page", async () => {
     listCompetitorsMock.mockResolvedValue([comp({ social_feeds: ["https://yt.example/feed"] })]);
     parseStringMock.mockResolvedValue({
-      items: [{ link: "https://www.youtube.com/watch?v=1", title: "Video", contentSnippet: LONG_TEXT, isoDate: "2026-09-01T00:00:00.000Z" }],
+      items: [{ link: "https://www.youtube.com/watch?v=1", title: "Video", contentSnippet: LONG_TEXT, isoDate: RECENT }],
     });
     safeFetchMock.mockResolvedValue({ status: 200, text: async () => "<feed />" });
 
@@ -201,16 +204,110 @@ describe("collectors/feeds", () => {
     expect(createSignalMock).toHaveBeenCalledWith(expect.objectContaining({ source: "community" }));
   });
 
-  it("an open blog circuit does not stop the other sweeps; error rethrown", async () => {
+  it("an open blog circuit is skipped without failing the job; the other sweeps run", async () => {
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockImplementation(async (s: string) => s === "blog");
     listCompetitorsMock.mockResolvedValue([
       comp({ blog_feeds: ["https://a.example/feed"], social_feeds: ["https://s.example/feed"], forum_feeds: ["https://f.example/feed"] }),
     ]);
     safeFetchMock.mockResolvedValue({ status: 200, text: async () => "<feed />" });
 
-    await expect(feedsCollectorProcessor({} as never)).rejects.toThrow(/blog circuit is open/);
+    await expect(feedsCollectorProcessor({} as never)).resolves.toBeUndefined();
 
     const sources = createSignalMock.mock.calls.map((c) => c[0].source).sort();
     expect(sources).toEqual(["community", "social"]);
+  });
+
+  it("a non-circuit sweep failure is still rethrown after the other sweeps run", async () => {
+    listCompetitorsMock.mockRejectedValueOnce(new Error("db down")).mockResolvedValue([
+      comp({ blog_feeds: ["https://a.example/feed"] }),
+    ]);
+    safeFetchMock.mockResolvedValue({ status: 200, text: async () => "<feed />" });
+    await expect(feedsCollectorProcessor({} as never)).rejects.toThrow("db down");
+    expect(createSignalMock).toHaveBeenCalledWith(expect.objectContaining({ source: "blog" }));
+  });
+
+  it("two feeds of one competitor each store their new item despite a fresh watermark", async () => {
+    getLatestSignalCollectedAtMock.mockResolvedValue(new Date());
+    listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed", "https://b.example/feed"] })]);
+    safeFetchMock.mockImplementation(async (url: string) => ({ status: 200, text: async () => url }));
+    parseStringMock.mockImplementation(async (body: string) => ({
+      items: [{ ...item, link: `${body}/post` }],
+    }));
+    await feedsCollectorProcessor({} as never);
+    expect(createSignalMock.mock.calls.map((c) => c[0].source_url).sort()).toEqual([
+      "https://a.example/feed/post",
+      "https://b.example/feed/post",
+    ]);
+  });
+
+  it("skips feed items older than 30 days or undated", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed"] })]);
+    safeFetchMock.mockResolvedValue({ status: 200, text: async () => "<feed />" });
+    parseStringMock.mockResolvedValue({
+      items: [
+        { ...item, link: "https://kestrel.dev/p/new" },
+        { ...item, link: "https://kestrel.dev/p/old", isoDate: new Date(Date.now() - 40 * DAY).toISOString() },
+        { ...item, link: "https://kestrel.dev/p/undated", isoDate: undefined },
+      ],
+    });
+    await feedsCollectorProcessor({} as never);
+    expect(createSignalMock.mock.calls.map((c) => c[0].source_url)).toEqual(["https://kestrel.dev/p/new"]);
+  });
+
+  it("caps new signals at 20 per competitor per source across all its feeds", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed", "https://b.example/feed"] })]);
+    safeFetchMock.mockImplementation(async (url: string) => ({ status: 200, text: async () => url }));
+    parseStringMock.mockImplementation(async (body: string) => ({
+      items: Array.from({ length: 15 }, (_, i) => ({ ...item, link: `${body}/p/${i}` })),
+    }));
+    await feedsCollectorProcessor({} as never);
+    expect(createSignalMock).toHaveBeenCalledTimes(20);
+  });
+
+  it("a 404 feed warns and does not charge the blog circuit", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed"] })]);
+    safeFetchMock.mockResolvedValue({ status: 404, text: async () => "" });
+    await feedsCollectorProcessor({} as never);
+    expect(loggerMock.warn).toHaveBeenCalled();
+    expect(recordFailure).not.toHaveBeenCalledWith("blog", expect.anything());
+  });
+
+  it("a ConfigError feed does not count toward all-feeds-failed", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ blog_feeds: ["https://a.example/feed", "https://b.example/feed"] })]);
+    safeFetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith("https://a.example")) return { status: 404, text: async () => "" };
+      throw new Error("ECONNRESET");
+    });
+    await feedsCollectorProcessor({} as never);
+    expect(recordFailure).toHaveBeenCalledWith("blog", expect.any(String));
+  });
+
+  it("homepage 403 stamps the scan without charging the links circuit", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ links_scanned_at: null })]);
+    safeFetchMock.mockResolvedValue({ status: 403, text: async () => "" });
+    await feedsCollectorProcessor({} as never);
+    expect(saveDiscoveredLinksMock).toHaveBeenCalledWith("c1", {});
+    expect(recordFailure).not.toHaveBeenCalledWith("links", expect.anything());
+  });
+
+  it("homepage 503 throws (not stamped, retried next run)", async () => {
+    listCompetitorsMock.mockResolvedValue([comp({ links_scanned_at: null })]);
+    safeFetchMock.mockResolvedValue({ status: 503, text: async () => "" });
+    await feedsCollectorProcessor({} as never);
+    expect(saveDiscoveredLinksMock).not.toHaveBeenCalled();
+    expect(recordFailure).toHaveBeenCalledWith("links", expect.any(String));
+  });
+
+  it("scan resolves against the final URL, normalizes known feeds, caps at 5, upgrades http, logs filled keys", async () => {
+    const links = Array.from({ length: 7 }, (_, i) => `<link rel="alternate" type="application/rss+xml" href="/f${i}.xml">`).join("");
+    listCompetitorsMock.mockResolvedValue([
+      comp({ links_scanned_at: null, changelog_rss: "HTTP://WWW.Kestrel.dev/f0.xml/" }),
+    ]);
+    safeFetchMock.mockResolvedValue({ status: 200, url: "http://www.kestrel.dev/home", text: async () => links });
+    parseStringMock.mockResolvedValue({ items: [] });
+    await feedsCollectorProcessor({} as never);
+    const [, patch] = saveDiscoveredLinksMock.mock.calls[0];
+    expect(patch.blog_feeds).toEqual([1, 2, 3, 4, 5].map((i) => `https://www.kestrel.dev/f${i}.xml`));
+    expect(loggerMock.info).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ competitor_id: "c1", fields: ["blog_feeds"] }));
   });
 });
