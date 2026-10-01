@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Sig } from "@/components/brand/Sig";
+import Link from "next/link";
 import { Icon } from "@/components/ui/icons";
+import { buttonClass } from "@/components/ui/primitives";
 import { listCompetitors } from "../lib/api";
 import { onAskSignal } from "../lib/ask";
 import { ChatAvatar } from "./ChatAvatar";
@@ -112,6 +114,9 @@ export function ChatSidebar() {
                     Signal answers from evidence it has collected. Add a competitor (or sign in) and
                     ask again once the first signals arrive.
                   </p>
+                  <Link href="/board" onClick={() => setIsOpen(false)} className={buttonClass("primary", "sm")}>
+                    Add a competitor
+                  </Link>
                 </div>
               ) : (
                 <ChatInterface key={chatKey} competitorIds={competitorIds} showThreads={false} initialQuery={prefill} />

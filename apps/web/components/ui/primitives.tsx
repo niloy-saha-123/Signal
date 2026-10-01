@@ -116,8 +116,8 @@ export function Metric({
   const tones = {
     default: "text-ink",
     muted: "text-ink-muted",
-    hit: "text-outcome-hit",
-    miss: "text-outcome-miss",
+    hit: "text-hit-text",
+    miss: "text-miss-text",
   } as const;
 
   return (
@@ -187,7 +187,7 @@ const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: "bg-ink text-white hover:bg-[#1d3047] disabled:bg-ink-muted",
   secondary: "border border-line-strong bg-surface text-ink hover:bg-surface-sunken disabled:text-ink-muted",
   ghost: "text-ink-secondary hover:bg-surface-sunken hover:text-ink",
-  danger: "border border-line-strong bg-surface text-status-critical hover:bg-tint-rose",
+  danger: "border border-line-strong bg-surface text-miss-text hover:bg-tint-rose",
   sun: "bg-sun text-ink shadow-[inset_0_0_0_1.5px_var(--color-ink)] hover:bg-[#ffdb63]",
 };
 
@@ -361,8 +361,8 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
   const tones: Record<BadgeTone, string> = {
     neutral: "bg-surface-sunken text-ink-secondary",
     accent: "bg-accent-tint text-accent",
-    hit: "bg-tint-mint text-outcome-hit",
-    miss: "bg-tint-rose text-outcome-miss",
+    hit: "bg-tint-mint text-hit-text",
+    miss: "bg-tint-rose text-miss-text",
     // Neutral on purpose: an unresolved window is not a failure.
     unresolved: "bg-surface-sunken text-ink-muted",
     open: "bg-accent-tint text-accent",
@@ -449,7 +449,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
     <div role="alert" className="flex items-start gap-4 rounded-[14px] border border-[#f3c0ca] bg-tint-rose px-5 py-4">
       <Sig mood="unsure" size={36} decorative />
       <div>
-        <p className="text-[14px] font-semibold text-status-critical">Couldn&rsquo;t load this</p>
+        <p className="text-[14px] font-semibold text-miss-text">Couldn&rsquo;t load this</p>
         <p className="mt-1 text-[13px] text-ink-secondary">{message}</p>
         {onRetry ? (
           <div className="mt-3">

@@ -356,7 +356,7 @@ export function CompanyClient({
               Decks, plans, pricing sheets. PDF, Word, text, CSV or JSON, up to {formatBytes(10 * 1024 * 1024)} each.
             </p>
             {uploadError && (
-              <p role="alert" className="mt-2 text-[13.5px] text-status-critical">
+              <p role="alert" className="mt-2 text-[13.5px] text-miss-text">
                 {uploadError}
               </p>
             )}

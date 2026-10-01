@@ -74,6 +74,11 @@
   --color-outcome-unresolved: #5a6b7d;
   --color-outcome-open: #1d5fc4;
 
+  /* Outcome colours as TEXT. The fills above fail 4.5:1 on their own tints
+     (hit on mint is 3.9:1); text uses these deeper shades. test/app/contrast.test.ts */
+  --color-hit-text: #0a6b43;
+  --color-miss-text: #b02a3f;
+
   --color-diverging-positive: #2a78d6;
   --color-diverging-negative: #e34948;
   --color-diverging-neutral: #eef3f7;

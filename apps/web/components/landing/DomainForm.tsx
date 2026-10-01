@@ -53,7 +53,7 @@ export function DomainForm({ cta = "Get their forecast", note }: { cta?: string;
         </button>
       </div>
       {error ? (
-        <p id={errorId} role="alert" className="mt-2.5 text-[14px] font-medium text-status-critical">
+        <p id={errorId} role="alert" className="mt-2.5 text-[14px] font-medium text-miss-text">
           {error}
         </p>
       ) : note ? (

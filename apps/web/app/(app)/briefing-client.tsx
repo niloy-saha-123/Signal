@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { AddCompetitorForm } from "@/components/AddCompetitorForm";
 import { Sig } from "@/components/brand/Sig";
 import { Icon } from "@/components/ui/icons";
-import { Card, EmptyState, LinkButton, Probability, SectionLabel } from "@/components/ui/primitives";
+import { Card, EmptyState, ErrorState, LinkButton, Probability, SectionLabel } from "@/components/ui/primitives";
 import type { DashboardSummary } from "@/lib/api";
 import { askSignal } from "@/lib/ask";
 import { daysUntil, formatShortDate, greeting, humanizePattern, relativeTime } from "@/lib/format";
@@ -40,7 +40,8 @@ type Props = {
   summary: DashboardSummary | null;
   movements: Movement[];
   pulse: Pulse[];
-  forecasts: ForecastPreview[];
+  // null = the fetch failed; [] = there are genuinely none.
+  forecasts: ForecastPreview[] | null;
   competitorCount: number;
 };
 
@@ -158,7 +159,9 @@ export function BriefingClient({ summary, movements, pulse, forecasts, competito
         <SectionLabel action={<LinkButton href="/forecast" variant="ghost" size="sm">All forecasts</LinkButton>}>
           <span id="next">Resolving soonest</span>
         </SectionLabel>
-        {forecasts.length === 0 ? (
+        {forecasts === null ? (
+          <ErrorState message="Forecasts didn't load. Refresh to try again." />
+        ) : forecasts.length === 0 ? (
           <EmptyState
             compact
             title="No forecasts yet"

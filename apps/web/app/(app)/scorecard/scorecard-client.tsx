@@ -1,7 +1,7 @@
 "use client";
 
 import { ForecastAreaTabs } from "@/components/forecast/parts";
-import { Card, CardBody, CardHeader, EmptyState, Metric, Num, PageHeader } from "@/components/ui/primitives";
+import { Card, CardBody, CardHeader, EmptyState, Metric, Num, PageHeader, LinkButton } from "@/components/ui/primitives";
 import type { Calibration } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
@@ -92,6 +92,11 @@ export function ScorecardClient({
             nextResolution
               ? `Nothing has settled, so there's no score to show. ${openCount} forecast${openCount === 1 ? " is" : "s are"} open and the first one is checked ${formatDate(nextResolution)}.`
               : "Nothing has settled, so there's no score to show. Signal only forecasts above an evidence bar, so this fills in as evidence accumulates, not on a schedule."
+          }
+          action={
+            <LinkButton href="/forecast" size="sm">
+              See open forecasts
+            </LinkButton>
           }
         />
       ) : (

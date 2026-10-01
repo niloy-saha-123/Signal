@@ -46,7 +46,7 @@ export const PRIMARY_NAV: NavItem[] = [
 ];
 
 export const SECONDARY_NAV: NavItem[] = [
-  { href: "/settings", label: "Settings", hint: "Workspace, Slack, MCP, budget", icon: "settings", matches: ["/settings"] },
+  { href: "/settings", label: "Settings", hint: "Account, company name, password", icon: "settings", matches: ["/settings"] },
   { href: "/activity", label: "Activity", hint: "What the agents are doing", icon: "activity", matches: ["/activity"] },
 ];
 

@@ -285,7 +285,7 @@ function SourceCoverage({ competitor, signals }: { competitor: Competitor; signa
           <span
             className={
               state === "Reporting"
-                ? "text-[12.5px] font-semibold text-outcome-hit"
+                ? "text-[12.5px] font-semibold text-hit-text"
                 : state === "Watching"
                   ? "text-[12.5px] text-ink-secondary"
                   : "text-[12.5px] text-ink-muted"

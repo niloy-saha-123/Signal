@@ -7,7 +7,7 @@ import { AskButton } from "@/components/AskButton";
 import { OutcomeBadge } from "@/components/forecast/parts";
 import { Icon } from "@/components/ui/icons";
 import { Badge, Card, CardBody, CardHeader, Probability, SourceChip } from "@/components/ui/primitives";
-import { getPrediction, type ResolutionCriteria } from "@/lib/api";
+import { ApiError, getPrediction, type ResolutionCriteria } from "@/lib/api";
 import { sourceLabel } from "@/lib/chart-colors";
 import { daysUntil, formatDate, patternLabel } from "@/lib/format";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
@@ -37,7 +37,10 @@ export default async function PredictionDetailPage({ params }: { params: Promise
   const token = await getOptionalAccessToken();
   if (!token) notFound();
 
-  const prediction = await getPrediction(id, token).catch(() => null);
+  const prediction = await getPrediction(id, token).catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
   if (!prediction) notFound();
 
   const open = prediction.status === "open";

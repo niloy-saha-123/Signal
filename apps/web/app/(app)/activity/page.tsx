@@ -12,6 +12,7 @@ import {
   CardBody,
   CardHeader,
   EmptyState,
+  LinkButton,
   Metric,
   Num,
   PageHeader,
@@ -131,6 +132,11 @@ export default async function ActivityPage() {
             <EmptyState
               title="Nothing has run yet"
               note="Collectors run on a schedule and analysis follows them. Add a competitor and the first runs appear within a few hours."
+              action={
+                <LinkButton href="/board" variant="primary" size="sm">
+                  Add a competitor
+                </LinkButton>
+              }
             />
           ) : (
             <ul>

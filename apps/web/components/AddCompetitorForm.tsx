@@ -79,7 +79,7 @@ export function AddCompetitorForm({
         </button>
       </div>
       {error ? (
-        <p role="alert" className="mt-2 text-[14px] font-medium text-status-critical">
+        <p role="alert" className="mt-2 text-[14px] font-medium text-miss-text">
           {error}
         </p>
       ) : null}

@@ -412,7 +412,7 @@ export function ChatInterface({ competitorIds, showThreads = true, initialQuery 
                     <Sig size={28} mood={assistantMood(message)} decorative className="mt-0.5 shrink-0" />
                     <div className="min-w-0 flex-1">
                       {message.error ? (
-                        <p role="alert" className="rounded-[12px] border border-[#f3c0ca] bg-tint-rose px-4 py-3 text-[14px] text-status-critical">
+                        <p role="alert" className="rounded-[12px] border border-[#f3c0ca] bg-tint-rose px-4 py-3 text-[14px] text-miss-text">
                           {message.error}
                         </p>
                       ) : message.refused ? (
@@ -497,7 +497,7 @@ export function ChatInterface({ competitorIds, showThreads = true, initialQuery 
 
         <div className="border-t border-line bg-surface px-4 py-3">
           {attachError && (
-            <p role="alert" className="mb-2 text-[13px] text-status-critical">
+            <p role="alert" className="mb-2 text-[13px] text-miss-text">
               {attachError}
             </p>
           )}

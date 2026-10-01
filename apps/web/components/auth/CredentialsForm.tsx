@@ -90,7 +90,7 @@ export function CredentialsForm({ mode }: { mode: Mode }) {
         minLength={mode === "signup" ? 6 : undefined}
       />
       {error ? (
-        <p role="alert" className="text-[14px] font-medium text-status-critical">
+        <p role="alert" className="text-[14px] font-medium text-miss-text">
           {error}
         </p>
       ) : null}

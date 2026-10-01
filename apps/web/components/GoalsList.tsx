@@ -101,7 +101,7 @@ export function GoalsList() {
       </div>
 
       {error && (
-        <p role="alert" className="mt-3 text-[13.5px] text-status-critical">
+        <p role="alert" className="mt-3 text-[13.5px] text-miss-text">
           {error}
         </p>
       )}

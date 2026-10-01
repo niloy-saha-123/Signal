@@ -150,4 +150,25 @@ describe("OnboardingForm", () => {
     );
     expect(pushMock).not.toHaveBeenCalled();
   });
+
+  it("resumes at the competitor step when the workspace already exists (reload mid-setup)", async () => {
+    const payload = btoa(JSON.stringify({ workspace_id: "ws-1" })).replace(/=+$/, "");
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: `h.${payload}.s` } } });
+    vi.stubGlobal("fetch", vi.fn());
+    render(<OnboardingForm />);
+    await screen.findByRole("heading", { name: "Who should Signal watch first?" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("doesn't promise a Slack setup that isn't built yet", async () => {
+    createCompetitorMock.mockResolvedValue({ id: "c1", name: "Kestrel", domain: "kestrel.dev" });
+    resolveCompanyMock.mockResolvedValue({ name: "Kestrel", domain: "kestrel.dev" });
+    await reachCompetitorStep();
+    fireEvent.change(screen.getByLabelText("Competitor website"), { target: { value: "kestrel.dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add competitor" }));
+    await screen.findByText("Added");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByRole("button", { name: "Go to Home" });
+    expect(screen.queryByRole("link", { name: /Slack/ })).toBeNull();
+  });
 });

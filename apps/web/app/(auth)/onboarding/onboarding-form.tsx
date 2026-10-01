@@ -6,7 +6,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { Sig } from "@/components/brand/Sig";
-import { Button, LinkButton, TextInput } from "@/components/ui/primitives";
+import { Button, TextInput } from "@/components/ui/primitives";
 import { addCompetitorByDomain } from "@/lib/add-competitor";
 import type { Competitor } from "@/lib/api";
 import { normalizeDomain } from "@/lib/domain";
@@ -28,6 +28,23 @@ export function OnboardingForm() {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
   const [added, setAdded] = useState<Competitor[]>([]);
+
+  // A reload mid-setup lands here again after the workspace already exists;
+  // creating it twice would fail, so resume at the competitor step.
+  useEffect(() => {
+    let cancelled = false;
+    getSupabaseBrowserClient()
+      .auth.getSession()
+      .then(({ data: { session } }) => {
+        if (!cancelled && session && workspaceIdFromToken(session.access_token)) {
+          setStep((current) => (current === 1 ? 2 : current));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function finish() {
     clearPendingCompetitor();
@@ -71,6 +88,17 @@ export function OnboardingForm() {
       {step === 3 ? <ReadyStep count={added.length} onFinish={finish} /> : null}
     </div>
   );
+}
+
+function workspaceIdFromToken(token: string): string | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const payload = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/"))) as { workspace_id?: unknown };
+    return typeof payload.workspace_id === "string" ? payload.workspace_id : null;
+  } catch {
+    return null;
+  }
 }
 
 function WorkspaceStep({ onDone }: { onDone: () => void }) {
@@ -118,7 +146,7 @@ function WorkspaceStep({ onDone }: { onDone: () => void }) {
       </div>
       <TextInput label="Workspace name" value={name} onChange={(e) => setName(e.target.value)} required maxLength={120} />
       {error ? (
-        <p role="alert" className="text-[14px] font-medium text-status-critical">
+        <p role="alert" className="text-[14px] font-medium text-miss-text">
           {error}
         </p>
       ) : null}
@@ -196,7 +224,7 @@ function CompetitorStep({
                 <span className="block font-semibold text-ink">{competitor.name}</span>
                 <span className="block truncate text-[13px] text-ink-muted">{competitor.domain}</span>
               </span>
-              <span className="text-[13px] font-semibold text-status-good">Added</span>
+              <span className="text-[13px] font-semibold text-hit-text">Added</span>
             </li>
           ))}
         </ul>
@@ -214,7 +242,7 @@ function CompetitorStep({
             inputMode="url"
           />
           {error ? (
-            <p role="alert" className="text-[14px] font-medium text-status-critical">
+            <p role="alert" className="text-[14px] font-medium text-miss-text">
               {error}
             </p>
           ) : null}
@@ -252,17 +280,10 @@ function ReadyStep({ count, onFinish }: { count: number; onFinish: () => void })
           days.
         </p>
       </div>
-      <div className="rounded-[14px] bg-sky p-4 text-[14px] text-ink-secondary">
-        <span className="font-semibold text-ink">Want forecasts in Slack?</span> Connect it in Settings and pick a
-        channel.
-      </div>
       <div className="flex flex-wrap gap-2">
         <Button variant="primary" size="lg" onClick={onFinish}>
           Go to Home
         </Button>
-        <LinkButton href="/settings" size="lg">
-          Connect Slack
-        </LinkButton>
       </div>
     </div>
   );

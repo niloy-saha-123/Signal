@@ -28,11 +28,11 @@ export default async function Page() {
 
   const [scores, open] = await Promise.all([
     Promise.all(watched.map((competitor) => getCompetitorScore(competitor.id, token).catch(() => null))),
-    listPredictions({ status: "open", limit: 200 }, token).catch(() => []),
+    listPredictions({ status: "open", limit: 200 }, token).catch(() => null),
   ]);
 
   const rows: BoardRow[] = watched.map((competitor, index) => {
-    const forecasts = open
+    const forecasts = (open ?? [])
       .filter((prediction) => prediction.competitor_id === competitor.id)
       .sort((a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime());
     const next = forecasts[0];
@@ -50,5 +50,5 @@ export default async function Page() {
     };
   });
 
-  return <CompetitorBoard rows={rows} />;
+  return <CompetitorBoard rows={rows} forecastsUnavailable={open === null} />;
 }

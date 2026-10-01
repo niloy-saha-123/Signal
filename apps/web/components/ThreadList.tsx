@@ -47,7 +47,7 @@ export function ThreadList({ threads, activeThreadId, onSelect, onNew, onDelete 
                 type="button"
                 onClick={() => onDelete(thread.id)}
                 aria-label={`Delete chat: ${title}`}
-                className="absolute top-2.5 right-2 rounded-[8px] p-1 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface hover:text-status-critical focus-visible:opacity-100"
+                className="absolute top-2.5 right-2 rounded-[8px] p-1 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-surface hover:text-miss-text focus-visible:opacity-100"
               >
                 <Icon name="trash" className="h-4 w-4" />
               </button>

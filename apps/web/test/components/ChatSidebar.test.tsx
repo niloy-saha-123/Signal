@@ -51,4 +51,11 @@ describe("ChatSidebar", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Ask Signal" })));
   });
+
+  it("gives a workspace with nothing to answer from a way to add a competitor", async () => {
+    listCompetitorsMock.mockResolvedValue([]);
+    render(<ChatSidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Signal" }));
+    expect(await screen.findByRole("link", { name: "Add a competitor" })).toHaveAttribute("href", "/board");
+  });
 });

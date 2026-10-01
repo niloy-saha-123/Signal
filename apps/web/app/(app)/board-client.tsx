@@ -45,7 +45,13 @@ const SORTS: Record<Sort, (a: BoardRow, b: BoardRow) => number> = {
   name: byName,
 };
 
-export function CompetitorBoard({ rows }: { rows: BoardRow[] }) {
+export function CompetitorBoard({
+  rows,
+  forecastsUnavailable = false,
+}: {
+  rows: BoardRow[];
+  forecastsUnavailable?: boolean;
+}) {
   const [sort, setSort] = useState<Sort>("activity");
   const [query, setQuery] = useState("");
 
@@ -106,7 +112,7 @@ export function CompetitorBoard({ rows }: { rows: BoardRow[] }) {
           ) : (
             <ul className="space-y-2.5">
               {visible.map((row) => (
-                <CompetitorRow key={row.id} row={row} />
+                <CompetitorRow key={row.id} row={row} forecastsUnavailable={forecastsUnavailable} />
               ))}
             </ul>
           )}
@@ -116,7 +122,7 @@ export function CompetitorBoard({ rows }: { rows: BoardRow[] }) {
   );
 }
 
-function CompetitorRow({ row }: { row: BoardRow }) {
+function CompetitorRow({ row, forecastsUnavailable }: { row: BoardRow; forecastsUnavailable: boolean }) {
   const rising = row.delta !== null && Math.round(row.delta) > 0;
   return (
     <li>
@@ -131,13 +137,15 @@ function CompetitorRow({ row }: { row: BoardRow }) {
 
         <div className="flex items-baseline gap-3 sm:block sm:w-28 sm:text-right">
           <span className="metric text-[28px]">{row.score ?? "—"}</span>
-          <span className={cx("text-[12.5px] font-medium sm:block", rising ? "text-status-critical" : "text-ink-muted")}>
+          <span className={cx("text-[12.5px] font-medium sm:block", rising ? "text-miss-text" : "text-ink-muted")}>
             {row.score === null ? (row.discovering ? "Finding sources" : "Gathering signals") : weeklyChange(row.delta)}
           </span>
         </div>
 
         <div className="min-w-0">
-          {row.next ? (
+          {forecastsUnavailable ? (
+            <p className="text-[13.5px] text-ink-muted">Forecasts didn&apos;t load.</p>
+          ) : row.next ? (
             <div className="flex items-center gap-4">
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-[14px] leading-snug font-semibold text-ink">{row.next.statement}</p>

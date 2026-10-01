@@ -19,6 +19,7 @@ export interface SignalFeedProps {
   competitorNames?: Record<string, string>;
   emptyTitle?: string;
   emptyNote?: string;
+  emptyAction?: React.ReactNode;
 }
 
 const STRONG = 0.8;
@@ -29,6 +30,7 @@ export function SignalFeed({
   competitorNames = {},
   emptyTitle = "No evidence here yet",
   emptyNote = "New evidence appears here the moment Signal collects it.",
+  emptyAction,
 }: SignalFeedProps) {
   const router = useRouter();
 
@@ -58,7 +60,7 @@ export function SignalFeed({
   }, [competitorIdsKey]);
 
   if (signals.length === 0) {
-    return <EmptyState compact title={emptyTitle} note={emptyNote} />;
+    return <EmptyState compact title={emptyTitle} note={emptyNote} action={emptyAction} />;
   }
 
   return (

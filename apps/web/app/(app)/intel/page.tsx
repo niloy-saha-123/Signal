@@ -5,7 +5,7 @@ import { SignalFeed } from "@/components/SignalFeed";
 import { DataCoverage } from "@/components/DataCoverage";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
 import { EvidenceAreaTabs } from "@/components/evidence/parts";
-import { PageHeader } from "@/components/ui/primitives";
+import { LinkButton, PageHeader } from "@/components/ui/primitives";
 import { listCompetitors, listSignals, type Competitor } from "@/lib/api";
 import { PREVIEW_COMPETITORS, PREVIEW_SIGNALS } from "@/lib/preview-workspace";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
@@ -70,8 +70,16 @@ function renderIntel(competitors: Competitor[], signals: Signal[], q: string) {
           competitorNames={Object.fromEntries(competitors.map((competitor) => [competitor.id, competitor.name]))}
           {...(q
             ? { emptyTitle: `Nothing matches “${q}”`, emptyNote: "Try fewer words, or clear the other filters." }
-            : competitors.length === 0
-              ? { emptyTitle: "No evidence yet", emptyNote: "Add a competitor and Signal starts collecting within minutes." }
+            : competitors.every((competitor) => competitor.is_own_company)
+              ? {
+                  emptyTitle: "No evidence yet",
+                  emptyNote: "Add a competitor and Signal starts collecting within minutes.",
+                  emptyAction: (
+                    <LinkButton href="/board" variant="primary" size="sm">
+                      Add a competitor
+                    </LinkButton>
+                  ),
+                }
               : {})}
         />
       </section>
@@ -92,8 +100,9 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
   const competitorIds = competitors.map((competitor) => competitor.id);
   const source = SignalSourceSchema.safeParse(params.source);
   const minQuality = Number(params.min_quality);
+  const watching = competitors.some((competitor) => !competitor.is_own_company);
   const result =
-    competitorIds.length === 0
+    !watching
       ? { data: [] }
       : await listSignals(
           {

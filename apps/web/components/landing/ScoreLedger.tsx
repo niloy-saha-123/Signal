@@ -8,8 +8,8 @@ const ENTRIES = [
 ] as const;
 
 const OUTCOME_STYLE = {
-  Hit: "bg-tint-mint text-outcome-hit",
-  Miss: "bg-tint-rose text-outcome-miss",
+  Hit: "bg-tint-mint text-hit-text",
+  Miss: "bg-tint-rose text-miss-text",
   Unresolved: "bg-surface-sunken text-ink-secondary",
 } as const;
 

@@ -128,8 +128,8 @@ export function SettingsClient() {
           role={message.kind === "error" ? "alert" : "status"}
           className={
             message.kind === "ok"
-              ? "mb-4 max-w-2xl rounded-[10px] bg-tint-mint px-4 py-3 text-[14px] text-outcome-hit"
-              : "mb-4 max-w-2xl rounded-[10px] bg-tint-rose px-4 py-3 text-[14px] text-status-critical"
+              ? "mb-4 max-w-2xl rounded-[10px] bg-tint-mint px-4 py-3 text-[14px] text-hit-text"
+              : "mb-4 max-w-2xl rounded-[10px] bg-tint-rose px-4 py-3 text-[14px] text-miss-text"
           }
         >
           {message.text}

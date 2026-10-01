@@ -27,7 +27,7 @@ export default async function BriefingPage() {
   const [scores, alerts, predictions] = await Promise.all([
     Promise.all(ids.map((id) => getCompetitorScore(id, token).catch(() => null))),
     listAlerts({ competitor_ids: ids, limit: 12 }, token),
-    listPredictions({ status: "open", limit: 50 }, token).catch(() => []),
+    listPredictions({ status: "open", limit: 50 }, token).catch(() => null),
   ]);
 
   const names = new Map(watched.map((competitor) => [competitor.id, competitor.name]));
@@ -51,7 +51,7 @@ export default async function BriefingPage() {
   }));
 
   const forecasts = predictions
-    .slice()
+    ?.slice()
     .sort((a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime())
     .slice(0, 3)
     .map((prediction) => ({
@@ -67,7 +67,7 @@ export default async function BriefingPage() {
       summary={summary}
       movements={movements}
       pulse={pulse}
-      forecasts={forecasts}
+      forecasts={forecasts ?? null}
       competitorCount={watched.length}
     />
   );

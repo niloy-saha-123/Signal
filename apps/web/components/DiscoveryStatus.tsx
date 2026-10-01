@@ -80,7 +80,7 @@ export function DiscoveryStatus({
           <li key={entry.field_name} className="flex flex-wrap items-center justify-between gap-2 text-[13.5px]">
             <span className="font-medium text-ink">{label}</span>
             {found ? (
-              <span className="inline-flex items-center gap-1 font-semibold text-outcome-hit">
+              <span className="inline-flex items-center gap-1 font-semibold text-hit-text">
                 <Icon name="check" className="h-3.5 w-3.5" />
                 Found
               </span>

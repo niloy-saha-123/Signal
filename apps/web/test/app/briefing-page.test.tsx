@@ -99,7 +99,7 @@ describe("BriefingPage", () => {
     expect(screen.getByText("Up 5 this week")).toBeInTheDocument();
   });
 
-  it("still renders when forecasts fail to load", async () => {
+  it("says forecasts didn't load instead of claiming there are none", async () => {
     listCompetitorsMock.mockResolvedValue([{ id: "k", name: "Kestrel", is_own_company: false, is_active: true }]);
     getCompetitorScoreMock.mockRejectedValue(new Error("down"));
     listAlertsMock.mockResolvedValue({ data: [], next_cursor: null });
@@ -108,7 +108,8 @@ describe("BriefingPage", () => {
     render(await BriefingPage());
 
     expect(screen.getByRole("heading", { name: "Quiet out there." })).toBeInTheDocument();
-    expect(screen.getByText("No forecasts yet")).toBeInTheDocument();
+    expect(screen.getByText("Forecasts didn't load. Refresh to try again.")).toBeInTheDocument();
+    expect(screen.queryByText("No forecasts yet")).toBeNull();
   });
 
   it("renders the preview briefing without fabricated forecasts when there is no session", async () => {

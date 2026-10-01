@@ -107,3 +107,20 @@ describe("ScorecardClient", () => {
     expect(screen.getByText(/not enough to tell skill from luck/)).toBeInTheDocument();
   });
 });
+
+describe("empty forecast and scorecard views offer a next step", () => {
+  it("sends an empty workspace to add a competitor", () => {
+    render(<ForecastClient predictions={[]} calibration={EMPTY} competitors={[]} />);
+    expect(screen.getByRole("link", { name: "Add a competitor" })).toHaveAttribute("href", "/board");
+  });
+
+  it("points a watching workspace at the evidence Signal is collecting", () => {
+    render(<ForecastClient predictions={[]} calibration={EMPTY} competitors={competitors} />);
+    expect(screen.getByRole("link", { name: "See the evidence so far" })).toHaveAttribute("href", "/intel");
+  });
+
+  it("gives the empty scorecard a way to the open forecasts", () => {
+    render(<ScorecardClient calibration={EMPTY} nextResolution={null} openCount={0} />);
+    expect(screen.getByRole("link", { name: "See open forecasts" })).toHaveAttribute("href", "/forecast");
+  });
+});

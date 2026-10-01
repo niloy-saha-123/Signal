@@ -97,4 +97,15 @@ describe("CompetitorBoard", () => {
     expect(screen.getByLabelText("Competitor website")).toBeInTheDocument();
     expect(screen.queryByLabelText("Sort competitors")).toBeNull();
   });
+
+  it("says forecasts didn't load instead of claiming there are none", () => {
+    render(<CompetitorBoard rows={rows} forecastsUnavailable />);
+    expect(within(rowLink("Bolt")).getByText("Forecasts didn't load.")).toBeInTheDocument();
+    expect(screen.queryByText(/No open forecast/)).toBeNull();
+  });
+
+  it("offers the add input inline in the empty state, as the next action", () => {
+    render(<CompetitorBoard rows={[]} />);
+    expect(screen.getByRole("button", { name: /Watch/ })).toBeInTheDocument();
+  });
 });

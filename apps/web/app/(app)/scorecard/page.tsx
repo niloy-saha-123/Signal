@@ -24,8 +24,8 @@ export default async function ScorecardPage() {
   }
 
   const [calibration, open] = await Promise.all([
-    getCalibration({}, token).catch(() => EMPTY_CALIBRATION),
-    listPredictions({ status: "open", limit: 200 }, token).catch(() => []),
+    getCalibration({}, token),
+    listPredictions({ status: "open", limit: 200 }, token),
   ]);
 
   const soonest = open

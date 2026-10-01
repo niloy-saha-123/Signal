@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ForecastAreaTabs, ForecastCard } from "@/components/forecast/parts";
-import { EmptyState, Metric, PageHeader, Select, Tabs } from "@/components/ui/primitives";
+import { EmptyState, LinkButton, Metric, PageHeader, Select, Tabs } from "@/components/ui/primitives";
 import type { Calibration, PredictionRow } from "@/lib/api";
 import { formatDate, patternLabel } from "@/lib/format";
 
@@ -48,6 +48,16 @@ export function ForecastClient({
   );
 
   const scored = calibration.resolved_count > 0 && calibration.brier !== null;
+  const nextStep =
+    competitors.length === 0 ? (
+      <LinkButton href="/board" variant="primary" size="sm">
+        Add a competitor
+      </LinkButton>
+    ) : (
+      <LinkButton href="/intel" size="sm">
+        See the evidence so far
+      </LinkButton>
+    );
   const filtered = competitorId !== "all" || pattern !== "all";
 
   return (
@@ -126,6 +136,7 @@ export function ForecastClient({
           <EmptyState
             title="No open forecasts"
             note="Signal only forecasts once several independent signals agree. Below that bar it stays quiet rather than guessing, which is most days for most competitors."
+            action={nextStep}
           />
         ) : (
           <EmptyState
@@ -135,6 +146,7 @@ export function ForecastClient({
                 ? `The first open forecast settles ${formatDate(open[0].resolves_at)}. Hits, misses and unresolved windows all show up here.`
                 : "Forecasts settle on their date against the evidence collected. Hits, misses and unresolved windows all show up here."
             }
+            action={open[0] ? undefined : nextStep}
           />
         )
       ) : (
