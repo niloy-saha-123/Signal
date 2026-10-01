@@ -326,6 +326,33 @@ export function TextInput({
   );
 }
 
+// A native select, styled. Native keeps keyboard, mobile and screen-reader
+// behaviour for free.
+export function Select({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label>
+      <span className="sr-only">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 rounded-[10px] border border-line-strong bg-surface px-3 text-[14px] font-semibold text-ink focus:border-ink focus:outline-none"
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
 /* --- Labels ------------------------------------------------------------- */
 
 type BadgeTone = "neutral" | "accent" | "hit" | "miss" | "unresolved" | "open" | "sun";
