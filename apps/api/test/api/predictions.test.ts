@@ -404,4 +404,21 @@ describe("roadmap links", () => {
     expect(countRoadmapLinksByPrediction).toHaveBeenCalledWith([PREDICTION_UUID, other], WS_UUID);
     expect(res.body.data.map((r: any) => r.roadmap_link_count)).toEqual([3, 0]);
   });
+
+  it("GET / still lists forecasts when the count query fails", async () => {
+    const { app } = linkApp({
+      listPredictionsForWorkspace: vi.fn().mockResolvedValue([prediction()]),
+      countRoadmapLinksByPrediction: vi.fn().mockRejectedValue(new Error("db down")),
+    });
+    const res = await call(app, "/api/predictions");
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].roadmap_link_count).toBe(0);
+  });
+
+  it("GET /:id still returns the forecast when the links query fails", async () => {
+    const { app } = linkApp({ listRoadmapLinks: vi.fn().mockRejectedValue(new Error("db down")) });
+    const res = await call(app, `/api/predictions/${PREDICTION_UUID}`);
+    expect(res.status).toBe(200);
+    expect(res.body.roadmap_links).toEqual([]);
+  });
 });

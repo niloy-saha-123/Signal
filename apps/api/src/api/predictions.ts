@@ -27,6 +27,7 @@ import {
   MAX_ROADMAP_LINKS_PER_PREDICTION,
 } from "@signal/shared";
 import * as queries from "../db/queries";
+import { logger } from "../lib/logger";
 import { wrap, fallbackErrorHandler } from "./http";
 
 export interface PredictionRouterDeps {
@@ -109,10 +110,18 @@ export function createPredictionRouter(
         limit: parsed.data.limit,
       });
 
-      const counts = await deps.countRoadmapLinksByPrediction(
-        data.map((p) => p.id),
-        req.workspaceId!
-      );
+      const counts = await deps
+        .countRoadmapLinksByPrediction(
+          data.map((p) => p.id),
+          req.workspaceId!
+        )
+        .catch((error) => {
+          logger.warn("predictions list: roadmap link counts failed", {
+            workspace_id: req.workspaceId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return new Map<string, number>();
+        });
       res.status(200).json({
         data: data.map((p) => ({ ...p, roadmap_link_count: counts.get(p.id) ?? 0 })),
       });
@@ -160,7 +169,13 @@ export function createPredictionRouter(
         prediction.evidence_signal_ids.length > 0
           ? deps.getSignalsByIds(prediction.evidence_signal_ids)
           : [],
-        deps.listRoadmapLinks(prediction.id, req.workspaceId!),
+        deps.listRoadmapLinks(prediction.id, req.workspaceId!).catch((error) => {
+          logger.warn("prediction detail: roadmap links failed", {
+            workspace_id: req.workspaceId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [];
+        }),
       ]);
 
       res.status(200).json({ ...prediction, evidence, roadmap_links });
@@ -207,9 +222,11 @@ export function createPredictionRouter(
         return;
       }
       const link = await deps.createRoadmapLink({
+        title: body.data.title,
+        url: body.data.url,
+        stance: body.data.stance,
         workspace_id: req.workspaceId!,
         prediction_id: prediction.id,
-        ...body.data,
         created_by: req.user?.id ?? null,
       });
       res.status(201).json(link);

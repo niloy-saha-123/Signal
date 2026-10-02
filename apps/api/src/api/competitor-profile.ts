@@ -218,12 +218,17 @@ async function settle<T>(
   promise: Promise<T>,
   fallback: T,
   label: string,
-  competitorId: string
+  competitorId: string,
+  workspaceId: string
 ): Promise<T> {
   try {
     return await promise;
   } catch (error) {
-    logger.warn(`competitor profile: ${label} failed`, { competitor_id: competitorId, error });
+    logger.warn(`competitor profile: ${label} failed`, {
+      competitor_id: competitorId,
+      workspace_id: workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return fallback;
   }
 }
@@ -238,9 +243,9 @@ export async function loadCompetitorProfile(
   if (!competitor) return null;
 
   const [scores, volume, jobs, forecasts, signals] = await Promise.all([
-    settle(deps.getLatestSignalScores(competitorId, 90), [], "scores", competitorId),
-    settle(deps.getSignalVolumeByDay(competitorId, 30), [], "volume", competitorId),
-    settle(deps.getJobSignalsForHiringDelta(competitorId, 30), [], "hiring", competitorId),
+    settle(deps.getLatestSignalScores(competitorId, 90), [], "scores", competitorId, workspaceId),
+    settle(deps.getSignalVolumeByDay(competitorId, 30), [], "volume", competitorId, workspaceId),
+    settle(deps.getJobSignalsForHiringDelta(competitorId, 30), [], "hiring", competitorId, workspaceId),
     settle(
       deps.listPredictionsForWorkspace({
         workspace_id: workspaceId,
@@ -250,7 +255,8 @@ export async function loadCompetitorProfile(
       }),
       [],
       "forecasts",
-      competitorId
+      competitorId,
+      workspaceId
     ),
     settle(
       deps.listSignalFeed({
@@ -261,7 +267,8 @@ export async function loadCompetitorProfile(
       }),
       [],
       "signals",
-      competitorId
+      competitorId,
+      workspaceId
     ),
   ]);
 
