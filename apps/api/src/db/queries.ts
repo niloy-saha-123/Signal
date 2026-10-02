@@ -7,6 +7,7 @@ import type {
   PredictionPatternType,
   PredictionStatus,
   ResolutionCriteria,
+  RoadmapStance,
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
@@ -30,6 +31,7 @@ import {
   signalClustersTable,
   competitorSignalScoresTable,
   predictionsTable,
+  predictionRoadmapLinksTable,
   slackInstallationsTable,
   circuitEventsTable,
   websiteSnapshotsTable,
@@ -2533,4 +2535,91 @@ export async function deleteCompanyGoal(goalId: string, workspaceId: string): Pr
         eq(companyGoalsTable.workspace_id, workspaceId)
       )
     );
+}
+
+export type RoadmapLink = typeof predictionRoadmapLinksTable.$inferSelect;
+
+const roadmapLinkScope = (linkId: string, predictionId: string, workspaceId: string) =>
+  and(
+    eq(predictionRoadmapLinksTable.id, linkId),
+    eq(predictionRoadmapLinksTable.prediction_id, predictionId),
+    eq(predictionRoadmapLinksTable.workspace_id, workspaceId)
+  );
+
+export async function listRoadmapLinks(predictionId: string, workspaceId: string): Promise<RoadmapLink[]> {
+  return db
+    .select()
+    .from(predictionRoadmapLinksTable)
+    .where(
+      and(
+        eq(predictionRoadmapLinksTable.prediction_id, predictionId),
+        eq(predictionRoadmapLinksTable.workspace_id, workspaceId)
+      )
+    )
+    .orderBy(asc(predictionRoadmapLinksTable.created_at));
+}
+
+export async function countRoadmapLinks(predictionId: string, workspaceId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(predictionRoadmapLinksTable)
+    .where(
+      and(
+        eq(predictionRoadmapLinksTable.prediction_id, predictionId),
+        eq(predictionRoadmapLinksTable.workspace_id, workspaceId)
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
+export async function countRoadmapLinksByPrediction(
+  predictionIds: string[],
+  workspaceId: string
+): Promise<Map<string, number>> {
+  if (predictionIds.length === 0) return new Map();
+  const rows = await db
+    .select({ prediction_id: predictionRoadmapLinksTable.prediction_id, n: count() })
+    .from(predictionRoadmapLinksTable)
+    .where(
+      and(
+        inArray(predictionRoadmapLinksTable.prediction_id, predictionIds),
+        eq(predictionRoadmapLinksTable.workspace_id, workspaceId)
+      )
+    )
+    .groupBy(predictionRoadmapLinksTable.prediction_id);
+  return new Map(rows.map((r) => [r.prediction_id, Number(r.n)]));
+}
+
+export async function createRoadmapLink(input: {
+  workspace_id: string;
+  prediction_id: string;
+  title: string;
+  url: string;
+  stance: RoadmapStance;
+  created_by: string | null;
+}): Promise<RoadmapLink> {
+  const [row] = await db.insert(predictionRoadmapLinksTable).values(input).returning();
+  return row;
+}
+
+export async function updateRoadmapLink(
+  linkId: string,
+  predictionId: string,
+  workspaceId: string,
+  patch: { title?: string; stance?: RoadmapStance }
+): Promise<RoadmapLink | null> {
+  const [row] = await db
+    .update(predictionRoadmapLinksTable)
+    .set(patch)
+    .where(roadmapLinkScope(linkId, predictionId, workspaceId))
+    .returning();
+  return row ?? null;
+}
+
+export async function deleteRoadmapLink(linkId: string, predictionId: string, workspaceId: string): Promise<boolean> {
+  const rows = await db
+    .delete(predictionRoadmapLinksTable)
+    .where(roadmapLinkScope(linkId, predictionId, workspaceId))
+    .returning({ id: predictionRoadmapLinksTable.id });
+  return rows.length > 0;
 }
