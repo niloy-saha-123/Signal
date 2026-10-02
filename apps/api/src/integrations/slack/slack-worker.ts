@@ -111,6 +111,7 @@ export async function slackQuestionProcessor(job: Job<SlackQuestion>): Promise<v
       workspace_id: question.workspace_id,
       competitor_ids: competitorIds,
       run_id: run.id,
+      read_only: true,
     });
 
     await completeAgentRun(run.id, "completed");

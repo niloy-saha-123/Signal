@@ -15,18 +15,21 @@ const dbIt = (name: string, fn: () => Promise<void>, timeout = DB_TIMEOUT) =>
 const {
   streamMock,
   invokeMock,
+  bindToolsMock,
   chatAnthropicMock,
 } = vi.hoisted(() => {
   const streamMock = vi.fn();
   const invokeMock = vi.fn();
+  const bindToolsMock = vi.fn();
   class ChatAnthropicMockClass {
     stream = streamMock;
     invoke = invokeMock;
-    bindTools() {
+    bindTools(tools: unknown[]) {
+      bindToolsMock(tools);
       return { stream: streamMock, invoke: invokeMock };
     }
   }
-  return { streamMock, invokeMock, chatAnthropicMock: vi.fn(ChatAnthropicMockClass) };
+  return { streamMock, invokeMock, bindToolsMock, chatAnthropicMock: vi.fn(ChatAnthropicMockClass) };
 });
 
 const { interruptMock } = vi.hoisted(() => ({ interruptMock: vi.fn() }));
@@ -109,7 +112,7 @@ function streamOf(...chunks: AIMessageChunk[]) {
   };
 }
 
-function invoke() {
+function invoke(readOnly = false) {
   return getChatGraph().invoke(
     {
       messages: [new HumanMessage("add a competitor")],
@@ -117,6 +120,7 @@ function invoke() {
       competitor_ids: [COMPETITOR_1],
       run_id: RUN_ID,
       summary: "",
+      read_only: readOnly,
     },
     { configurable: { thread_id: randomUUID() }, recursionLimit: CHAT_RECURSION_LIMIT }
   );
@@ -178,5 +182,43 @@ describe("agents/chat/chat-graph — HITL mutation gate", () => {
 
     expect(interruptMock).not.toHaveBeenCalled();
     expect(listCompetitorsInvokeMock).toHaveBeenCalledWith({});
+  });
+
+  dbIt("read-only binds no mutating tools", async () => {
+    streamMock.mockImplementationOnce(streamOf(answerChunk("You track Acme.")));
+
+    await invoke(true);
+
+    const bound = bindToolsMock.mock.calls[0][0] as unknown[];
+    expect(bound).toHaveLength(2); // retrieve_signals + list_competitors
+    expect(bound.some((t) => (t as { invoke?: unknown }).invoke === createCompetitorInvokeMock)).toBe(false);
+  });
+
+  dbIt("read-only never interrupts and answers every call in a batch with a mutating one", async () => {
+    streamMock
+      .mockImplementationOnce(
+        streamOf(
+          new AIMessageChunk({
+            content: "",
+            tool_call_chunks: [
+              { name: "create_competitor", args: JSON.stringify({ name: "Acme" }), id: "call-1", index: 0 },
+              { name: "list_competitors", args: "{}", id: "call-2", index: 1 },
+            ],
+            usage_metadata: { input_tokens: 20, output_tokens: 5, total_tokens: 25 },
+          })
+        )
+      )
+      .mockImplementationOnce(streamOf(answerChunk("I can only read here.")));
+
+    const result = await invoke(true);
+
+    expect(interruptMock).not.toHaveBeenCalled();
+    expect(createCompetitorInvokeMock).not.toHaveBeenCalled();
+    expect(listCompetitorsInvokeMock).not.toHaveBeenCalled();
+    const secondCall = streamMock.mock.calls[1][0] as Array<{ content: string; tool_call_id?: string }>;
+    const toolMessages = secondCall.slice(3).filter((m) => m.tool_call_id);
+    expect(toolMessages.map((m) => m.tool_call_id)).toEqual(["call-1", "call-2"]);
+    expect(toolMessages[0].content).toContain("read-only");
+    expect(result.citation_result).toBeDefined();
   });
 });

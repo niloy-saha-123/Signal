@@ -69,6 +69,7 @@ export async function runChatAgent(
         workspace_id: parsed.workspace_id,
         competitor_ids: parsed.competitor_ids,
         run_id: parsed.run_id,
+        read_only: parsed.read_only,
         summary: "",
       },
       {
