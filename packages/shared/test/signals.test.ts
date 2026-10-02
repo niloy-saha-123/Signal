@@ -4,6 +4,10 @@ import {
   SignalClusterSchema,
   SignalScoreSchema,
   CompetitorDiscoveryResultSchema,
+  CompetitorCreateInputSchema,
+  CompetitorSourceConfigSchema,
+  FieldIntelInputSchema,
+  SignalSourceSchema,
 } from "../src/signals";
 
 describe("SignalSchema", () => {
@@ -232,7 +236,6 @@ describe("CompetitorDiscoveryResultSchema", () => {
   });
 });
 
-import { CompetitorCreateInputSchema } from "../src/signals";
 
 describe("CompetitorCreateInputSchema URL fields", () => {
   const base = { name: "Kestrel", domain: "kestrel.dev" };
@@ -254,5 +257,50 @@ describe("CompetitorCreateInputSchema URL fields", () => {
       discourse_url: "https://forum.kestrel.dev",
     });
     expect(parsed.success).toBe(true);
+  });
+});
+
+describe("v5 sources", () => {
+  it.each(["news", "docs", "packages", "field"])("accepts source %s", (source) => {
+    expect(SignalSourceSchema.safeParse(source).success).toBe(true);
+  });
+
+  it("accepts scoped npm names and PyPI names on create", () => {
+    const result = CompetitorCreateInputSchema.safeParse({
+      name: "Kestrel",
+      domain: "kestrel.dev",
+      news_query: '"Kestrel" devtools',
+      docs_sitemap_url: "https://docs.kestrel.dev/sitemap.xml",
+      npm_packages: ["@kestrel/sdk", "kestrel-cli"],
+      pypi_packages: ["kestrel", "kestrel_sdk"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["npm_packages", ["Kestrel SDK"]],
+    ["npm_packages", ["../etc"]],
+    ["pypi_packages", ["-kestrel"]],
+    ["docs_sitemap_url", "ftp://kestrel.dev/sitemap.xml"],
+    ["npm_packages", Array.from({ length: 11 }, (_, i) => `pkg${i}`)],
+  ])("rejects bad %s", (field, value) => {
+    expect(CompetitorSourceConfigSchema.safeParse({ [field]: value }).success).toBe(false);
+  });
+
+  it("allows clearing with null / [] but not an empty patch or unknown keys", () => {
+    expect(
+      CompetitorSourceConfigSchema.safeParse({ news_query: null, npm_packages: [] }).success
+    ).toBe(true);
+    expect(CompetitorSourceConfigSchema.safeParse({}).success).toBe(false);
+    expect(CompetitorSourceConfigSchema.safeParse({ name: "x" }).success).toBe(false);
+  });
+
+  it("validates field intel", () => {
+    expect(FieldIntelInputSchema.safeParse({ note: "  Lost a deal to them  " }).success).toBe(true);
+    expect(FieldIntelInputSchema.safeParse({ note: " " }).success).toBe(false);
+    expect(FieldIntelInputSchema.safeParse({ note: "x".repeat(4_001) }).success).toBe(false);
+    expect(
+      FieldIntelInputSchema.safeParse({ note: "see", url: "javascript:alert(1)" }).success
+    ).toBe(false);
   });
 });

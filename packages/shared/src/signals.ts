@@ -41,6 +41,22 @@ const webUrl = z
   .max(2_048)
   .refine((value) => /^https?:\/\//i.test(value), "must be an http(s) URL");
 
+const NPM_PACKAGE_NAME = /^(@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+const PYPI_PROJECT_NAME = /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
+// Config for the v5 sources. Package names end up in registry URLs, so they are
+// held to each registry's own naming rules rather than "any string".
+const sourceConfigFields = {
+  news_query: z.string().trim().min(1).max(200),
+  docs_sitemap_url: webUrl,
+  npm_packages: z
+    .array(z.string().max(214).regex(NPM_PACKAGE_NAME, "must be an npm package name"))
+    .max(10),
+  pypi_packages: z
+    .array(z.string().max(100).regex(PYPI_PROJECT_NAME, "must be a PyPI project name"))
+    .max(10),
+};
+
 export const CompetitorCreateInputSchema = z.object({
   name: z.string().trim().min(1).max(200),
   domain: z.string().trim().min(1).max(253),
@@ -59,8 +75,33 @@ export const CompetitorCreateInputSchema = z.object({
   website_urls: z.array(webUrl).max(10).optional(),
   discourse_url: webUrl.optional(),
   postings_rss: webUrl.optional(),
+  news_query: sourceConfigFields.news_query.optional(),
+  docs_sitemap_url: sourceConfigFields.docs_sitemap_url.optional(),
+  npm_packages: sourceConfigFields.npm_packages.optional(),
+  pypi_packages: sourceConfigFields.pypi_packages.optional(),
 });
 export type CompetitorCreateInput = z.infer<typeof CompetitorCreateInputSchema>;
+
+// PATCH /api/competitors/:id body — only the v5 source config. null / [] clears.
+export const CompetitorSourceConfigSchema = z
+  .object({
+    news_query: sourceConfigFields.news_query.nullable().optional(),
+    docs_sitemap_url: sourceConfigFields.docs_sitemap_url.nullable().optional(),
+    npm_packages: sourceConfigFields.npm_packages.optional(),
+    pypi_packages: sourceConfigFields.pypi_packages.optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "at least one field is required");
+export type CompetitorSourceConfig = z.infer<typeof CompetitorSourceConfigSchema>;
+
+// POST /api/competitors/:id/field-intel body.
+export const FieldIntelInputSchema = z
+  .object({
+    note: z.string().trim().min(1).max(4_000),
+    url: webUrl.optional(),
+  })
+  .strict();
+export type FieldIntelInput = z.infer<typeof FieldIntelInputSchema>;
 
 // Mirrors competitors.discovery_status's CHECK constraint in db/schema.ts.
 export const DiscoveryStatusSchema = z.enum(["pending", "in_progress", "complete", "failed"]);
@@ -126,6 +167,14 @@ export const SignalSourceSchema = z.enum([
   // Public company postings — newsroom, press and announcement feeds that are
   // not the engineering changelog.
   "postings",
+  // Press coverage from Google News — edited third-party reporting.
+  "news",
+  // Pages newly added to the competitor's docs sitemap.
+  "docs",
+  // New npm / PyPI releases of the competitor's own packages.
+  "packages",
+  // Links and notes submitted by the user's own teammates.
+  "field",
 ]);
 export type SignalSource = z.infer<typeof SignalSourceSchema>;
 

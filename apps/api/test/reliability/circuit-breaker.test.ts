@@ -14,6 +14,7 @@ import {
   recordFailure,
   recordSuccess,
   isCircuitOpen,
+  isCircuitMarkedOpen,
   withCircuitBreaker,
 } from "@/reliability/circuit-breaker";
 
@@ -63,6 +64,18 @@ describe("circuit breaker", () => {
 
     (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue("closed");
     expect(await isCircuitOpen("reddit")).toBe(false);
+  });
+
+  it("isCircuitMarkedOpen peeks the state key without claiming a half-open trial", async () => {
+    (cacheRedis.get as ReturnType<typeof vi.fn>).mockImplementation((key: string) => {
+      if (key === "circuit:reddit:failures") return Promise.resolve("5");
+      return Promise.resolve(null);
+    });
+    expect(await isCircuitMarkedOpen("reddit")).toBe(false);
+    expect(cacheRedis.set).not.toHaveBeenCalled();
+
+    (cacheRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue("open");
+    expect(await isCircuitMarkedOpen("reddit")).toBe(true);
   });
 
   describe("half-open trial claim (stale open-state expiry)", () => {

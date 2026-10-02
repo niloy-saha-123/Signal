@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -67,7 +68,7 @@ vi.mock("rss-parser", () => ({
   },
 }));
 
-import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, isCircuitMarkedOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import { changelogCollectorProcessor, initChangelogWorker, postingsCollectorProcessor } from "@/collectors/changelog";
 
 const activeCompetitor = {
@@ -345,7 +346,7 @@ describe("collectors/changelog", () => {
       expect.objectContaining({ source_url: "https://acme.example.com/posts/3" })
     );
     expect(recordFailure).toHaveBeenCalledWith("changelog", expect.any(String));
-    expect(recordSuccess).not.toHaveBeenCalled();
+    expect(recordSuccess).toHaveBeenCalledWith("changelog");
   }, 10000);
 
   it("configures the RSS parser with a 30s timeout", () => {
@@ -395,8 +396,7 @@ describe("collectors/changelog", () => {
       changelog_rss: "https://later.example.com/changelog.rss",
     };
     listCompetitorsMock.mockResolvedValue([activeCompetitor, secondCompetitor]);
-    (isCircuitOpen as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(false) // initial job-level check
+    (isCircuitMarkedOpen as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(false) // before competitor 1
       .mockResolvedValueOnce(true); // before competitor 2 — breaks
 

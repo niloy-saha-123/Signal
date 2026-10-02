@@ -1,5 +1,5 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, gte, lte, count, sql, type SQL } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, gte, lte, count, sql, isNull, type SQL } from "drizzle-orm";
 import { computeCalibration, type Calibration } from "../lib/calibration";
 import { z } from "zod";
 import type {
@@ -10,6 +10,7 @@ import type {
   SignalSource,
   CompetitorDiscoveryResult,
   CompetitorCreateInput,
+  CompetitorSourceConfig,
   RagEvalResult,
   RagEvalRunSummary,
   RagEvalCategory,
@@ -2019,10 +2020,39 @@ export async function createCompetitorForWorkspace(
       ...(input.website_urls === undefined ? {} : { website_urls: input.website_urls }),
       ...(input.discourse_url === undefined ? {} : { discourse_url: input.discourse_url }),
       ...(input.postings_rss === undefined ? {} : { postings_rss: input.postings_rss }),
+      ...(input.news_query === undefined ? {} : { news_query: input.news_query }),
+      ...(input.docs_sitemap_url === undefined ? {} : { docs_sitemap_url: input.docs_sitemap_url }),
+      ...(input.npm_packages === undefined ? {} : { npm_packages: input.npm_packages }),
+      ...(input.pypi_packages === undefined ? {} : { pypi_packages: input.pypi_packages }),
       discovery_status: "pending",
     })
     .returning();
   return row;
+}
+
+// Patch keys are exactly column names (CompetitorSourceConfigSchema is strict),
+// and drizzle skips undefined keys, so the patch spreads straight in.
+export async function updateCompetitorSourceConfigForWorkspace(
+  id: string,
+  workspaceId: string,
+  patch: CompetitorSourceConfig
+): Promise<Competitor | undefined> {
+  const [row] = await db
+    .update(competitorsTable)
+    .set({ ...patch, updated_at: new Date() })
+    .where(and(eq(competitorsTable.id, id), eq(competitorsTable.workspace_id, workspaceId)))
+    .returning();
+  return row;
+}
+
+// Docs collector write-back after a successful probe. Collector-side, so not
+// workspace-scoped — the id came from listCompetitors().
+export async function setCompetitorDocsSitemapUrl(id: string, url: string): Promise<void> {
+  await db
+    .update(competitorsTable)
+    .set({ docs_sitemap_url: url, updated_at: new Date() })
+    // Don't overwrite a URL a user PATCHed in while this probe ran.
+    .where(and(eq(competitorsTable.id, id), isNull(competitorsTable.docs_sitemap_url)));
 }
 
 // R1: the synthetic own-company row derives `name` from workspaces.name

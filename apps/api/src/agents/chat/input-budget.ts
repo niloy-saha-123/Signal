@@ -7,9 +7,21 @@ export const IMAGE_WINDOW_SECONDS = 60;
 export const MAX_FETCH_URL_PER_TURN = 3;
 export const MAX_IMAGES_PER_TURN = 4;
 export const MAX_DOCS_PER_TURN = 4;
+export const FIELD_INTEL_WORKSPACE_LIMIT = 30;
+export const FIELD_INTEL_WINDOW_SECONDS = 3_600;
+
+type BudgetKind = "fetch_url" | "read_image" | "field_intel";
+
+// field_intel lives here, not in a new limiter, because it is the same
+// fail-closed per-workspace counter; each submission also starts the LLM pipeline.
+const BUDGETS: Record<BudgetKind, { limit: number; window: number }> = {
+  fetch_url: { limit: FETCH_URL_WORKSPACE_LIMIT, window: FETCH_URL_WINDOW_SECONDS },
+  read_image: { limit: IMAGE_WORKSPACE_LIMIT, window: IMAGE_WINDOW_SECONDS },
+  field_intel: { limit: FIELD_INTEL_WORKSPACE_LIMIT, window: FIELD_INTEL_WINDOW_SECONDS },
+};
 
 export class BudgetExceededError extends Error {
-  constructor(readonly kind: "fetch_url" | "read_image") {
+  constructor(readonly kind: BudgetKind) {
     super(`${kind} workspace rate limit exceeded`);
     this.name = "BudgetExceededError";
   }
@@ -47,12 +59,8 @@ export function setChatInputBudgetStore(store: CounterStore | undefined): void {
   storeOverride = store;
 }
 
-export async function consumeChatInputBudget(
-  kind: "fetch_url" | "read_image",
-  workspaceId: string
-): Promise<void> {
-  const limit = kind === "fetch_url" ? FETCH_URL_WORKSPACE_LIMIT : IMAGE_WORKSPACE_LIMIT;
-  const window = kind === "fetch_url" ? FETCH_URL_WINDOW_SECONDS : IMAGE_WINDOW_SECONDS;
+export async function consumeChatInputBudget(kind: BudgetKind, workspaceId: string): Promise<void> {
+  const { limit, window } = BUDGETS[kind];
   const store = storeOverride ?? redisCounterStore();
   let n: number;
   try {

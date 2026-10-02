@@ -18,13 +18,25 @@
 //   (ordered by discovered_at) — one row per field CompetitorDiscoveryAgent
 //   attempted, with what it tried and what it found (or didn't). Polled by
 //   DiscoveryStatus.tsx every 3s while discovery_status is pending/in_progress.
+//
+// PATCH /competitors/:id — news_query / docs_sitemap_url / npm_packages / pypi_packages only.
+//
+// POST /competitors/:id/field-intel — teammate link/note → a 'field' signal.
 import express, { Router } from "express";
 import { z } from "zod";
-import { CompetitorCreateInputSchema, SignalScoreComponentsSchema } from "@signal/shared";
+import {
+  CompetitorCreateInputSchema,
+  CompetitorSourceConfigSchema,
+  FieldIntelInputSchema,
+  SignalScoreComponentsSchema,
+} from "@signal/shared";
 import * as queries from "../db/queries";
 import { isPublicHostname } from "../lib/safe-fetch";
 import { queues, type QueueName } from "../queues/registry";
 import { logger } from "../lib/logger";
+import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
+import { fetchPublicPageText } from "../agents/chat/fetch-url";
+import { consumeChatInputBudget } from "../agents/chat/input-budget";
 import { wrap, fallbackErrorHandler, requireUuidParam } from "./http";
 
 // getLatestSignalScores takes a row-count limit, not a day range — one row per day in
@@ -129,6 +141,7 @@ function computeHiringDeltas(
 export interface CompetitorRouterDeps {
   createCompetitorForWorkspace: typeof queries.createCompetitorForWorkspace;
   getCompetitorByIdForWorkspace: typeof queries.getCompetitorByIdForWorkspace;
+  updateCompetitorSourceConfigForWorkspace: typeof queries.updateCompetitorSourceConfigForWorkspace;
   listCompetitorsForWorkspace: typeof queries.listCompetitorsForWorkspace;
   getCompetitorDiscoveryLog: typeof queries.getCompetitorDiscoveryLog;
   getLatestSignalScores: typeof queries.getLatestSignalScores;
@@ -139,11 +152,17 @@ export interface CompetitorRouterDeps {
   failRunIfRunning: typeof queries.failRunIfRunning;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
   isPublicHostname: typeof isPublicHostname;
+  signalExistsBySourceUrl: typeof queries.signalExistsBySourceUrl;
+  createSignal: typeof queries.createSignal;
+  enqueueInitialSignalPipeline: typeof enqueueInitialSignalPipeline;
+  fetchPublicPageText: typeof fetchPublicPageText;
+  consumeBudget: typeof consumeChatInputBudget;
 }
 
 export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   createCompetitorForWorkspace: queries.createCompetitorForWorkspace,
   getCompetitorByIdForWorkspace: queries.getCompetitorByIdForWorkspace,
+  updateCompetitorSourceConfigForWorkspace: queries.updateCompetitorSourceConfigForWorkspace,
   listCompetitorsForWorkspace: queries.listCompetitorsForWorkspace,
   getCompetitorDiscoveryLog: queries.getCompetitorDiscoveryLog,
   getLatestSignalScores: queries.getLatestSignalScores,
@@ -154,7 +173,20 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   failRunIfRunning: queries.failRunIfRunning,
   enqueue: (queue, data) => queues[queue].add(queue, data),
   isPublicHostname,
+  signalExistsBySourceUrl: queries.signalExistsBySourceUrl,
+  createSignal: queries.createSignal,
+  enqueueInitialSignalPipeline,
+  fetchPublicPageText,
+  consumeBudget: consumeChatInputBudget,
 };
+
+const FIELD_PAGE_MAX_CHARS = 12_000;
+
+function fieldIntelText(note: string, url: string | undefined, pageText: string | null): string {
+  const parts = [`Teammate note: ${note}`];
+  if (url && pageText) parts.push(`Linked page (${url}):\n${pageText.slice(0, FIELD_PAGE_MAX_CHARS)}`);
+  return parts.join("\n\n");
+}
 
 const CreateBodySchema = CompetitorCreateInputSchema.strict();
 
@@ -205,14 +237,15 @@ export function createCompetitorRouter(
         return;
       }
 
-      const [pricingOk, rssOk] = await Promise.all([
+      const [pricingOk, rssOk, sitemapOk] = await Promise.all([
         overrideUrlIsPublic(parsed.data.pricing_url, deps.isPublicHostname),
         overrideUrlIsPublic(parsed.data.rss_url, deps.isPublicHostname),
+        overrideUrlIsPublic(parsed.data.docs_sitemap_url, deps.isPublicHostname),
       ]);
-      if (!pricingOk || !rssOk) {
+      if (!pricingOk || !rssOk || !sitemapOk) {
         res.status(400).json({
           error: "validation",
-          message: "pricing_url/rss_url must be a public URL",
+          message: "pricing_url/rss_url/docs_sitemap_url must be a public URL",
         });
         return;
       }
@@ -267,6 +300,31 @@ export function createCompetitorRouter(
       const id = requireUuidParam(req, res);
       if (id === null) return;
       const row = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
+      if (!row) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      res.status(200).json(row);
+    })
+  );
+
+  router.patch(
+    "/:id",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (id === null) return;
+      const parsed = CompetitorSourceConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      // The docs collector fetches this URL on a schedule — same SSRF gate as
+      // the create-time overrides.
+      if (!(await overrideUrlIsPublic(parsed.data.docs_sitemap_url ?? undefined, deps.isPublicHostname))) {
+        res.status(400).json({ error: "validation", message: "docs_sitemap_url must be a public URL" });
+        return;
+      }
+      const row = await deps.updateCompetitorSourceConfigForWorkspace(id, req.workspaceId!, parsed.data);
       if (!row) {
         res.status(404).json({ error: "not_found" });
         return;
@@ -492,6 +550,69 @@ export function createCompetitorRouter(
       }
 
       res.status(202).json({ run_id: run.id, status: "running" });
+    })
+  );
+
+  router.post(
+    "/:id/field-intel",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (id === null) return;
+      const parsed = FieldIntelInputSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "validation", issues: parsed.error.issues });
+        return;
+      }
+      const competitor = await deps.getCompetitorByIdForWorkspace(id, req.workspaceId!);
+      if (!competitor) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      try {
+        await deps.consumeBudget("field_intel", req.workspaceId!);
+      } catch {
+        res.status(429).json({ error: "rate_limited" });
+        return;
+      }
+
+      const { note, url } = parsed.data;
+      if (url && (await deps.signalExistsBySourceUrl(id, "field", url))) {
+        res.status(409).json({ error: "duplicate_url" });
+        return;
+      }
+
+      // The note is the teammate's evidence; the page is context. A page that
+      // can't be fetched (private host, video, outage) never loses the note.
+      let pageText: string | null = null;
+      if (url) {
+        try {
+          pageText = (await deps.fetchPublicPageText(url, `field:fetch_url:${req.workspaceId}`)) || null;
+        } catch (err) {
+          logger.warn("field intel page fetch failed — saving the note alone", {
+            competitor_id: id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const signal = await deps.createSignal({
+        competitor_id: id,
+        source: "field",
+        source_url: url ?? null,
+        title: note.split("\n")[0].slice(0, 120),
+        raw_text: fieldIntelText(note, url, pageText),
+      });
+      try {
+        await deps.enqueueInitialSignalPipeline(signal.id);
+      } catch (err) {
+        // createSignal wrote the outbox row in the same transaction;
+        // pipeline-recovery re-enqueues it.
+        logger.error("Failed to enqueue field intel pipeline — recovery will retry", {
+          signal_id: signal.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      res.status(201).json({ signal_id: signal.id, fetched: pageText !== null });
     })
   );
 
