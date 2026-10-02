@@ -822,7 +822,22 @@ export type CreateSignalInput = {
   raw_text: string;
 };
 
+// source_url is rendered as a link in the dashboard, so only http(s) is stored.
+function assertHttpSourceUrl(sourceUrl: string | null | undefined): void {
+  if (sourceUrl == null) return;
+  let protocol: string;
+  try {
+    protocol = new URL(sourceUrl).protocol;
+  } catch {
+    throw new Error("source_url must be an absolute http(s) URL");
+  }
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw new Error("source_url must be an absolute http(s) URL");
+  }
+}
+
 export async function createSignal(input: CreateSignalInput): Promise<Signal> {
+  assertHttpSourceUrl(input.source_url);
   return db.transaction(async (tx) => {
     const [row] = await tx.insert(signalsTable).values(input).returning();
     await tx.insert(signalPipelineOutboxTable).values({ signal_id: row.id });

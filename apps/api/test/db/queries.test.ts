@@ -1249,6 +1249,16 @@ describe("db/queries — hn collector support", () => {
       await expect(createSignal(input)).rejects.toThrow("outbox insert failed");
       expect(transactionMock).toHaveBeenCalledTimes(1);
     });
+
+    it.each(["javascript:alert(1)", "ftp://acme.com/x", "data:text/html,hi", "not a url"])(
+      "refuses source_url %s before writing anything",
+      async (sourceUrl) => {
+        await expect(
+          createSignal({ competitor_id: "c1", source: "field", source_url: sourceUrl, raw_text: "x" })
+        ).rejects.toThrow(/source_url/);
+        expect(transactionMock).not.toHaveBeenCalled();
+      }
+    );
   });
 });
 
