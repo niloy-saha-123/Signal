@@ -14,6 +14,7 @@ const OTHER_WS_UUID = "99999999-9999-4999-8999-999999999999";
 const USER_UUID = "33333333-3333-4333-8333-333333333333";
 const COMPETITOR_UUID = "11111111-1111-4111-8111-111111111111";
 const PREDICTION_UUID = "44444444-4444-4444-8444-444444444444";
+const LINK_UUID = "55555555-5555-4555-8555-555555555555";
 
 async function call(
   app: express.Express,
@@ -80,6 +81,12 @@ function makeDeps(overrides: Partial<PredictionRouterDeps> = {}): PredictionRout
     }),
     voidPredictionForWorkspace: vi.fn().mockResolvedValue(false),
     getSignalsByIds: vi.fn().mockResolvedValue([]),
+    listRoadmapLinks: vi.fn().mockResolvedValue([]),
+    countRoadmapLinks: vi.fn().mockResolvedValue(0),
+    countRoadmapLinksByPrediction: vi.fn().mockResolvedValue(new Map()),
+    createRoadmapLink: vi.fn().mockImplementation(async (i) => ({ id: LINK_UUID, ...i })),
+    updateRoadmapLink: vi.fn().mockResolvedValue({ id: LINK_UUID }),
+    deleteRoadmapLink: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
 }
@@ -262,5 +269,139 @@ describe("POST /api/predictions/:id/void", () => {
     const res = await call(app, `/api/predictions/${PREDICTION_UUID}/void`, { method: "POST" });
 
     expect(res.status).toBe(404);
+  });
+});
+
+function jsonInit(method: string, body: unknown): RequestInit {
+  return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
+function linkApp(overrides: Partial<PredictionRouterDeps> = {}) {
+  const deps = makeDeps({
+    getPredictionForWorkspace: vi.fn().mockResolvedValue(prediction()),
+    ...overrides,
+  });
+  return { deps, app: appWithUser({ id: USER_UUID, workspaceId: WS_UUID }, createPredictionRouter(deps)) };
+}
+
+describe("roadmap links", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const base = `/api/predictions/${PREDICTION_UUID}/links`;
+  const good = { title: "Postgres adapter", url: "https://acme.dev/roadmap/pg" };
+
+  it("POST creates a link", async () => {
+    const { deps, app } = linkApp();
+    const res = await call(app, base, jsonInit("POST", good));
+    expect(res.status).toBe(201);
+    expect(deps.createRoadmapLink).toHaveBeenCalledWith({
+      workspace_id: WS_UUID,
+      prediction_id: PREDICTION_UUID,
+      ...good,
+      created_by: USER_UUID,
+      stance: "watching",
+    });
+  });
+
+  it.each(["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x"])(
+    "POST rejects %s",
+    async (url) => {
+      const { deps, app } = linkApp();
+      const res = await call(app, base, jsonInit("POST", { ...good, url }));
+      expect(res.status).toBe(400);
+      expect(deps.createRoadmapLink).not.toHaveBeenCalled();
+    }
+  );
+
+  it("POST rejects an empty title", async () => {
+    const { app } = linkApp();
+    expect((await call(app, base, jsonInit("POST", { ...good, title: "" }))).status).toBe(400);
+  });
+
+  it("POST 404s for a forecast outside the workspace", async () => {
+    const { deps, app } = linkApp({ getPredictionForWorkspace: vi.fn().mockResolvedValue(undefined) });
+    const res = await call(app, base, jsonInit("POST", good));
+    expect(res.status).toBe(404);
+    expect(deps.createRoadmapLink).not.toHaveBeenCalled();
+  });
+
+  it("POST 409s at the link limit", async () => {
+    const { deps, app } = linkApp({ countRoadmapLinks: vi.fn().mockResolvedValue(10) });
+    const res = await call(app, base, jsonInit("POST", good));
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "link_limit" });
+    expect(deps.createRoadmapLink).not.toHaveBeenCalled();
+  });
+
+  it("POST rejects a non-uuid id", async () => {
+    const { app } = linkApp();
+    expect((await call(app, "/api/predictions/nope/links", jsonInit("POST", good))).status).toBe(400);
+  });
+
+  it("PATCH changes the stance", async () => {
+    const { deps, app } = linkApp();
+    const res = await call(app, `${base}/${LINK_UUID}`, jsonInit("PATCH", { stance: "accelerate" }));
+    expect(res.status).toBe(200);
+    expect(deps.updateRoadmapLink).toHaveBeenCalledWith(LINK_UUID, PREDICTION_UUID, WS_UUID, {
+      stance: "accelerate",
+    });
+  });
+
+  it("PATCH rejects an empty body", async () => {
+    const { app } = linkApp();
+    expect((await call(app, `${base}/${LINK_UUID}`, jsonInit("PATCH", {}))).status).toBe(400);
+  });
+
+  it("PATCH 404s when no row matches", async () => {
+    const { app } = linkApp({ updateRoadmapLink: vi.fn().mockResolvedValue(null) });
+    expect(
+      (await call(app, `${base}/${LINK_UUID}`, jsonInit("PATCH", { stance: "accelerate" }))).status
+    ).toBe(404);
+  });
+
+  it("PATCH rejects a url in the body", async () => {
+    const { app } = linkApp();
+    expect(
+      (await call(app, `${base}/${LINK_UUID}`, jsonInit("PATCH", { url: "https://x.dev" }))).status
+    ).toBe(400);
+  });
+
+  it("DELETE answers 204 with no body", async () => {
+    const { app } = linkApp();
+    const res = await call(app, `${base}/${LINK_UUID}`, { method: "DELETE" });
+    expect(res.status).toBe(204);
+    expect(res.body).toBeUndefined();
+  });
+
+  it("DELETE 404s when nothing was deleted", async () => {
+    const { app } = linkApp({ deleteRoadmapLink: vi.fn().mockResolvedValue(false) });
+    expect((await call(app, `${base}/${LINK_UUID}`, { method: "DELETE" })).status).toBe(404);
+  });
+
+  it("DELETE rejects a non-uuid linkId", async () => {
+    const { app } = linkApp();
+    expect((await call(app, `${base}/nope`, { method: "DELETE" })).status).toBe(400);
+  });
+
+  it("GET /:id includes roadmap_links", async () => {
+    const links = [{ id: LINK_UUID, title: "x" }];
+    const { deps, app } = linkApp({ listRoadmapLinks: vi.fn().mockResolvedValue(links) });
+    const res = await call(app, `/api/predictions/${PREDICTION_UUID}`);
+    expect(res.body.roadmap_links).toEqual(links);
+    expect(deps.listRoadmapLinks).toHaveBeenCalledWith(PREDICTION_UUID, WS_UUID);
+  });
+
+  it("GET / adds roadmap_link_count from one batched call", async () => {
+    const other = "66666666-6666-4666-8666-666666666666";
+    const countRoadmapLinksByPrediction = vi.fn().mockResolvedValue(new Map([[PREDICTION_UUID, 3]]));
+    const { app } = linkApp({
+      listPredictionsForWorkspace: vi
+        .fn()
+        .mockResolvedValue([prediction(), prediction({ id: other })]),
+      countRoadmapLinksByPrediction,
+    });
+    const res = await call(app, "/api/predictions");
+    expect(countRoadmapLinksByPrediction).toHaveBeenCalledTimes(1);
+    expect(countRoadmapLinksByPrediction).toHaveBeenCalledWith([PREDICTION_UUID, other], WS_UUID);
+    expect(res.body.data.map((r: any) => r.roadmap_link_count)).toEqual([3, 0]);
   });
 });
