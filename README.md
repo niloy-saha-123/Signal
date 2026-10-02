@@ -8,7 +8,7 @@ Signal watches what your competitors ship in public, writes down what it expects
 
 Developer-tool companies build in public. A pull request, a new repository, a job posting for a role that doesn't exist yet, and a rewritten homepage all show up weeks before the launch post. The existing competitive-intelligence tools (Crayon, Klue) are built for sales teams. They track marketing surfaces, produce battlecards, and never say what they expect to happen or whether they were right.
 
-Signal is built for the people who plan the roadmap. You add a competitor once, and it monitors **nine public sources** permanently: GitHub, job boards, the competitor's own website, changelogs, newsroom posts, pricing pages, their community forum, Hacker News and Reddit. A quality-scoring and semantic-deduplication pipeline cleans every signal, and a multi-agent LangGraph.js system interprets it. When enough independent evidence lines up, Signal writes a **prediction** into a ledger: a dated, machine-checkable claim with a stated probability.
+Signal is built for the people who plan the roadmap. You add a competitor once, and it monitors **fifteen public sources** permanently: GitHub, job boards, the competitor's own website, changelogs, newsroom posts, pricing pages, their community forums and Stack Overflow tag, Hacker News, Reddit, news coverage, documentation, npm and PyPI packages, their blog, their social accounts (YouTube, Mastodon, Bluesky), and field intel that a teammate submits by hand. A quality-scoring and semantic-deduplication pipeline cleans every signal, and a multi-agent LangGraph.js system interprets it. When enough independent evidence lines up, Signal writes a **prediction** into a ledger: a dated, machine-checkable claim with a stated probability.
 
 Nothing is presented as certain. Every prediction is checked by plain code when its date arrives and scored as hit, miss or unresolved, and the workspace's running Brier score sits next to the coin-flip baseline. There is no published accuracy figure yet: the backtest has a case file, and the number gets published when it exists.
 
@@ -41,7 +41,7 @@ Scoring:      hit or miss, Brier-scored. No evidence either way → unresolved, 
 
 ## How It Works
 
-**Add a competitor by name and domain.** Signal discovers everything else automatically: subreddits, job boards, pricing page, changelog feed, GitHub org, key website pages, a public Discourse forum, and a newsroom/press feed. It also proposes new competitors you haven't thought to add, and asks you to confirm each one before it starts tracking it.
+**Add a competitor by name and domain.** Signal discovers everything else automatically: subreddits, job boards, pricing page, changelog feed, GitHub org, key website pages, a public Discourse forum, and a newsroom/press feed. Once per competitor it also scans the competitor's own homepage for blog and social feeds, and fills only the fields that are still empty. It also proposes new competitors you haven't thought to add, and asks you to confirm each one before it starts tracking it.
 
 **Briefing.** The default view your team opens every morning. The top 3 most significant competitive movements from the last 24 hours — what happened, why it matters, the recommended action, and a one-click button to act on it.
 
@@ -89,7 +89,7 @@ graph TB
     end
 
     subgraph WORKER["WORKER · BullMQ (separate process)"]
-        COLLECT["Collectors<br/>reddit · hn · jobs · changelog · pricing · github"]
+        COLLECT["Collectors · 15 sources<br/>reddit · hn · jobs · changelog · pricing · github · website · community<br/>postings · news · docs · packages · blog · social · field"]
         PIPE["Pipeline<br/>entity extraction → quality → dedup"]
         RESOLVE["Prediction resolver<br/>daily · deterministic · Brier-scored"]
     end
@@ -192,7 +192,7 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 
 ### Discovery
 
-**Metadata discovery** — no LLM. Triggered once when a competitor is added. Discovers subreddits (Reddit search API, ranked by mention frequency), job board tokens (Greenhouse + Lever pattern matching), pricing URL (common path probing with a web-search fallback), RSS/changelog feed (path probing plus HTML parsing), GitHub org (confirmed by blog-domain match or an Organization whose login equals the domain slug), website pages (homepage plus the first of /product, /features, /platform), a Discourse forum (`forum.`/`community.`/`discuss.`/`discourse.` subdomains answering `/latest.json`), and a newsroom feed (`/newsroom`, `/press`, `/news` RSS paths). Probes that derive hosts from the domain are refused outright when the apex resolves to a non-public address. Logs every attempt to `competitor_discovery_log`.
+**Metadata discovery** — no LLM. Triggered once when a competitor is added. Discovers subreddits (Reddit search API, ranked by mention frequency), job board tokens (Greenhouse + Lever pattern matching), pricing URL (common path probing with a web-search fallback), RSS/changelog feed (path probing plus HTML parsing), GitHub org (confirmed by blog-domain match or an Organization whose login equals the domain slug), website pages (homepage plus the first of /product, /features, /platform), a Discourse forum (`forum.`/`community.`/`discuss.`/`discourse.` subdomains answering `/latest.json`), and a newsroom feed (`/newsroom`, `/press`, `/news` RSS paths). The docs sitemap is probed at `docs.<domain>/sitemap.xml`, then `<domain>/sitemap.xml`, and written back as `docs_sitemap_url`. A homepage link scan (inside the `collect-feeds` job, once per competitor, `links_scanned_at`) parses the competitor's own homepage for RSS `<link rel=alternate>` (comment feeds skipped), YouTube `/channel/UC…`, a Bluesky profile, Mastodon `rel="me"`, Medium/Hashnode/Dev.to, and a Stack Overflow tag; at most 5 feeds per list, `http` upgraded to `https`, and only empty fields are filled (conditional SQL). A bot-protection 403 on the homepage ends auto-discovery for that competitor; set the fields with `PATCH`. Probes that derive hosts from the domain are refused outright when the apex resolves to a non-public address. Logs every attempt to `competitor_discovery_log`.
 
 **Competitor discovery** — LLM. A separate LangGraph agent that *proposes brand-new competitors* you haven't added. A tool-calling model (DuckDuckGo web search + Signal's own retrieval) runs a bounded ReAct loop and proposes up to 5 candidates. Each lands in `tracked_entities` as a `candidate` and is promoted only through explicit human confirmation — never automatically.
 
@@ -209,6 +209,15 @@ All three run behind the same reliability layer: circuit breakers on every LLM c
 | WebsiteCollectionAgent | Every 24h | The competitor's own pages · diffed against the last snapshot · only copy changes of 120+ characters become signals; first sight is a baseline |
 | CommunityCollectionAgent | Every 12h | Public Discourse `/latest.json` · no key · Discord/Slack deliberately excluded (private, bot-gated) |
 | PostingsCollectionAgent | Every 12h | Newsroom / press RSS · same feed sweep as changelogs, separate source and circuit |
+| NewsCollectionAgent | Every 6h | Google News RSS · query is `news_query` or the quoted company name · 20 new signals per competitor per run |
+| DocsCollectionAgent | Every 24h | Docs sitemap diff · new pages become signals |
+| PackagesCollectionAgent | Every 12h | npm latest dist-tag (`npm_packages`) + PyPI releases RSS (`pypi_packages`) |
+| Feeds job (`collect-feeds`) | Every 12h | One job, four sweeps with separate circuits: homepage link scan, blog (`blog_feeds`: company blog, Medium, Hashnode, Dev.to), social feeds (`social_feeds`: YouTube channel uploads, Mastodon), forums (`forum_feeds`: Flarum, NodeBB, phpBB and similar RSS) |
+| BlueskyCollectionAgent | Every 6h | Public Bluesky AppView API for `bluesky_handle` · no key |
+| StackOverflowCollectionAgent | Every 12h | Stack Exchange API questions for `stackoverflow_tag` · no key required |
+| Field intel | API-driven | `POST /api/competitors/:id/field-intel` · a teammate's note plus an optional URL fetched server-side; not scheduled |
+
+The multi-feed sources (blog, social, forums, community) are written by several collectors, so they have no shared "last collected" watermark. They use a 30-day age bound (undated entries are skipped), URL dedupe, and a cap of 20 new signals per competitor per source per run; changelog and postings keep their watermark. A shared sweep (`collectors/sweep.ts`) gives each source its own circuit and isolates competitors from each other. A sweep counts as a success when at least one competitor succeeded. A 4xx or unparseable feed from a competitor's own host, or a bad Bluesky/Stack Exchange config, is a warning and does not charge the circuit.
 
 Signals over 500 tokens are chunked at 400 tokens with 50-token overlap before embedding.
 
@@ -260,7 +269,7 @@ All routes are authenticated with a Supabase JWT (`Authorization: Bearer …`) a
 
 | Area | Endpoints |
 |---|---|
-| Competitors | `GET/POST /api/competitors`, `GET /api/competitors/:id`, `POST /:id/analyze`, `GET /:id/score`, `GET /:id/scores`, `GET /:id/trend`, `GET /:id/hiring`, `GET /:id/discovery` |
+| Competitors | `GET/POST /api/competitors`, `GET /api/competitors/:id`, `PATCH /api/competitors/:id` (source-config fields only), `POST /:id/analyze`, `POST /:id/field-intel`, `GET /:id/score`, `GET /:id/scores`, `GET /:id/trend`, `GET /:id/hiring`, `GET /:id/discovery` |
 | Signals | `GET /api/signals` (pagination, source/quality/date filters) |
 | Alerts | `GET /api/alerts` |
 | Chat | `POST /api/chat` — SSE: `event: token`* → `event: result` · `event: confirm_required` |
@@ -274,6 +283,8 @@ All routes are authenticated with a Supabase JWT (`Authorization: Bearer …`) a
 | Slack | `POST /api/slack/events` (Slack-signed, not JWT) |
 | Dashboard | `GET /api/dashboard/summary` |
 | Workspaces | `GET/POST/PATCH /api/workspaces` |
+
+`PATCH /api/competitors/:id` is strict: only the source-config fields are accepted, `null` clears a text field and `[]` clears an array. `POST /api/competitors/:id/field-intel` takes `{note (1-4000 chars), url?}` and returns `201 {signal_id, fetched}`; the page is fetched server-side, limited to 30 submissions per hour per workspace, a duplicate URL returns `409`, and the note is saved even if the fetch fails.
 
 Chat answers arrive as SSE frames: `token` frames stream the draft live, then a `result` frame carries the citation-checked answer (or a structured refusal). The regenerated answer from `POST /api/chat-threads/:id/regenerate` forks a fresh branch from a checkpoint — the original thread history is untouched.
 
@@ -369,7 +380,7 @@ npm install
 docker-compose up
 ```
 
-Add a competitor:
+Add a competitor (optional source-config fields such as `news_query`, `docs_sitemap_url`, `npm_packages`, `pypi_packages`, `blog_feeds`, `social_feeds`, `forum_feeds`, `bluesky_handle` and `stackoverflow_tag` can be passed here or set later with `PATCH /api/competitors/:id`; every URL must resolve to a public host):
 
 ```bash
 curl -X POST http://localhost:3000/api/competitors \
@@ -411,6 +422,7 @@ ENABLE_PLAYWRIGHT=true
 CIRCUIT_FAILURE_THRESHOLD=5
 CIRCUIT_TIMEOUT_MS=1800000
 ENABLE_CHAT_MUTATING_TOOLS=true
+STACKEXCHANGE_KEY=       # optional; free key, raises the Stack Overflow quota
 GITHUB_TOKEN=            # optional; lifts GitHub from 60 to 5,000 requests/hour
 SLACK_SIGNING_SECRET=    # required for Slack; the endpoint fails closed without it
 
@@ -419,7 +431,7 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ```
 
-The website, community (Discourse) and newsroom collectors need no keys.
+The website, community (Discourse), newsroom, news, docs, packages, blog, social (including Bluesky) and Stack Overflow collectors need no keys. `STACKEXCHANGE_KEY` is optional and free; it raises the Stack Exchange quota.
 
 `DATABASE_URL` is a Supabase PostgreSQL connection string. Generate migrations with Drizzle, review them, and apply them through the established Supabase migration workflow.
 
@@ -428,7 +440,7 @@ The website, community (Discourse) and newsroom collectors need no keys.
 ## What's Coming
 
 - **Slack install flow.** The events endpoint and delivery are built, but workspaces are mapped to Slack teams by a row in `slack_installations`. An OAuth install route comes next.
-- **Social postings.** "Public postings" is currently newsroom and press RSS. X and LinkedIn need paid API access and are not collected.
+- **Paid and gated sources.** Signal only collects sources that are free and public. X/Twitter and LinkedIn (paid API, login, terms of service), Discord and Slack communities (need membership), G2/Capterra and Product Hunt (account token) are not collected. A teammate can submit anything from them as field intel.
 - **Measured accuracy.** The backtest harness has a case file of real devtool launches to replay against, so the README's central claim becomes a number rather than an assertion. Whatever that number is, it gets published here.
 - **Long-term memory (Phase 2 Task 7).** Chat-turn memory extractor writing `signal_goal`/`relationship`/`preference`/`company_fact` per turn — not yet built. Outcome memory (dismissed candidates / denied tools) is partially shipped: dismissed-domain biasing is live; denied-tool memory is deferred (no consumer).
 

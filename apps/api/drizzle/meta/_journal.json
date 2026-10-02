@@ -134,6 +134,13 @@
       "when": 1790848961854,
       "tag": "0018_add_news_docs_packages_field",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790859152635,
+      "tag": "0019_add_blog_social",
+      "breakpoints": true
     }
   ]
 }

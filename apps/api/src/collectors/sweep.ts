@@ -34,7 +34,7 @@ export async function runSourceSweep<T>(
   collectOne: (competitor: Competitor, config: T) => Promise<void>,
 ): Promise<void> {
   if (await isCircuitOpen(service)) {
-    throw new Error(`${service} circuit is open — skipping job`);
+    throw new CircuitOpenError(`${service} circuit is open — skipping job`);
   }
 
   try {
@@ -70,6 +70,14 @@ export async function runSourceSweep<T>(
         await collectOne(competitor, config);
         hadSuccess = true;
       } catch (err) {
+        if (err instanceof ConfigError) {
+          logger.warn(`${service} config rejected for one competitor — not charging the circuit`, {
+            competitor_id: competitor.id,
+            competitor_name: competitor.name,
+            error: err.message,
+          });
+          continue;
+        }
         hadFailure = true;
         logger.error(
           `${service} collector failed for one competitor — continuing with the rest`,
@@ -95,3 +103,10 @@ export async function runSourceSweep<T>(
     throw err;
   }
 }
+
+// A rejected competitor config (e.g. a bad handle): retrying can't fix it and
+// it says nothing about the source's health, so callers warn instead of
+// charging the circuit.
+export class ConfigError extends Error {}
+
+export class CircuitOpenError extends Error {}

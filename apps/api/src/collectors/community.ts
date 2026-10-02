@@ -19,7 +19,6 @@ import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import {
   listCompetitors,
-  getLatestSignalCollectedAt,
   signalExistsBySourceUrl,
   createSignal,
 } from "../db/queries";
@@ -47,16 +46,9 @@ interface DiscourseLatest {
   topic_list?: { topics?: DiscourseTopic[] };
 }
 
-function isNewerThan(timestamp: string, cutoff: Date | undefined): boolean {
-  if (!cutoff) return true;
-  const parsed = new Date(timestamp);
-  return Number.isNaN(parsed.getTime()) ? true : parsed > cutoff;
-}
-
 async function fetchDiscourseTopics(baseUrl: string): Promise<DiscourseTopic[]> {
   // Newest-created first. The default /latest order is last activity, so a
-  // new topic nobody replied to can sink past the page between runs and the
-  // created_at cutoff below would never see it.
+  // new topic nobody replied to can sink past the page between runs.
   // ponytail: one page of MAX_TOPICS; follow more_topics_url if a forum ever
   // opens more than that many topics between 12h runs.
   const url = new URL("/latest.json?order=created", baseUrl).toString();
@@ -75,15 +67,12 @@ async function fetchDiscourseTopics(baseUrl: string): Promise<DiscourseTopic[]> 
 }
 
 async function collectDiscourse(
-  competitor: { id: string; name: string; discourse_url: string },
-  cutoff: Date | undefined
+  competitor: { id: string; name: string; discourse_url: string }
 ): Promise<void> {
   const topics = await withRetry(() => fetchDiscourseTopics(competitor.discourse_url));
 
   for (const topic of topics) {
     try {
-      if (!isNewerThan(topic.created_at, cutoff)) continue;
-
       const topicUrl = new URL(`/t/${topic.slug}/${topic.id}`, competitor.discourse_url).toString();
       if (await signalExistsBySourceUrl(competitor.id, SOURCE, topicUrl)) continue;
 
@@ -147,8 +136,9 @@ export async function communityCollectorProcessor(
         break;
       }
       try {
-        const cutoff = await getLatestSignalCollectedAt(competitor.id, SOURCE);
-        await collectDiscourse(competitor, cutoff);
+        // No per-source watermark: stackoverflow and forum feeds also write
+        // "community", so URL dedupe + MAX_TOPICS bound each run instead.
+        await collectDiscourse(competitor);
       } catch (err) {
         hadFailure = true;
         logger.error("community collector failed for one competitor — continuing", {

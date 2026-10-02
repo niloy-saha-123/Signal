@@ -19,7 +19,8 @@
 //   attempted, with what it tried and what it found (or didn't). Polled by
 //   DiscoveryStatus.tsx every 3s while discovery_status is pending/in_progress.
 //
-// PATCH /competitors/:id — news_query / docs_sitemap_url / npm_packages / pypi_packages only.
+// PATCH /competitors/:id — news_query / docs_sitemap_url / npm_packages / pypi_packages /
+// blog_feeds / social_feeds / forum_feeds / bluesky_handle / stackoverflow_tag only.
 //
 // POST /competitors/:id/field-intel — teammate link/note → a 'field' signal.
 import express, { Router } from "express";
@@ -215,6 +216,14 @@ async function overrideUrlIsPublic(
   return isPublic(host);
 }
 
+async function allPublic(
+  urls: string[] | undefined,
+  isPublic: CompetitorRouterDeps["isPublicHostname"]
+): Promise<boolean> {
+  if (!urls?.length) return true;
+  return (await Promise.all(urls.map((url) => overrideUrlIsPublic(url, isPublic)))).every(Boolean);
+}
+
 export function createCompetitorRouter(
   deps: CompetitorRouterDeps = defaultCompetitorRouterDeps
 ): Router {
@@ -237,15 +246,18 @@ export function createCompetitorRouter(
         return;
       }
 
-      const [pricingOk, rssOk, sitemapOk] = await Promise.all([
+      const [pricingOk, rssOk, sitemapOk, blogOk, socialOk, forumOk] = await Promise.all([
         overrideUrlIsPublic(parsed.data.pricing_url, deps.isPublicHostname),
         overrideUrlIsPublic(parsed.data.rss_url, deps.isPublicHostname),
         overrideUrlIsPublic(parsed.data.docs_sitemap_url, deps.isPublicHostname),
+        allPublic(parsed.data.blog_feeds, deps.isPublicHostname),
+        allPublic(parsed.data.social_feeds, deps.isPublicHostname),
+        allPublic(parsed.data.forum_feeds, deps.isPublicHostname),
       ]);
-      if (!pricingOk || !rssOk || !sitemapOk) {
+      if (!pricingOk || !rssOk || !sitemapOk || !blogOk || !socialOk || !forumOk) {
         res.status(400).json({
           error: "validation",
-          message: "pricing_url/rss_url/docs_sitemap_url must be a public URL",
+          message: "pricing_url/rss_url/docs_sitemap_url/feed URLs must be public URLs",
         });
         return;
       }
@@ -322,6 +334,15 @@ export function createCompetitorRouter(
       // the create-time overrides.
       if (!(await overrideUrlIsPublic(parsed.data.docs_sitemap_url ?? undefined, deps.isPublicHostname))) {
         res.status(400).json({ error: "validation", message: "docs_sitemap_url must be a public URL" });
+        return;
+      }
+      const feedChecks = await Promise.all([
+        allPublic(parsed.data.blog_feeds, deps.isPublicHostname),
+        allPublic(parsed.data.social_feeds, deps.isPublicHostname),
+        allPublic(parsed.data.forum_feeds, deps.isPublicHostname),
+      ]);
+      if (!feedChecks.every(Boolean)) {
+        res.status(400).json({ error: "validation", message: "feed URLs must be public URLs" });
         return;
       }
       const row = await deps.updateCompetitorSourceConfigForWorkspace(id, req.workspaceId!, parsed.data);
