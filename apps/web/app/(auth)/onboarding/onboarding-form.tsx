@@ -5,6 +5,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
+import { AddToSlackButton } from "@/app/(app)/settings/settings-client";
 import { Sig } from "@/components/brand/Sig";
 import { Button, TextInput } from "@/components/ui/primitives";
 import { addCompetitorByDomain } from "@/lib/add-competitor";
@@ -267,6 +268,7 @@ function CompetitorStep({
 }
 
 function ReadyStep({ count, onFinish }: { count: number; onFinish: () => void }) {
+  const [slackError, setSlackError] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-5">
       <Sig mood="happy" size={56} decorative />
@@ -284,7 +286,13 @@ function ReadyStep({ count, onFinish }: { count: number; onFinish: () => void })
         <Button variant="primary" size="lg" onClick={onFinish}>
           Go to Home
         </Button>
+        <AddToSlackButton onError={setSlackError} />
       </div>
+      {slackError ? (
+        <p role="alert" className="text-[14px] text-miss-text">
+          {slackError}
+        </p>
+      ) : null}
     </div>
   );
 }

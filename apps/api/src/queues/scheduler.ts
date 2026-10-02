@@ -137,6 +137,11 @@ export const CONFIRMATION_EXPIRY_SCHEDULER_ID = "signal:pending-confirmation-exp
 export const PREDICTION_RESOLVER_CRON = "0 1 * * *";
 export const PREDICTION_RESOLVER_SCHEDULER_ID = "signal:resolve-predictions:v1";
 
+// Weekly Slack digest, Monday 09:00 UTC: the start of a working week in most
+// timezones Signal's users are in, unlike the 00:00 analysis sweeps.
+export const SLACK_DIGEST_CRON = "0 9 * * 1";
+export const SLACK_DIGEST_SCHEDULER_ID = "signal:slack-digest:v1";
+
 // Upserts every collector's schedule plus pipeline-recovery's and the weekly
 // own-company analysis sweep's — kept in one function because all three are the
 // same "idempotent upsertJobScheduler at worker startup" operation, not separate
@@ -150,6 +155,7 @@ export async function registerQueueSchedules(
     | "daily-analysis-sweep"
     | "pending-confirmation-expiry"
     | "resolve-predictions"
+    | "slack-digest"
   > = queues
 ): Promise<void> {
   const config = getCollectorScheduleConfig();
@@ -201,6 +207,11 @@ export async function registerQueueSchedules(
     PREDICTION_RESOLVER_SCHEDULER_ID,
     { pattern: PREDICTION_RESOLVER_CRON },
     { name: "resolve-predictions", data: {} }
+  );
+  await queueMap["slack-digest"].upsertJobScheduler(
+    SLACK_DIGEST_SCHEDULER_ID,
+    { pattern: SLACK_DIGEST_CRON },
+    { name: "slack-digest", data: {} }
   );
   // No discovery-search schedule here: a weekly sweep would be a poison job as
   // written (DiscoveryJobDataSchema requires a workspace_id, but a repeat job

@@ -14,10 +14,18 @@
 //     screenshotted.
 //   - Announce misses as plainly as hits. A ledger that only broadcasts wins is
 //     marketing wearing a track record's clothes.
+import type { WeeklyDigest } from "../../db/queries";
 
 export interface SlackBlock {
   type: string;
   [key: string]: unknown;
+}
+
+// Names, patterns and statements come from users or LLM output over scraped
+// content. Unescaped, "<!channel>" pings the channel and "<url|label>" renders
+// a disguised link.
+function escapeMrkdwn(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function section(markdown: string): SlackBlock {
@@ -65,8 +73,8 @@ export interface PredictionMessage {
 
 export function predictionBlocks(prediction: PredictionMessage): SlackBlock[] {
   return [
-    section(`*${prediction.competitor_name}* — new prediction`),
-    section(prediction.statement),
+    section(`*${escapeMrkdwn(prediction.competitor_name)}* — new prediction`),
+    section(escapeMrkdwn(prediction.statement)),
     context(
       [
         `*${percent(prediction.probability)}* likely`,
@@ -99,11 +107,11 @@ const STATUS_LABEL: Record<ResolutionMessage["status"], string> = {
 export function resolutionBlocks(resolution: ResolutionMessage): SlackBlock[] {
   const blocks: SlackBlock[] = [
     section(
-      `*${resolution.competitor_name}* — prediction resolved: *${STATUS_LABEL[resolution.status]}*`
+      `*${escapeMrkdwn(resolution.competitor_name)}* — prediction resolved: *${STATUS_LABEL[resolution.status]}*`
     ),
-    section(resolution.statement),
+    section(escapeMrkdwn(resolution.statement)),
     context(`Signal said *${percent(resolution.probability)}*`),
-    section(resolution.resolution_note),
+    section(escapeMrkdwn(resolution.resolution_note)),
   ];
 
   if (resolution.resolution_evidence_urls.length > 0) {
@@ -111,7 +119,7 @@ export function resolutionBlocks(resolution: ResolutionMessage): SlackBlock[] {
       context(
         resolution.resolution_evidence_urls
           .slice(0, 3)
-          .map((url) => `<${url}|evidence>`)
+          .map((url) => `<${escapeMrkdwn(url)}|evidence>`)
           .join("  ·  ")
       )
     );
@@ -139,15 +147,15 @@ export interface AlertMessage {
 
 export function alertBlocks(alert: AlertMessage): SlackBlock[] {
   const blocks: SlackBlock[] = [
-    section(`*${alert.competitor_name}* — ${alert.pattern}`),
+    section(`*${escapeMrkdwn(alert.competitor_name)}* — ${escapeMrkdwn(alert.pattern)}`),
     context(`*${percent(alert.confidence)}* confidence`),
-    section(alert.interpretation),
+    section(escapeMrkdwn(alert.interpretation)),
   ];
 
   const actions = alert.recommended_actions
     .map((action) => {
-      const label = typeof action.type === "string" ? action.type : null;
-      const detail = typeof action.detail === "string" ? action.detail : null;
+      const label = typeof action.type === "string" ? escapeMrkdwn(action.type) : null;
+      const detail = typeof action.detail === "string" ? escapeMrkdwn(action.detail) : null;
       if (!detail) return null;
       return label ? `*${label}* — ${detail}` : detail;
     })
@@ -158,4 +166,60 @@ export function alertBlocks(alert: AlertMessage): SlackBlock[] {
   }
 
   return blocks;
+}
+
+// Weekly digest. Hits and misses are listed side by side, same rule as
+// resolutionBlocks: a digest that only reports wins is not a track record.
+export function digestBlocks(
+  digest: WeeklyDigest,
+  appUrl: string
+): { blocks: SlackBlock[]; fallbackText: string } {
+  const blocks: SlackBlock[] = [
+    section(
+      `*Signal weekly digest* — ${plural(digest.alert_count, "alert")}, ` +
+        `${plural(digest.new_forecast_count, "new forecast")}, ${digest.settled.length} settled`
+    ),
+  ];
+  if (digest.top_alerts.length) {
+    blocks.push(
+      divider(),
+      section(
+        "*Top alerts*\n" +
+          digest.top_alerts
+            .map((a) => `• *${escapeMrkdwn(a.competitor_name)}*: ${escapeMrkdwn(a.pattern)} (${percent(a.confidence)} confidence)`)
+            .join("\n")
+      )
+    );
+  }
+  if (digest.new_forecasts.length) {
+    blocks.push(
+      divider(),
+      section(
+        "*New forecasts*\n" +
+          digest.new_forecasts
+            .map((f) => `• *${escapeMrkdwn(f.competitor_name)}*: ${escapeMrkdwn(f.statement)} — ${percent(f.probability)}`)
+            .join("\n")
+      )
+    );
+  }
+  if (digest.settled.length) {
+    blocks.push(
+      divider(),
+      section(
+        "*Settled this week*\n" +
+          digest.settled
+            .map((s) => `• ${s.status === "hit" ? "Hit" : "Miss"} — *${escapeMrkdwn(s.competitor_name)}*: ${escapeMrkdwn(s.statement)}`)
+            .join("\n")
+      )
+    );
+  }
+  blocks.push(
+    context(`${plural(digest.open_count, "open forecast")} · <${appUrl}/briefing|Open the briefing in Signal>`)
+  );
+  return {
+    blocks,
+    fallbackText:
+      `Signal weekly digest: ${plural(digest.alert_count, "alert")}, ` +
+      `${plural(digest.new_forecast_count, "new forecast")}, ${digest.settled.length} settled`,
+  };
 }

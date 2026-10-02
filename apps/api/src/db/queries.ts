@@ -1,5 +1,5 @@
 // Typed Drizzle query functions used by the API routes and agents.
-import { eq, and, asc, desc, inArray, gte, lte, count, sql, isNull, type SQL } from "drizzle-orm";
+import { eq, and, ne, asc, desc, inArray, gte, lte, count, sql, isNull, type SQL } from "drizzle-orm";
 import { computeCalibration, type Calibration } from "../lib/calibration";
 import { z } from "zod";
 import type {
@@ -1406,6 +1406,7 @@ export interface UpsertSlackInstallationInput {
   bot_token: string;
   bot_user_id: string;
   default_channel: string | null;
+  default_channel_name: string | null;
   installed_by: string | null;
 }
 
@@ -1423,11 +1424,136 @@ export async function upsertSlackInstallation(
         bot_token: input.bot_token,
         bot_user_id: input.bot_user_id,
         default_channel: input.default_channel,
+        default_channel_name: input.default_channel_name,
         updated_at: new Date(),
       },
     })
     .returning();
   return row;
+}
+
+export type SlackInstallation = typeof slackInstallationsTable.$inferSelect;
+
+// Install-time write. The team_id upsert only takes effect when the team is
+// unclaimed or already belongs to this workspace (setWhere), so a Slack team
+// linked to another Signal workspace can never be moved by a second install —
+// even by two installs racing. On success the workspace's rows for any other
+// team are removed: one Slack team per Signal workspace.
+export async function replaceSlackInstallation(
+  input: UpsertSlackInstallationInput
+): Promise<SlackInstallation | null> {
+  return db.transaction(async (tx) => {
+    // READ COMMITTED: two confirms for different teams would each miss the
+    // other's uncommitted insert when deleting "others". Serialize per workspace.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.workspace_id}))`);
+    const [row] = await tx
+      .insert(slackInstallationsTable)
+      .values(input)
+      .onConflictDoUpdate({
+        target: slackInstallationsTable.team_id,
+        set: {
+          team_name: input.team_name,
+          bot_token: input.bot_token,
+          bot_user_id: input.bot_user_id,
+          default_channel: input.default_channel,
+          default_channel_name: input.default_channel_name,
+          installed_by: input.installed_by,
+          updated_at: new Date(),
+        },
+        setWhere: eq(slackInstallationsTable.workspace_id, input.workspace_id),
+      })
+      .returning();
+    if (!row) return null;
+    await tx
+      .delete(slackInstallationsTable)
+      .where(
+        and(
+          eq(slackInstallationsTable.workspace_id, input.workspace_id),
+          ne(slackInstallationsTable.id, row.id)
+        )
+      );
+    return row;
+  });
+}
+
+export async function deleteSlackInstallationsForWorkspace(workspaceId: string): Promise<void> {
+  await db
+    .delete(slackInstallationsTable)
+    .where(eq(slackInstallationsTable.workspace_id, workspaceId));
+}
+
+export async function listSlackInstallationsWithChannel(): Promise<SlackInstallation[]> {
+  return db
+    .select()
+    .from(slackInstallationsTable)
+    .where(sql`${slackInstallationsTable.default_channel} IS NOT NULL`);
+}
+
+export interface WeeklyDigest {
+  alert_count: number;
+  top_alerts: Array<{ competitor_name: string; pattern: string; confidence: number }>;
+  new_forecast_count: number;
+  new_forecasts: Array<{ competitor_name: string; statement: string; probability: number }>;
+  settled: Array<{ competitor_name: string; statement: string; status: "hit" | "miss" }>;
+  open_count: number;
+}
+
+const DIGEST_LIST_LIMIT = 5;
+
+export async function getWeeklyDigest(workspaceId: string, since: Date): Promise<WeeklyDigest> {
+  const alerts = await db
+    .select({
+      competitor_name: competitorsTable.name,
+      pattern: alertsTable.pattern,
+      confidence: alertsTable.confidence,
+    })
+    .from(alertsTable)
+    .innerJoin(competitorsTable, eq(alertsTable.competitor_id, competitorsTable.id))
+    .where(and(eq(competitorsTable.workspace_id, workspaceId), gte(alertsTable.created_at, since)))
+    .orderBy(desc(alertsTable.confidence));
+
+  const created = await db
+    .select({
+      competitor_name: competitorsTable.name,
+      statement: predictionsTable.statement,
+      probability: predictionsTable.probability,
+    })
+    .from(predictionsTable)
+    .innerJoin(competitorsTable, eq(predictionsTable.competitor_id, competitorsTable.id))
+    .where(and(eq(predictionsTable.workspace_id, workspaceId), gte(predictionsTable.created_at, since)))
+    .orderBy(desc(predictionsTable.probability));
+
+  const settled = await db
+    .select({
+      competitor_name: competitorsTable.name,
+      statement: predictionsTable.statement,
+      status: predictionsTable.status,
+    })
+    .from(predictionsTable)
+    .innerJoin(competitorsTable, eq(predictionsTable.competitor_id, competitorsTable.id))
+    .where(
+      and(
+        eq(predictionsTable.workspace_id, workspaceId),
+        inArray(predictionsTable.status, ["hit", "miss"]),
+        gte(predictionsTable.resolved_at, since)
+      )
+    )
+    .orderBy(desc(predictionsTable.resolved_at))
+    .limit(DIGEST_LIST_LIMIT);
+
+  const [open] = await db
+    .select({ n: count() })
+    .from(predictionsTable)
+    .where(and(eq(predictionsTable.workspace_id, workspaceId), eq(predictionsTable.status, "open")));
+
+  return {
+    alert_count: alerts.length,
+    top_alerts: alerts.slice(0, DIGEST_LIST_LIMIT),
+    new_forecast_count: created.length,
+    new_forecasts: created.slice(0, DIGEST_LIST_LIMIT),
+    settled: settled as WeeklyDigest["settled"],
+    open_count: Number(open?.n ?? 0),
+  };
 }
 
 // ── resolution windows ───────────────────────────────────────────────────

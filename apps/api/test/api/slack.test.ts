@@ -9,10 +9,20 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { createSlackRouter, type SlackRouterDeps } from "@/api/slack";
+import { signSlackState } from "@/integrations/slack/oauth";
 
 const SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
 const TEAM_ID = "T0000001";
 const WS_UUID = "22222222-2222-4222-8222-222222222222";
+
+const RESULT = {
+  team_id: TEAM_ID,
+  team_name: "Acme",
+  bot_token: "xoxb-new",
+  bot_user_id: "U0BOT",
+  channel_id: "C9",
+  channel_name: "#intel",
+};
 
 function sign(body: string, timestamp: string): string {
   return `v0=${crypto
@@ -31,6 +41,12 @@ function makeDeps(overrides: Partial<SlackRouterDeps> = {}): SlackRouterDeps {
       bot_user_id: "U0BOT",
     }),
     enqueueSlackQuestion: vi.fn().mockResolvedValue(undefined),
+    oauth: {
+      config: () => ({ clientId: "1", clientSecret: "cs", redirectUri: "https://api.x/api/slack/oauth/callback" }),
+      exchangeCode: vi.fn().mockResolvedValue(RESULT),
+      savePendingInstall: vi.fn().mockResolvedValue("pending-id"),
+      frontendUrl: "http://app.test",
+    },
     ...overrides,
   };
 }
@@ -320,5 +336,64 @@ describe("POST /api/slack/events resilience", () => {
 
     const [payload] = enqueueSlackQuestion.mock.calls[0];
     expect(payload.dedupe_key).toBe(`${TEAM_ID}:1700000000.000100`);
+  });
+});
+
+async function getRedirect(app: express.Express, path: string): Promise<{ status: number; location: string | null }> {
+  const server = app.listen(0);
+  try {
+    const { port } = server.address() as AddressInfo;
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, { redirect: "manual" });
+    return { status: res.status, location: res.headers.get("location") };
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+}
+
+describe("GET /api/slack/oauth/callback", () => {
+  const state = () => signSlackState({ workspace_id: WS_UUID, user_id: "user-1" }, "cs");
+
+  it("parks the install and redirects with its id, writing nothing", async () => {
+    const deps = makeDeps();
+    const res = await getRedirect(appWith(createSlackRouter(deps)), `/api/slack/oauth/callback?code=abc&state=${state()}`);
+    expect(res).toEqual({ status: 302, location: "http://app.test/settings?slack_install=pending-id" });
+    expect(deps.oauth.exchangeCode).toHaveBeenCalledWith(expect.objectContaining({ clientId: "1" }), "abc");
+    expect(deps.oauth.savePendingInstall).toHaveBeenCalledWith({
+      workspace_id: WS_UUID,
+      user_id: "user-1",
+      result: RESULT,
+    });
+  });
+
+  it("reports a cancelled install without calling Slack", async () => {
+    const deps = makeDeps();
+    const res = await getRedirect(appWith(createSlackRouter(deps)), "/api/slack/oauth/callback?error=access_denied&state=x");
+    expect(res.location).toBe("http://app.test/settings?slack=cancelled");
+    expect(deps.oauth.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a forged state", "/api/slack/oauth/callback?code=abc&state=bad.sig"],
+    ["no code", "/api/slack/oauth/callback?state=STATE"],
+  ])("redirects with error on %s", async (_label, path) => {
+    const deps = makeDeps();
+    const res = await getRedirect(appWith(createSlackRouter(deps)), path.replace("STATE", state()));
+    expect(res.location).toBe("http://app.test/settings?slack=error");
+    expect(deps.oauth.savePendingInstall).not.toHaveBeenCalled();
+  });
+
+  it("redirects with error when the server has no Slack config", async () => {
+    const deps = makeDeps();
+    deps.oauth.config = () => null;
+    const res = await getRedirect(appWith(createSlackRouter(deps)), `/api/slack/oauth/callback?code=abc&state=${state()}`);
+    expect(res.location).toBe("http://app.test/settings?slack=error");
+  });
+
+  it("Slack ok:false leaves nothing parked", async () => {
+    const deps = makeDeps();
+    (deps.oauth.exchangeCode as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("Slack oauth.v2.access failed: invalid_code"));
+    const res = await getRedirect(appWith(createSlackRouter(deps)), `/api/slack/oauth/callback?code=abc&state=${state()}`);
+    expect(res.location).toBe("http://app.test/settings?slack=error");
+    expect(deps.oauth.savePendingInstall).not.toHaveBeenCalled();
   });
 });

@@ -28,6 +28,12 @@ import express, { Router } from "express";
 import { z } from "zod";
 import * as queries from "../db/queries";
 import { verifySlackRequest } from "../integrations/slack/verify";
+import {
+  verifySlackState,
+  type SlackOAuthConfig,
+  type SlackOAuthResult,
+} from "../integrations/slack/oauth";
+import type { PendingSlackInstall } from "../integrations/slack/pending-install";
 import { logger } from "../lib/logger";
 
 export interface SlackQuestion {
@@ -44,10 +50,18 @@ export interface SlackQuestion {
   dedupe_key: string;
 }
 
+export interface SlackOAuthCallbackDeps {
+  config: () => SlackOAuthConfig | null;
+  exchangeCode: (config: SlackOAuthConfig, code: string) => Promise<SlackOAuthResult>;
+  savePendingInstall: (pending: PendingSlackInstall) => Promise<string>;
+  frontendUrl: string;
+}
+
 export interface SlackRouterDeps {
   signingSecret: string;
   getSlackInstallation: typeof queries.getSlackInstallation;
   enqueueSlackQuestion: (question: SlackQuestion) => Promise<void>;
+  oauth: SlackOAuthCallbackDeps;
 }
 
 const SlackEventSchema = z.object({
@@ -218,6 +232,43 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
     }
 
     res.status(200).json({ ok: true });
+  });
+
+  // Where Slack sends the browser back after "Add to Slack". Public by
+  // necessity (no bearer token rides a browser redirect), so it must NOT write
+  // anything: the signed state only proves who started the install, not who is
+  // finishing it. The result is parked and the signed-in confirm binds it.
+  router.get("/oauth/callback", async (req, res) => {
+    const back = (query: string) => res.redirect(302, `${deps.oauth.frontendUrl}/settings?${query}`);
+
+    if (typeof req.query.error === "string") {
+      back("slack=cancelled");
+      return;
+    }
+    const config = deps.oauth.config();
+    const code = typeof req.query.code === "string" ? req.query.code : "";
+    const rawState = typeof req.query.state === "string" ? req.query.state : "";
+    const state = config ? verifySlackState(rawState, config.clientSecret) : null;
+    if (!config || !code || !state) {
+      back("slack=error");
+      return;
+    }
+
+    try {
+      const result = await deps.oauth.exchangeCode(config, code);
+      const id = await deps.oauth.savePendingInstall({
+        workspace_id: state.workspace_id,
+        user_id: state.user_id,
+        result,
+      });
+      back(`slack_install=${id}`);
+    } catch (error) {
+      logger.error("slack: install failed", {
+        workspace_id: state.workspace_id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      back("slack=error");
+    }
   });
 
   return router;

@@ -16,8 +16,11 @@ import { createDashboardRouter } from "./dashboard";
 import { createCompanyGoalsRouter } from "./company-goals";
 import { createPredictionRouter } from "./predictions";
 import { createActivityRouter } from "./activity";
+import { createSlackIntegrationRouter } from "./slack-integration";
 import { createSlackRouter, type SlackQuestion } from "./slack";
 import { getSlackInstallation } from "../db/queries";
+import { exchangeSlackCode, slackOAuthConfig } from "../integrations/slack/oauth";
+import { savePendingInstall } from "../integrations/slack/pending-install";
 import { createResolveCompanyRouter } from "./resolve-company";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
@@ -125,6 +128,12 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
           jobId: question.dedupe_key,
         });
       },
+      oauth: {
+        config: () => slackOAuthConfig(),
+        exchangeCode: exchangeSlackCode,
+        savePendingInstall,
+        frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:3001",
+      },
     })
   );
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
@@ -156,6 +165,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/company-goals", createCompanyGoalsRouter());
   app.use("/api/predictions", createPredictionRouter());
   app.use("/api/activity", createActivityRouter());
+  app.use("/api/integrations/slack", createSlackIntegrationRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;

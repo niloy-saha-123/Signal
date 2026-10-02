@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { predictionBlocks, alertBlocks, resolutionBlocks } from "@/integrations/slack/blocks";
+import { predictionBlocks, alertBlocks, resolutionBlocks, digestBlocks } from "@/integrations/slack/blocks";
 
 const PREDICTION = {
   statement: "Acme ships a first-party Postgres adapter",
@@ -131,3 +131,92 @@ describe("alertBlocks", () => {
     expect(rendered).toContain("Lead with SMB simplicity");
   });
 });
+
+describe("digestBlocks", () => {
+  const digest = {
+    alert_count: 7,
+    top_alerts: [{ competitor_name: "Kestrel", pattern: "enterprise push", confidence: 0.82 }],
+    new_forecast_count: 2,
+    new_forecasts: [{ competitor_name: "Kestrel", statement: "Ships SSO by March", probability: 0.64 }],
+    settled: [
+      { competitor_name: "Osprey", statement: "Raises prices", status: "hit" as const },
+      { competitor_name: "Osprey", statement: "Drops free tier", status: "miss" as const },
+    ],
+    open_count: 5,
+  };
+
+  it("names competitors, counts, both hits and misses, and links to the briefing", () => {
+    const { blocks, fallbackText } = digestBlocks(digest, "https://app.signal.test");
+    const text = JSON.stringify(blocks);
+    expect(fallbackText).toBe("Signal weekly digest: 7 alerts, 2 new forecasts, 2 settled");
+    expect(text).toContain("Kestrel");
+    expect(text).toContain("82%");
+    expect(text).toContain("Ships SSO by March");
+    expect(text).toContain("Hit");
+    expect(text).toContain("Miss");
+    expect(text).toContain("5 open forecasts");
+    expect(text).toContain("https://app.signal.test/briefing");
+  });
+});
+
+describe("mrkdwn escaping", () => {
+  const INJECT = "<!channel> <https://evil.example|click>";
+  const ESCAPED = "&lt;!channel&gt; &lt;https://evil.example|click&gt;";
+
+  it("escapes data fields in digestBlocks but keeps the briefing link real", () => {
+    const rendered = text(
+      digestBlocks(
+        {
+          alert_count: 1,
+          top_alerts: [{ competitor_name: "A&B", pattern: INJECT, confidence: 0.5 }],
+          new_forecast_count: 1,
+          new_forecasts: [{ competitor_name: "Acme", statement: INJECT, probability: 0.5 }],
+          settled: [{ competitor_name: "Acme", statement: INJECT, status: "hit" }],
+          open_count: 1,
+        } as any,
+        "https://app.test"
+      ).blocks
+    );
+    expect(rendered).toContain(ESCAPED);
+    expect(rendered).toContain("A&amp;B");
+    expect(rendered).not.toContain("<!channel>");
+    expect(rendered).not.toContain("<https://evil.example");
+    expect(rendered).toContain("<https://app.test/briefing|Open the briefing in Signal>");
+  });
+
+  it("escapes data fields in alertBlocks", () => {
+    const rendered = text(
+      alertBlocks({
+        competitor_name: INJECT,
+        pattern: INJECT,
+        confidence: 0.5,
+        interpretation: INJECT,
+        recommended_actions: [{ type: INJECT, detail: INJECT }],
+      })
+    );
+    expect(rendered).not.toContain("<!channel>");
+    expect(rendered).not.toContain("<https://evil.example");
+    expect(rendered).toContain(ESCAPED);
+  });
+
+  it("escapes data fields in predictionBlocks and resolutionBlocks", () => {
+    const p = text(predictionBlocks({ ...PREDICTION, statement: INJECT, competitor_name: INJECT }));
+    const r = text(
+      resolutionBlocks({
+        statement: INJECT,
+        competitor_name: INJECT,
+        probability: 0.5,
+        status: "hit",
+        resolution_note: INJECT,
+        resolution_evidence_urls: ["https://x.test/?a=1&b=2"],
+        brier_score: 0.1,
+      })
+    );
+    for (const rendered of [p, r]) {
+      expect(rendered).not.toContain("<!channel>");
+      expect(rendered).not.toContain("<https://evil.example");
+    }
+    expect(r).toContain("<https://x.test/?a=1&amp;b=2|evidence>");
+  });
+});
+

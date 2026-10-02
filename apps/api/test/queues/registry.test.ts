@@ -353,6 +353,14 @@ describe("queues/registry", () => {
     });
   });
 
+  it("configures slack-digest as retry-safe: concurrency 1, 3 attempts, exponential backoff from 60s", () => {
+    expect(QUEUE_CONFIG["slack-digest"]).toEqual({
+      concurrency: 1,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 60_000 },
+    });
+  });
+
   it("defaults every other queue to concurrency 2, 3 attempts, exponential backoff from 5s", () => {
     for (const name of OTHER_QUEUES) {
       expect(QUEUE_CONFIG[name]).toEqual({
@@ -376,6 +384,7 @@ describe("queues/registry", () => {
     "pending-confirmation-expiry",
     "resolve-predictions",
     "slack-question",
+    "slack-digest",
     ...OTHER_QUEUES,
   ];
     expect(Object.keys(queues).sort()).toEqual(allNames.sort());

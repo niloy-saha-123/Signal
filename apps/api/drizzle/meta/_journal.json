@@ -148,6 +148,13 @@
       "when": 1790914687136,
       "tag": "0020_add_signals_source_url_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790917258162,
+      "tag": "0021_add_slack_channel_name",
+      "breakpoints": true
     }
   ]
 }

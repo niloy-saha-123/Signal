@@ -1,0 +1,27 @@
+# Create the Signal Slack app: api.slack.com/apps → Create New App → From a manifest.
+# Replace https://API_PUBLIC_URL with the API's public origin (same value as the
+# API_PUBLIC_URL env var), then copy Client ID / Client Secret / Signing Secret
+# from Basic Information into SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET.
+display_information:
+  name: Signal
+  description: Competitor forecasts, alerts and answers in your Slack.
+features:
+  bot_user:
+    display_name: Signal
+    always_online: true
+oauth_config:
+  redirect_urls:
+    - https://API_PUBLIC_URL/api/slack/oauth/callback
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - incoming-webhook
+settings:
+  event_subscriptions:
+    request_url: https://API_PUBLIC_URL/api/slack/events
+    bot_events:
+      - app_mention
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
