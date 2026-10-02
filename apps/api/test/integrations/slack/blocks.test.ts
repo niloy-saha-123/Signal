@@ -158,3 +158,65 @@ describe("digestBlocks", () => {
     expect(text).toContain("https://app.signal.test/briefing");
   });
 });
+
+describe("mrkdwn escaping", () => {
+  const INJECT = "<!channel> <https://evil.example|click>";
+  const ESCAPED = "&lt;!channel&gt; &lt;https://evil.example|click&gt;";
+
+  it("escapes data fields in digestBlocks but keeps the briefing link real", () => {
+    const rendered = text(
+      digestBlocks(
+        {
+          alert_count: 1,
+          top_alerts: [{ competitor_name: "A&B", pattern: INJECT, confidence: 0.5 }],
+          new_forecast_count: 1,
+          new_forecasts: [{ competitor_name: "Acme", statement: INJECT, probability: 0.5 }],
+          settled: [{ competitor_name: "Acme", statement: INJECT, status: "hit" }],
+          open_count: 1,
+        } as any,
+        "https://app.test"
+      ).blocks
+    );
+    expect(rendered).toContain(ESCAPED);
+    expect(rendered).toContain("A&amp;B");
+    expect(rendered).not.toContain("<!channel>");
+    expect(rendered).not.toContain("<https://evil.example");
+    expect(rendered).toContain("<https://app.test/briefing|Open the briefing in Signal>");
+  });
+
+  it("escapes data fields in alertBlocks", () => {
+    const rendered = text(
+      alertBlocks({
+        competitor_name: INJECT,
+        pattern: INJECT,
+        confidence: 0.5,
+        interpretation: INJECT,
+        recommended_actions: [{ type: INJECT, detail: INJECT }],
+      })
+    );
+    expect(rendered).not.toContain("<!channel>");
+    expect(rendered).not.toContain("<https://evil.example");
+    expect(rendered).toContain(ESCAPED);
+  });
+
+  it("escapes data fields in predictionBlocks and resolutionBlocks", () => {
+    const p = text(predictionBlocks({ ...PREDICTION, statement: INJECT, competitor_name: INJECT }));
+    const r = text(
+      resolutionBlocks({
+        statement: INJECT,
+        competitor_name: INJECT,
+        probability: 0.5,
+        status: "hit",
+        resolution_note: INJECT,
+        resolution_evidence_urls: ["https://x.test/?a=1&b=2"],
+        brier_score: 0.1,
+      })
+    );
+    for (const rendered of [p, r]) {
+      expect(rendered).not.toContain("<!channel>");
+      expect(rendered).not.toContain("<https://evil.example");
+    }
+    expect(r).toContain("<https://x.test/?a=1&amp;b=2|evidence>");
+  });
+});
+
