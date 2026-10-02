@@ -6,6 +6,7 @@ import {
   ApiError,
   createRoadmapLink,
   deleteRoadmapLink,
+  getPrediction,
   updateRoadmapLink,
   type RoadmapLink,
   type RoadmapStance,
@@ -66,8 +67,12 @@ export function RoadmapLinks({
     try {
       await call();
     } catch {
-      setLinks(previous);
       setError("Couldn't save. Try again.");
+      try {
+        setLinks((await getPrediction(predictionId)).roadmap_links);
+      } catch {
+        setLinks(previous);
+      }
     } finally {
       setBusy(false);
     }
@@ -145,6 +150,7 @@ export function RoadmapLinks({
                     <Select
                       label={`Stance for ${link.title}`}
                       value={link.stance}
+                      disabled={busy}
                       onChange={(value) =>
                         void changeStance(link, value as RoadmapStance)
                       }

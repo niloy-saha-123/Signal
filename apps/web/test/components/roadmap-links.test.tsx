@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createMock, updateMock, deleteMock } = vi.hoisted(() => ({
+const { createMock, updateMock, deleteMock, getMock } = vi.hoisted(() => ({
+  getMock: vi.fn(),
   createMock: vi.fn(),
   updateMock: vi.fn(),
   deleteMock: vi.fn(),
@@ -13,7 +14,7 @@ vi.mock("../../lib/api", () => {
       super(`status ${status}`);
     }
   }
-  return { ApiError, createRoadmapLink: createMock, updateRoadmapLink: updateMock, deleteRoadmapLink: deleteMock };
+  return { ApiError, createRoadmapLink: createMock, updateRoadmapLink: updateMock, deleteRoadmapLink: deleteMock, getPrediction: getMock };
 });
 
 import { RoadmapLinks } from "../../components/forecast/RoadmapLinks";
@@ -39,6 +40,8 @@ beforeEach(() => {
   createMock.mockReset();
   updateMock.mockReset();
   deleteMock.mockReset();
+  getMock.mockReset();
+  getMock.mockRejectedValue(new Error("offline"));
 });
 
 describe("RoadmapLinks", () => {
@@ -111,6 +114,37 @@ describe("RoadmapLinks", () => {
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(2);
     expect(within(items[0]).getByText("Item 1")).toBeInTheDocument();
+  });
+
+  it("re-syncs from the server after a 404 on remove", async () => {
+    deleteMock.mockRejectedValue(err(404));
+    getMock.mockResolvedValue({ roadmap_links: [link(2)] });
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1), link(2)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Item 1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
+    await waitFor(() => expect(screen.queryByText("Item 1")).toBeNull());
+    expect(getMock).toHaveBeenCalledWith("p1");
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("re-syncs from the server after a 404 on a stance change", async () => {
+    updateMock.mockRejectedValue(err(404));
+    getMock.mockResolvedValue({ roadmap_links: [link(1, { stance: "accelerate" })] });
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    const select = screen.getByRole("combobox", { name: "Stance for Item 1" });
+    fireEvent.change(select, { target: { value: "deprioritize" } });
+    await waitFor(() => expect(select).toHaveValue("accelerate"));
+  });
+
+  it("disables the stance select while a mutation is in flight", async () => {
+    let resolve!: (v: unknown) => void;
+    updateMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    const select = screen.getByRole("combobox", { name: "Stance for Item 1" });
+    fireEvent.change(select, { target: { value: "accelerate" } });
+    await waitFor(() => expect(select).toBeDisabled());
+    resolve(link(1, { stance: "accelerate" }));
+    await waitFor(() => expect(select).toBeEnabled());
   });
 
   it("hides the add form at the 10 link limit", () => {
