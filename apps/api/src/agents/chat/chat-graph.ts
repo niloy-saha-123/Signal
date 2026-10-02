@@ -120,6 +120,15 @@ const COMPACTION_SYSTEM_PROMPT =
   "Summarize the conversation so far into a concise rolling summary that preserves specific " +
   "facts, decisions, and open questions a later turn will need. Do not add outside knowledge.";
 
+// Read-only callers run unattended, so no human sees what the model does.
+// fetch_url is excluded too: injected text in scraped evidence could steer it
+// into putting workspace data in an outbound URL.
+const READ_ONLY_EXCLUDED_TOOLS = new Set(["fetch_url"]);
+
+function allowedInMode(tool: Pick<ChatTool, "name" | "mutating">, readOnly: boolean): boolean {
+  return !readOnly || (!tool.mutating && !READ_ONLY_EXCLUDED_TOOLS.has(tool.name));
+}
+
 export function wrapChatToolResult(name: string, result: string, nonce: string): string {
   if (name === "fetch_url") return formatUntrustedText(result, nonce, name);
   return result;
@@ -440,7 +449,13 @@ async function toolsNode(state: ChatGraphStateType): Promise<Partial<ChatGraphSt
       fetchUrlCount += 1;
     }
 
-    if (!registry) registry = new Map(buildChatTools(state.workspace_id).map((t) => [t.name, t]));
+    if (!registry) {
+      registry = new Map(
+        buildChatTools(state.workspace_id)
+          .filter((t) => allowedInMode(t, state.read_only))
+          .map((t) => [t.name, t])
+      );
+    }
     const def = registry.get(call.name);
     if (!def) {
       toolMessages.push(
@@ -571,7 +586,7 @@ async function generateNode(
 
       const modelAlias = await selectModel(PREFERRED_MODEL, true);
       const registryTools = buildChatTools(state.workspace_id)
-        .filter((t) => !state.read_only || !t.mutating)
+        .filter((t) => allowedInMode(t, state.read_only))
         .map((t) => t.tool);
       const model = new ChatAnthropic({
         model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,

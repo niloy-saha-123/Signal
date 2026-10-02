@@ -93,7 +93,8 @@ export type ChatStreamEvent =
   | { kind: "result"; result: ChatAgentResult }
   | { kind: "confirm_required"; mutation: ChatMutationRequest };
 
-export interface StreamChatInput extends ChatAgentInput {
+// Interactive web chat only: it can answer the confirm interrupt, so never read-only.
+export interface StreamChatInput extends Omit<ChatAgentInput, "read_only"> {
   thread_id: string;
   turn?: ChatTurnInput;
 }
