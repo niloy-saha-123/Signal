@@ -71,6 +71,13 @@ export const competitorsTable = pgTable(
     docs_sitemap_url: text("docs_sitemap_url"),
     npm_packages: text("npm_packages").array().notNull().default(sql`'{}'::text[]`),
     pypi_packages: text("pypi_packages").array().notNull().default(sql`'{}'::text[]`),
+    blog_feeds: text("blog_feeds").array().notNull().default(sql`'{}'::text[]`),
+    social_feeds: text("social_feeds").array().notNull().default(sql`'{}'::text[]`),
+    forum_feeds: text("forum_feeds").array().notNull().default(sql`'{}'::text[]`),
+    bluesky_handle: text("bluesky_handle"),
+    stackoverflow_tag: text("stackoverflow_tag"),
+    // Set by the homepage link scan (collect-feeds); rescanned after 30 days.
+    links_scanned_at: timestamp("links_scanned_at", { withTimezone: true }),
     // Pause monitoring without losing history — hard delete would orphan
     // every signal/alert/score row a RESTRICT/CASCADE choice below depends on.
     is_active: boolean("is_active").notNull().default(true),
@@ -123,7 +130,7 @@ export const signalsTable = pgTable(
   (table) => [
     check(
       "signals_source_check",
-      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github', 'website', 'community', 'postings', 'news', 'docs', 'packages', 'field')`
+      sql`${table.source} IN ('reddit', 'hn', 'jobs', 'changelog', 'pricing', 'github', 'website', 'community', 'postings', 'news', 'docs', 'packages', 'field', 'blog', 'social')`
     ),
     check(
       "signals_quality_score_check",

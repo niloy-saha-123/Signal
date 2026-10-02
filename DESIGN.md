@@ -35,8 +35,8 @@ unresolved window is not a failure), open `#1d5fc4`; status good / warning /
 serious / critical `#0a8a55 / #f3b01d / #e97125 / #cc3148`.
 
 **Sources**: website, hn, jobs, changelog, pricing, community, github, reddit
-hold the eight validated categorical slots; postings, news, docs, packages and
-field have their own chip colours but fold into "Other" (`#8a97a6`) on any
+hold the eight validated categorical slots; postings, news, docs, packages,
+blog (`#8b5e34`), social (`#b5179e`) and field have their own chip colours but fold into "Other" (`#8a97a6`) on any
 chart. A source chip always prints the source's name next to its dot, so
 colour is never the only cue. Mirrored in `lib/chart-colors.ts`; a test
 enforces the match.

@@ -19,10 +19,10 @@ import {
   createSignal,
 } from "../db/queries";
 import type { Competitor } from "../db/queries";
+import type { SignalSource } from "@signal/shared";
 import { assertPublicUrl, safeFetch } from "../lib/safe-fetch";
-import { runSourceSweep } from "./sweep";
+import { runSourceSweep, ConfigError } from "./sweep";
 
-type FeedSource = "changelog" | "postings";
 const MAX_CHANGELOG_BYTES = 2_000_000;
 
 // rss-parser stashes RSS2's <content:encoded> under a literal
@@ -56,18 +56,39 @@ async function fetchArticleText(url: string): Promise<string> {
   return parseArticleContent(await response.text());
 }
 
+// A 4xx (bar 429) or a body that isn't a feed is a dead or wrong feed URL —
+// often an auto-discovered one — not a source outage, so it never charges the
+// circuit. Network errors, timeouts, 429 and 5xx stay plain Errors.
 async function fetchFeed(url: string) {
   const response = await safeFetch(url, {
     signal: AbortSignal.timeout(30000),
     maxBytes: MAX_CHANGELOG_BYTES,
   });
+  if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+    throw new ConfigError(`Fetching feed ${url} returned ${response.status}`);
+  }
   if (response.status < 200 || response.status >= 300) {
     throw new Error(`Fetching changelog feed ${url} returned ${response.status}`);
   }
-  return parser.parseString(await response.text());
+  const body = await response.text();
+  try {
+    return await parser.parseString(body);
+  } catch (err) {
+    throw new ConfigError(`Feed ${url} did not parse: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
-async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: string): Promise<string> {
+async function resolveRawText(
+  item: Parser.Item & ChangelogFeedItem,
+  sourceUrl: string,
+  fullText: boolean
+): Promise<string> {
+  if (!fullText) {
+    const body =
+      parseArticleContent(item["content:encoded"] ?? item.content ?? "") || (item.contentSnippet ?? "");
+    return item.title ? `${item.title}\n\n${body}` : body;
+  }
+
   // content:encoded is RSS2's dedicated full-body field — spec-guaranteed
   // complete, so trust it outright, no length check. A short one (e.g.
   // "v2.1: bug fixes") is still complete text, not a truncated summary.
@@ -88,21 +109,44 @@ async function resolveRawText(item: Parser.Item & ChangelogFeedItem, sourceUrl: 
   return withRetry(() => fetchArticleText(sourceUrl));
 }
 
-async function collectForCompetitor(
+export async function collectFeed(
   competitor: Competitor,
   feedUrl: string,
-  source: FeedSource
-): Promise<void> {
-  const lastCollectedAt = await getLatestSignalCollectedAt(competitor.id, source);
+  source: SignalSource,
+  opts: { fullText?: boolean; maxItems?: number; maxAgeDays?: number } = {}
+): Promise<number> {
+  const { fullText = true, maxItems, maxAgeDays } = opts;
+  // The multi-feed path shares its source with other writers (several feeds,
+  // other collectors), so a per-source watermark set by one would drop the
+  // others' items. It uses an absolute age bound plus URL dedupe instead.
+  const lastCollectedAt =
+    maxItems === undefined ? await getLatestSignalCollectedAt(competitor.id, source) : undefined;
+  const minDate = maxAgeDays === undefined ? undefined : Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
   // parseURL follows redirects internally and cannot re-check their targets.
   // Fetch the bounded body through safeFetch, then parse the inert string.
-  const feed = await withRetry(() => fetchFeed(feedUrl));
+  const feed = await withRetry(() => fetchFeed(feedUrl), {
+    shouldRetry: (err) => !(err instanceof ConfigError),
+  });
 
-  for (const item of feed.items ?? []) {
+  let items = feed.items ?? [];
+  if (maxItems !== undefined) {
+    const ts = (i: (typeof items)[number]) => {
+      const t = new Date(i.isoDate ?? i.pubDate ?? "").getTime();
+      return Number.isNaN(t) ? -Infinity : t;
+    };
+    items = [...items].sort((a, b) => ts(b) - ts(a)).slice(0, maxItems);
+  }
+
+  let created = 0;
+  for (const item of items) {
     const sourceUrl = item.link;
     if (!sourceUrl) continue;
 
     const publishedAt = item.isoDate ?? item.pubDate;
+    if (minDate !== undefined) {
+      const t = new Date(publishedAt ?? "").getTime();
+      if (Number.isNaN(t) || t < minDate) continue;
+    }
     if (lastCollectedAt && publishedAt) {
       const entryDate = new Date(publishedAt);
       if (!Number.isNaN(entryDate.getTime()) && entryDate <= lastCollectedAt) continue;
@@ -118,7 +162,7 @@ async function collectForCompetitor(
       const alreadyCollected = await signalExistsBySourceUrl(competitor.id, source, sourceUrl);
       if (alreadyCollected) continue;
 
-      const rawText = await resolveRawText(item, sourceUrl);
+      const rawText = await resolveRawText(item, sourceUrl, fullText);
       if (!rawText) continue;
 
       const signal = await createSignal({
@@ -129,6 +173,7 @@ async function collectForCompetitor(
         raw_text: rawText,
       });
 
+      created++;
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
       logger.error(`${source} collector failed to process one item — continuing with the rest`, {
@@ -139,6 +184,7 @@ async function collectForCompetitor(
       });
     }
   }
+  return created;
 }
 
 interface FeedCollectJobData {
@@ -146,15 +192,15 @@ interface FeedCollectJobData {
 }
 
 export async function changelogCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
-  return runSourceSweep("changelog", (c) => c.changelog_rss || null, (c, url) =>
-    collectForCompetitor(c, url, "changelog")
-  );
+  return runSourceSweep("changelog", (c) => c.changelog_rss || null, async (c, url) => {
+    await collectFeed(c, url, "changelog");
+  });
 }
 
 export async function postingsCollectorProcessor(_job: Job<FeedCollectJobData>): Promise<void> {
-  return runSourceSweep("postings", (c) => c.postings_rss || null, (c, url) =>
-    collectForCompetitor(c, url, "postings")
-  );
+  return runSourceSweep("postings", (c) => c.postings_rss || null, async (c, url) => {
+    await collectFeed(c, url, "postings");
+  });
 }
 
 // Extension points — only called from the standalone worker entrypoint, so

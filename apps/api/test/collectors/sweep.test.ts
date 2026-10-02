@@ -25,7 +25,7 @@ import {
   recordFailure,
   recordSuccess,
 } from "@/reliability/circuit-breaker";
-import { runSourceSweep } from "@/collectors/sweep";
+import { runSourceSweep, ConfigError, CircuitOpenError } from "@/collectors/sweep";
 
 const c = (id: string, extra: Record<string, unknown> = {}) =>
   ({
@@ -45,10 +45,22 @@ describe("runSourceSweep", () => {
 
   it("throws without listing competitors when the circuit is already open", async () => {
     vi.mocked(isCircuitOpen).mockResolvedValueOnce(true);
-    await expect(runSourceSweep("news", () => "x", vi.fn())).rejects.toThrow(
-      /circuit is open/,
-    );
+    const err = await runSourceSweep("news", () => "x", vi.fn()).catch((e) => e);
+    expect(err).toBeInstanceOf(CircuitOpenError);
+    expect(err.message).toMatch(/circuit is open/);
     expect(listCompetitorsMock).not.toHaveBeenCalled();
+  });
+
+  it("a ConfigError is neither a success nor a failure for the circuit", async () => {
+    listCompetitorsMock.mockResolvedValue([c("a"), c("b")]);
+    const collect = vi
+      .fn()
+      .mockRejectedValueOnce(new ConfigError("bad handle"))
+      .mockRejectedValueOnce(new Error("boom"));
+    await runSourceSweep("news", (x: any) => x.feed, collect);
+    expect(recordFailure).toHaveBeenCalledTimes(1);
+    expect(recordFailure).toHaveBeenCalledWith("news", "boom");
+    expect(recordSuccess).not.toHaveBeenCalled();
   });
 
   it("skips inactive and unconfigured competitors, passes config, records success", async () => {

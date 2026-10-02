@@ -20,6 +20,8 @@ export const SOURCE_COLORS = {
   docs: "#7a8b2e",
   packages: "#9a6a3a",
   field: "#6b7686",
+  blog: "#8b5e34",
+  social: "#b5179e",
 } as const;
 
 export const OTHER_SOURCE_COLOR = "#8a97a6";
@@ -49,6 +51,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   docs: "Docs",
   packages: "Packages",
   field: "From your team",
+  blog: "Blog",
+  social: "Social",
 };
 
 export function sourceLabel(source: string): string {

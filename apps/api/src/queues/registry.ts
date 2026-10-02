@@ -73,6 +73,9 @@ export type QueueName =
   | "collect-news"
   | "collect-packages"
   | "collect-docs"
+  | "collect-feeds"
+  | "collect-bluesky"
+  | "collect-stackoverflow"
   | "pipeline-entity-extraction"
   | "pipeline-quality-scoring"
   | "pipeline-deduplication"
@@ -216,6 +219,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   "collect-news": COLLECTOR_CONFIG,
   "collect-packages": COLLECTOR_CONFIG,
   "collect-docs": COLLECTOR_CONFIG,
+  "collect-feeds": COLLECTOR_CONFIG,
+  "collect-bluesky": COLLECTOR_CONFIG,
+  "collect-stackoverflow": COLLECTOR_CONFIG,
   "pipeline-entity-extraction": DEFAULT_CONFIG,
   "pipeline-quality-scoring": DEFAULT_CONFIG,
   "pipeline-deduplication": DEFAULT_CONFIG,
