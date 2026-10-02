@@ -152,6 +152,7 @@ import {
   getOwnCompanyCompetitorForWorkspace,
   createOwnCompanyCompetitorRow,
   saveDiscoveredLinks,
+  replaceSlackInstallation,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -3057,5 +3058,44 @@ describe("listSignalFeed / listAlertFeed workspace scoping", () => {
     expect(inArray).toHaveBeenCalledWith(alertsTable.competitor_id, [
       OTHER_WORKSPACE_COMPETITOR_UUID,
     ]);
+  });
+});
+
+describe("replaceSlackInstallation", () => {
+  const input = {
+    workspace_id: "w1",
+    team_id: "T1",
+    team_name: "Acme",
+    bot_token: "xoxb-1",
+    bot_user_id: "UBOT",
+    default_channel: "C1",
+    default_channel_name: "#general",
+    installed_by: "u1",
+  };
+
+  function wireTx(returned: unknown[]) {
+    const where = vi.fn(async () => undefined);
+    const txDelete = vi.fn(() => ({ where }));
+    const onConflictDoUpdate = vi.fn(() => ({ returning: vi.fn(async () => returned) }));
+    const txInsert = vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) }));
+    transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb({ insert: txInsert, delete: txDelete })
+    );
+    return { txDelete, onConflictDoUpdate };
+  }
+
+  it("upserts on team_id only when the team is unclaimed or already this workspace's, then drops the workspace's other rows", async () => {
+    const { txDelete, onConflictDoUpdate } = wireTx([{ id: "row-1", ...input }]);
+    const row = await replaceSlackInstallation(input);
+    expect(row).toMatchObject({ id: "row-1" });
+    const conflict = (onConflictDoUpdate.mock.calls[0] as unknown[])[0] as { setWhere?: unknown };
+    expect(conflict.setWhere).toBeDefined();
+    expect(txDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null and deletes nothing when another workspace owns the team", async () => {
+    const { txDelete } = wireTx([]);
+    expect(await replaceSlackInstallation(input)).toBeNull();
+    expect(txDelete).not.toHaveBeenCalled();
   });
 });

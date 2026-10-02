@@ -545,6 +545,9 @@ export const slackInstallationsTable = pgTable(
     // delivery stays silent rather than guessing a channel, because putting
     // competitive intelligence somewhere nobody chose is worse than not posting.
     default_channel: text("default_channel"),
+    // Display name of default_channel ("#general"), from the install response,
+    // so Settings can show where Signal posts without a channels:read scope.
+    default_channel_name: text("default_channel_name"),
     installed_by: text("installed_by"),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
