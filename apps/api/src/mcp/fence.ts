@@ -9,7 +9,9 @@ const MARKER = "SIGNAL_DATA_";
 
 export function fenceResult(data: unknown): string {
   const nonce = randomUUID().replaceAll("-", "");
-  let body = JSON.stringify(data).replaceAll(MARKER, "");
+  let body = JSON.stringify(data);
+  // Repeat until stable: one pass would turn SIGNAL_SIGNAL_DATA_DATA_ back into the marker.
+  while (body.includes(MARKER)) body = body.replaceAll(MARKER, "");
   if (body.length > MAX_RESULT_CHARS) {
     body = `${body.slice(0, MAX_RESULT_CHARS)}\n[truncated: result exceeded ${MAX_RESULT_CHARS} characters; narrow the request]`;
   }

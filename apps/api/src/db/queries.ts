@@ -1057,6 +1057,17 @@ export async function getLatestSignalScores(
     .limit(limit);
 }
 
+// Newest score row per competitor in one round trip (DISTINCT ON), for views
+// that show every competitor's current score at once.
+export async function getLatestScoreForCompetitors(competitorIds: string[]): Promise<SignalScore[]> {
+  if (competitorIds.length === 0) return [];
+  return db
+    .selectDistinctOn([competitorSignalScoresTable.competitor_id])
+    .from(competitorSignalScoresTable)
+    .where(inArray(competitorSignalScoresTable.competitor_id, competitorIds))
+    .orderBy(competitorSignalScoresTable.competitor_id, desc(competitorSignalScoresTable.computed_at));
+}
+
 export type CreateSignalScoreInput = {
   competitor_id: string;
   score: number;

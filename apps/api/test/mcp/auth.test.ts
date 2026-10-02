@@ -75,4 +75,18 @@ describe("requireApiToken", () => {
     });
     expect((await get(deps, `Bearer ${generateApiToken().token}`)).status).toBe(200);
   });
+
+  it("accepts the Bearer scheme case-insensitively", async () => {
+    expect((await get(makeDeps(true), `bearer ${generateApiToken().token}`)).status).toBe(200);
+  });
+
+  it("records last_used_at at most once a minute per token", async () => {
+    const deps = makeDeps(true);
+    const { token } = generateApiToken();
+    // Fresh token id so earlier tests' touches do not count.
+    deps.findActiveApiTokenByHash = vi.fn(async () => ({ id: "99999999-9999-4999-8999-999999999999", workspace_id: WS_UUID }));
+    await get(deps, `Bearer ${token}`);
+    await get(deps, `Bearer ${token}`);
+    expect(deps.touchApiTokenLastUsed).toHaveBeenCalledTimes(1);
+  });
 });

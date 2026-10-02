@@ -92,7 +92,7 @@ function makeDeps(over: Partial<McpRouterDeps["tools"]> = {}, rateLimit?: McpRou
       pending_candidates: 0,
     })) as any,
     listAlertFeed: vi.fn(async () => []) as any,
-    getLatestSignalScores: vi.fn(async () => [{ score: 61, delta_7d: 4 }]) as any,
+    getLatestScoreForCompetitors: vi.fn(async () => [{ competitor_id: COMP, score: 61, delta_7d: 4 }]) as any,
     createAgentRun: vi.fn(async () => ({ id: RUN })) as any,
     completeAgentRun: vi.fn(async () => undefined) as any,
     failRunIfRunning: vi.fn(async () => undefined) as any,
@@ -252,13 +252,16 @@ describe("/mcp", () => {
     const client = await connect();
     const res: any = await client.callTool({ name: "ask_signal", arguments: { question: "Will Acme ship SSO?" } });
     expect(payload(res)).toEqual({ refused: false, answer: "Yes [1]", citations: [] });
-    expect(deps.tools.runChatAgent).toHaveBeenCalledWith({
-      query: "Will Acme ship SSO?",
-      workspace_id: WS,
-      competitor_ids: [COMP],
-      run_id: RUN,
-      read_only: true,
-    });
+    expect(deps.tools.runChatAgent).toHaveBeenCalledWith(
+      {
+        query: "Will Acme ship SSO?",
+        workspace_id: WS,
+        competitor_ids: [COMP],
+        run_id: RUN,
+        read_only: true,
+      },
+      { signal: expect.any(AbortSignal) }
+    );
     expect(deps.tools.completeAgentRun).toHaveBeenCalledWith(RUN, "completed");
     await client.close();
   });
@@ -313,5 +316,118 @@ describe("/mcp rate limits", () => {
     expect(deps.tools.createAgentRun).not.toHaveBeenCalled();
     expect(rateLimit).toHaveBeenCalledWith(`mcp:rl:ask:${TOKEN_ID}`, 20, 3600);
     await client.close();
+  });
+
+  it("rejects JSON-RPC batches so one request cannot carry many tool calls", async () => {
+    await start(makeDeps());
+    const res = await fetch(baseUrl, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "tools/list" },
+        { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      ]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("a bad competitor id does not spend the ask budget", async () => {
+    const rateLimit = vi.fn(async () => ({ allowed: true, retryAfterSeconds: 60 }));
+    await start(makeDeps({}, rateLimit));
+    const client = await connect();
+    const res: any = await client.callTool({
+      name: "ask_signal",
+      arguments: { question: "q", competitor_ids: [FOREIGN] },
+    });
+    expect(res.isError).toBe(true);
+    expect(rateLimit.mock.calls.some((call) => String((call as unknown[])[0]).includes(":ask:"))).toBe(false);
+    await client.close();
+  });
+
+  it("charges a per-workspace ask budget as well as the token's", async () => {
+    const rateLimit = vi.fn(async (key: string) => ({ allowed: !key.includes(":ask:ws:"), retryAfterSeconds: 60 }));
+    const deps = makeDeps({}, rateLimit);
+    await start(deps);
+    const client = await connect();
+    const ask: any = await client.callTool({ name: "ask_signal", arguments: { question: "q" } });
+    expect(ask.isError).toBe(true);
+    expect(rateLimit).toHaveBeenCalledWith(`mcp:rl:ask:ws:${WS}`, 40, 3600);
+    expect(deps.tools.createAgentRun).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it("caps concurrent asks per workspace and frees the slot afterwards", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => (finish = r));
+    const runChatAgent = vi.fn(async () => {
+      await gate;
+      return { refused: true, reason: "thin" };
+    });
+    await start(makeDeps({ runChatAgent: runChatAgent as any }));
+    const [a, b, c] = await Promise.all([connect(), connect(), connect()]);
+    const first = a.callTool({ name: "ask_signal", arguments: { question: "1" } });
+    const second = b.callTool({ name: "ask_signal", arguments: { question: "2" } });
+    await vi.waitFor(() => expect(runChatAgent).toHaveBeenCalledTimes(2));
+    const third: any = await c.callTool({ name: "ask_signal", arguments: { question: "3" } });
+    expect(third.isError).toBe(true);
+    expect(third.content[0].text).toContain("already answering");
+    finish();
+    await Promise.all([first, second]);
+    const fourth: any = await c.callTool({ name: "ask_signal", arguments: { question: "4" } });
+    expect(fourth.isError).toBeFalsy();
+    await Promise.all([a.close(), b.close(), c.close()]);
+  });
+
+  it("keeps a paid-for answer when completing the run fails, and reports timeouts plainly", async () => {
+    const deps = makeDeps({ completeAgentRun: vi.fn(async () => Promise.reject(new Error("db blip"))) as any });
+    await start(deps);
+    const client = await connect();
+    const ok: any = await client.callTool({ name: "ask_signal", arguments: { question: "q" } });
+    expect(ok.isError).toBeFalsy();
+    expect(deps.tools.failRunIfRunning).not.toHaveBeenCalled();
+
+    (deps.tools.runChatAgent as any).mockRejectedValue(new DOMException("timed out", "TimeoutError"));
+    const slow: any = await client.callTool({ name: "ask_signal", arguments: { question: "q" } });
+    expect(slow.content[0].text).toContain("took too long");
+    expect(deps.tools.failRunIfRunning).toHaveBeenCalledWith(RUN);
+    await client.close();
+  });
+
+  it("aborts the ask when the client disconnects", async () => {
+    let seen: AbortSignal | undefined;
+    const runChatAgent = vi.fn(
+      (_input: unknown, opts: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          seen = opts.signal;
+          opts.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        })
+    );
+    const deps = makeDeps({ runChatAgent: runChatAgent as any });
+    await start(deps);
+    const controller = new AbortController();
+    const pending = fetch(baseUrl, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "ask_signal", arguments: { question: "q" } },
+      }),
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(runChatAgent).toHaveBeenCalled());
+    controller.abort();
+    await pending;
+    await vi.waitFor(() => expect(seen?.aborted).toBe(true));
+    await vi.waitFor(() => expect(deps.tools.failRunIfRunning).toHaveBeenCalledWith(RUN));
   });
 });

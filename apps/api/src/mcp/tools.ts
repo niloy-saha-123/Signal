@@ -30,16 +30,17 @@ export interface McpToolDeps {
   getSignalsByIds: typeof queries.getSignalsByIds;
   getDashboardSummaryForWorkspace: typeof queries.getDashboardSummaryForWorkspace;
   listAlertFeed: typeof queries.listAlertFeed;
-  getLatestSignalScores: typeof queries.getLatestSignalScores;
+  getLatestScoreForCompetitors: typeof queries.getLatestScoreForCompetitors;
   createAgentRun: typeof queries.createAgentRun;
   completeAgentRun: typeof queries.completeAgentRun;
   failRunIfRunning: typeof queries.failRunIfRunning;
   runChatAgent: typeof runChatAgent;
-  // Throws McpToolError when the token is over its ask_signal budget.
-  checkAskLimit: (tokenId: string) => Promise<void>;
+  // Charges the ask_signal budgets and takes an in-flight slot. Throws
+  // McpToolError when over a limit; otherwise returns the slot's release.
+  beginAsk: (ctx: McpContext) => Promise<() => void>;
 }
 
-export const defaultMcpToolDeps: Omit<McpToolDeps, "checkAskLimit"> = {
+export const defaultMcpToolDeps: Omit<McpToolDeps, "beginAsk"> = {
   listCompetitorsForWorkspace: queries.listCompetitorsForWorkspace,
   getCompetitorsByIdsForWorkspace: queries.getCompetitorsByIdsForWorkspace,
   profileDeps: {
@@ -57,7 +58,7 @@ export const defaultMcpToolDeps: Omit<McpToolDeps, "checkAskLimit"> = {
   getSignalsByIds: queries.getSignalsByIds,
   getDashboardSummaryForWorkspace: queries.getDashboardSummaryForWorkspace,
   listAlertFeed: queries.listAlertFeed,
-  getLatestSignalScores: queries.getLatestSignalScores,
+  getLatestScoreForCompetitors: queries.getLatestScoreForCompetitors,
   createAgentRun: queries.createAgentRun,
   completeAgentRun: queries.completeAgentRun,
   failRunIfRunning: queries.failRunIfRunning,
@@ -67,6 +68,8 @@ export const defaultMcpToolDeps: Omit<McpToolDeps, "checkAskLimit"> = {
 export interface McpContext {
   workspaceId: string;
   tokenId: string;
+  // Aborts when the client disconnects, so a dropped ask_signal stops spending.
+  signal?: AbortSignal;
 }
 
 type Competitor = Awaited<
@@ -119,6 +122,19 @@ async function requireOwnCompetitors(
   if (owned.length !== unique.length)
     throw new McpToolError("Competitor not found in this workspace.");
   return unique;
+}
+
+// Default scope when a tool gets no competitor_ids: the competitors the
+// workspace actively watches, capped like a chat turn so fan-out stays bounded.
+async function defaultCompetitorIds(deps: McpToolDeps, workspaceId: string): Promise<string[]> {
+  return (await deps.listCompetitorsForWorkspace(workspaceId))
+    .filter((c) => c.is_active && !c.is_own_company)
+    .map((c) => c.id)
+    .slice(0, MAX_ASK_COMPETITORS);
+}
+
+function isTimeoutOrAbort(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
 export function createMcpToolHandlers(deps: McpToolDeps) {
@@ -200,9 +216,7 @@ export function createMcpToolHandlers(deps: McpToolDeps) {
             args.competitor_ids,
             ctx.workspaceId,
           )
-        : (await deps.listCompetitorsForWorkspace(ctx.workspaceId)).map(
-            (c) => c.id,
-          );
+        : await defaultCompetitorIds(deps, ctx.workspaceId);
       if (ids.length === 0) return { results: [] };
       const limit = args.limit ?? 10;
       const chunks = await deps.hybridRetrieve(args.query, ids, limit);
@@ -240,8 +254,9 @@ export function createMcpToolHandlers(deps: McpToolDeps) {
           status: "open",
           limit: 50,
         }),
-        Promise.all(ids.map((id) => deps.getLatestSignalScores(id, 1))),
+        deps.getLatestScoreForCompetitors(ids),
       ]);
+      const latest = new Map(scores.map((row) => [row.competitor_id, row]));
       return {
         summary,
         what_moved: alerts.slice(0, 6).map((a) => ({
@@ -257,52 +272,54 @@ export function createMcpToolHandlers(deps: McpToolDeps) {
           .sort((a, b) => a.resolves_at.getTime() - b.resolves_at.getTime())
           .slice(0, 5)
           .map(forecastView),
-        pulse: competitors.map((c, i) => ({
+        pulse: competitors.map((c) => ({
           competitor_id: c.id,
           name: c.name,
-          score: scores[i][0]?.score ?? null,
-          delta_7d: scores[i][0]?.delta_7d ?? null,
+          score: latest.get(c.id)?.score ?? null,
+          delta_7d: latest.get(c.id)?.delta_7d ?? null,
         })),
       };
     },
 
-    async ask_signal(
-      ctx: McpContext,
-      args: { question: string; competitor_ids?: string[] },
-    ) {
-      await deps.checkAskLimit(ctx.tokenId);
+    async ask_signal(ctx: McpContext, args: { question: string; competitor_ids?: string[] }) {
+      // Validate before charging the budget, so a bad id costs nothing.
       const ids = args.competitor_ids?.length
-        ? await requireOwnCompetitors(
-            deps,
-            args.competitor_ids,
-            ctx.workspaceId,
-          )
-        : (await deps.listCompetitorsForWorkspace(ctx.workspaceId))
-            .filter((c) => c.is_active && !c.is_own_company)
-            .map((c) => c.id)
-            .slice(0, MAX_ASK_COMPETITORS);
-      if (ids.length === 0)
-        throw new McpToolError(
-          "This workspace is not tracking any competitors yet.",
-        );
+        ? await requireOwnCompetitors(deps, args.competitor_ids, ctx.workspaceId)
+        : await defaultCompetitorIds(deps, ctx.workspaceId);
+      if (ids.length === 0) throw new McpToolError("This workspace is not tracking any competitors yet.");
 
-      const run = await deps.createAgentRun({
-        competitor_id: ids[0],
-        trigger: "manual",
-      });
+      const release = await deps.beginAsk(ctx);
       try {
-        const result = await deps.runChatAgent({
-          query: args.question,
-          workspace_id: ctx.workspaceId,
-          competitor_ids: ids,
-          run_id: run.id,
-          read_only: true,
+        const run = await deps.createAgentRun({ competitor_id: ids[0], trigger: "manual" });
+        let result: Awaited<ReturnType<typeof runChatAgent>>;
+        try {
+          result = await deps.runChatAgent(
+            {
+              query: args.question,
+              workspace_id: ctx.workspaceId,
+              competitor_ids: ids,
+              run_id: run.id,
+              read_only: true,
+            },
+            { signal: ctx.signal }
+          );
+        } catch (error) {
+          await deps.failRunIfRunning(run.id).catch(() => undefined);
+          if (isTimeoutOrAbort(error)) {
+            throw new McpToolError("Signal took too long to answer. Try a narrower question.");
+          }
+          throw error;
+        }
+        // The answer is already paid for; a bookkeeping failure must not lose it.
+        await deps.completeAgentRun(run.id, "completed").catch((error) => {
+          logger.warn("mcp: failed to complete agent run", {
+            run_id: run.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-        await deps.completeAgentRun(run.id, "completed");
         return result;
-      } catch (error) {
-        await deps.failRunIfRunning(run.id).catch(() => undefined);
-        throw error;
+      } finally {
+        release();
       }
     },
   };
