@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -177,6 +178,22 @@ describe("Settings page", () => {
       expect(confirmSlackInstallMock).toHaveBeenCalledWith("inst-1");
       expect(await screen.findByText("#intel")).toBeInTheDocument();
       expect(replaceMock).toHaveBeenCalledWith("/settings");
+    });
+
+    it("confirms once under React StrictMode's double effect run", async () => {
+      window.history.replaceState({}, "", "/settings?slack_install=abc");
+      confirmSlackInstallMock
+        .mockResolvedValueOnce({ connected: true, team_name: "Acme", channel_name: "#intel" })
+        .mockRejectedValue(Object.assign(new Error("gone"), { status: 410 }));
+      render(
+        <StrictMode>
+          <Page />
+        </StrictMode>
+      );
+      expect(await screen.findByText("Slack connected.")).toBeInTheDocument();
+      await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/settings"));
+      expect(confirmSlackInstallMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText("Couldn't connect Slack. Try again.")).not.toBeInTheDocument();
     });
 
     it.each([

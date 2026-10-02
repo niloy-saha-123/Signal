@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import {
@@ -33,6 +33,9 @@ export function SettingsClient() {
 
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // StrictMode runs the mount effect twice; the install id is single-use, so the
+  // second confirm would 410 and overwrite "Slack connected."
+  const slackReturnHandled = useRef(false);
 
   useEffect(() => {
     Promise.all([
@@ -61,6 +64,8 @@ export function SettingsClient() {
   // Slack's callback sends the browser back with ?slack_install=<id> (confirm it as the
   // signed-in user) or ?slack=cancelled|error.
   async function handleSlackReturn() {
+    if (slackReturnHandled.current) return;
+    slackReturnHandled.current = true;
     const params = new URLSearchParams(window.location.search);
     const installId = params.get("slack_install");
     const result = params.get("slack");
