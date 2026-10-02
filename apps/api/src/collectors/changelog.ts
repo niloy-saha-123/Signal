@@ -172,6 +172,7 @@ export async function collectFeed(
         title: item.title ?? null,
         raw_text: rawText,
       });
+      if (!signal) continue;
 
       created++;
       await enqueueInitialSignalPipeline(signal.id);

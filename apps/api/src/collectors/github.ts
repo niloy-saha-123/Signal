@@ -390,6 +390,7 @@ async function collectForCompetitor(
         title: artifact.title,
         raw_text: artifact.rawText,
       });
+      if (!signal) continue;
 
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {

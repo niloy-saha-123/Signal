@@ -836,10 +836,13 @@ function assertHttpSourceUrl(sourceUrl: string | null | undefined): void {
   }
 }
 
-export async function createSignal(input: CreateSignalInput): Promise<Signal> {
+// Returns null when signals_competitor_source_url_idx already holds this
+// (competitor, source, url): a concurrent run inserted it first.
+export async function createSignal(input: CreateSignalInput): Promise<Signal | null> {
   assertHttpSourceUrl(input.source_url);
   return db.transaction(async (tx) => {
-    const [row] = await tx.insert(signalsTable).values(input).returning();
+    const [row] = await tx.insert(signalsTable).values(input).onConflictDoNothing().returning();
+    if (!row) return null;
     await tx.insert(signalPipelineOutboxTable).values({ signal_id: row.id });
     return row;
   });

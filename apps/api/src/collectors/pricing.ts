@@ -185,6 +185,7 @@ async function collectForCompetitor(competitor: {
     title: `Pricing change detected (${significance})`,
     raw_text: summarizeDiff(diff, significance),
   });
+  if (!signal) return;
 
   await enqueueInitialSignalPipeline(signal.id);
 }

@@ -126,6 +126,7 @@ async function collectStackoverflow(competitor: Competitor, tag: string, run: Ru
         title: title.slice(0, 300),
         raw_text: `Stack Overflow question tagged [${tag}] (score ${score}, ${answers} answers): ${title}\n\n${bodyText}`.slice(0, 12_000),
       });
+      if (!signal) continue;
       try {
         await enqueueInitialSignalPipeline(signal.id);
       } catch (err) {

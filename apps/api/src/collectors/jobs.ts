@@ -99,6 +99,7 @@ async function collectGreenhouse(competitor: { id: string; greenhouse_token: str
       title: job.title ?? null,
       raw_text: plainContent || job.title || "",
     });
+    if (!signal) continue;
 
     await enqueueInitialSignalPipeline(signal.id);
   }
@@ -121,6 +122,7 @@ async function collectLever(competitor: { id: string; lever_token: string }): Pr
       title: posting.text ?? null,
       raw_text: posting.descriptionPlain || posting.text || "",
     });
+    if (!signal) continue;
 
     await enqueueInitialSignalPipeline(signal.id);
   }

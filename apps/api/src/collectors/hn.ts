@@ -128,6 +128,7 @@ async function collectForCompetitor(
           title: hit.story_title ?? hit.title ?? null,
           raw_text: rawText,
         });
+        if (!signal) continue;
 
         await enqueueInitialSignalPipeline(signal.id);
       } catch (err) {

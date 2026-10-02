@@ -89,6 +89,7 @@ async function collectNews(competitor: Competitor, feedUrl: string): Promise<voi
         title: item.title?.slice(0, 300) ?? null,
         raw_text: rawText,
       });
+      if (!signal) continue;
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
       logger.error("news collector failed to process one item — continuing with the rest", {

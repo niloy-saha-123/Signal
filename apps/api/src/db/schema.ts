@@ -138,6 +138,14 @@ export const signalsTable = pgTable(
     ),
     index("signals_competitor_id_idx").on(table.competitor_id),
     index("signals_created_at_idx").on(table.created_at),
+    // Dedupe key: overlapping runs can both pass the signalExistsBySourceUrl
+    // pre-check, and this makes the second insert a no-op (createSignal
+    // returns null). pricing and website re-emit the same page URL for every
+    // diff by design, so they are excluded. A new snapshot-style source must
+    // be added to this list. NULL source_url rows never conflict.
+    uniqueIndex("signals_competitor_source_url_idx")
+      .on(table.competitor_id, table.source, table.source_url)
+      .where(sql`${table.source} NOT IN ('pricing', 'website')`),
     index("signals_quality_score_idx").on(table.quality_score),
     index("signals_cluster_id_idx").on(table.cluster_id),
     // IntentAnalyzer's exact query: competitor + source + 7-day window.

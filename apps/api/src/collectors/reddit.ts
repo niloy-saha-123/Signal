@@ -175,6 +175,7 @@ async function collectForCompetitor(
               title: post.title ?? null,
               raw_text: rawText,
             });
+            if (!signal) continue;
 
             await enqueueInitialSignalPipeline(signal.id);
           } catch (err) {

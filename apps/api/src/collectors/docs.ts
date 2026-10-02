@@ -165,6 +165,7 @@ async function emit(competitorId: string, sourceUrl: string, title: string, rawT
     title,
     raw_text: rawText.slice(0, MAX_SIGNAL_CHARS),
   });
+  if (!signal) return;
   try {
     await enqueueInitialSignalPipeline(signal.id);
   } catch (err) {
