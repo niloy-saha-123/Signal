@@ -695,6 +695,32 @@ export const predictionRoadmapLinksTable = pgTable(
   ]
 );
 
+// ── api_tokens ───────────────────────────────────────────────────────────
+// Workspace bearer tokens for the MCP endpoint. Only a sha256 of the token is
+// stored: tokens are 256 random bits, so a fast hash is enough and lets the
+// middleware look a token up by an indexed equality match. prefix is the
+// first characters, kept so Settings can tell tokens apart.
+export const apiTokensTable = pgTable(
+  "api_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    created_by: text("created_by"),
+    name: text("name").notNull(),
+    token_hash: text("token_hash").notNull().unique(),
+    prefix: text("prefix").notNull(),
+    last_used_at: timestamp("last_used_at", { withTimezone: true }),
+    revoked_at: timestamp("revoked_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("api_tokens_name_check", sql`char_length(${table.name}) BETWEEN 1 AND 60`),
+    index("api_tokens_workspace_id_idx").on(table.workspace_id),
+  ]
+);
+
 // ── company_profile ──────────────────────────────────────────────────────
 // Single-row table for now (single-tenant). When multi-tenancy is added,
 // add org_id and a unique constraint on org_id — this table's shape

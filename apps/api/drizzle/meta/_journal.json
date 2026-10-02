@@ -162,6 +162,13 @@
       "when": 1790935449134,
       "tag": "0022_add_prediction_roadmap_links",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790964378934,
+      "tag": "0023_add_api_tokens",
+      "breakpoints": true
     }
   ]
 }
