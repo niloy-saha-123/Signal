@@ -258,9 +258,13 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // second answer into the same thread, and a duplicate answer in a channel is
   // worse than a missing one.
   "slack-question": { concurrency: 3, attempts: 1 },
-  // Weekly Slack digest coordinator. attempts: 1 — a retry would re-post the
-  // digest to every workspace that already got it.
-  "slack-digest": { concurrency: 1, attempts: 1 },
+  // Weekly Slack digest coordinator. Retry-safe: each workspace's send is
+  // claimed per ISO week in Redis, so a retry skips workspaces already served.
+  "slack-digest": {
+    concurrency: 1,
+    attempts: 3,
+    backoff: { type: "exponential", delay: 60_000 },
+  },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds

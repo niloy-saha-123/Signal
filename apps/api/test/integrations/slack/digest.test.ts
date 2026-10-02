@@ -25,6 +25,8 @@ function makeDeps(overrides: Partial<SlackDigestDeps> = {}): SlackDigestDeps {
     listInstallations: vi.fn().mockResolvedValue([install("w1")]),
     getWeeklyDigest: vi.fn().mockResolvedValue(BUSY),
     postMessage: vi.fn().mockResolvedValue({ ts: "1" }),
+    claimDigestSend: vi.fn().mockResolvedValue(true),
+    releaseDigestSend: vi.fn().mockResolvedValue(undefined),
     appUrl: "https://app.test",
     now: () => NOW,
     ...overrides,
@@ -59,5 +61,24 @@ describe("runSlackDigest", () => {
     });
     await expect(runSlackDigest(deps)).rejects.toThrow(/1 of 2/);
     expect(deps.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("posts nothing to a workspace that already got this week's digest", async () => {
+    const deps = makeDeps({ claimDigestSend: vi.fn().mockResolvedValue(false) });
+    await runSlackDigest(deps);
+    expect(deps.claimDigestSend).toHaveBeenCalledWith("w1", "2026-W41");
+    expect(deps.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a quiet week", async () => {
+    const deps = makeDeps({ getWeeklyDigest: vi.fn().mockResolvedValue(QUIET) });
+    await runSlackDigest(deps);
+    expect(deps.claimDigestSend).not.toHaveBeenCalled();
+  });
+
+  it("releases the claim when the post fails so a retry can send", async () => {
+    const deps = makeDeps({ postMessage: vi.fn().mockRejectedValue(new Error("boom")) });
+    await expect(runSlackDigest(deps)).rejects.toThrow(/1 of 1/);
+    expect(deps.releaseDigestSend).toHaveBeenCalledWith("w1", "2026-W41");
   });
 });
