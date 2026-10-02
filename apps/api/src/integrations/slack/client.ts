@@ -26,6 +26,16 @@ interface SlackApiResponse {
   channel?: string;
 }
 
+// ok:false answers that mean Slack itself is struggling. Every other error code
+// (not_in_channel, invalid_auth, token_revoked, ...) is one workspace's problem
+// and must not count against the breaker shared by every workspace.
+const TRANSPORT_ERRORS = new Set([
+  "ratelimited",
+  "service_unavailable",
+  "fatal_error",
+  "internal_error",
+]);
+
 async function slackPost(
   method: string,
   token: string,
@@ -51,8 +61,8 @@ async function slackPost(
   const parsed = JSON.parse(await response.text()) as SlackApiResponse;
   // The 200-with-ok:false case. Without this, every delivery failure looks like
   // a success.
-  if (!parsed.ok) {
-    throw new Error(`Slack ${method} failed: ${parsed.error ?? "unknown_error"}`);
+  if (!parsed.ok && TRANSPORT_ERRORS.has(parsed.error ?? "")) {
+    throw new Error(`Slack ${method} failed: ${parsed.error}`);
   }
   return parsed;
 }
@@ -76,6 +86,9 @@ export async function postMessage(input: PostMessageInput): Promise<{ ts: string
       ...(input.thread_ts ? { thread_ts: input.thread_ts } : {}),
     })
   );
+  if (!result.ok) {
+    throw new Error(`Slack chat.postMessage failed: ${result.error ?? "unknown_error"}`);
+  }
   return { ts: result.ts ?? "" };
 }
 
