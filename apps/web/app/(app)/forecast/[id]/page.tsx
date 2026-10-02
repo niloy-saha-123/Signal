@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AskButton } from "@/components/AskButton";
+import { RoadmapLinks } from "@/components/forecast/RoadmapLinks";
 import { OutcomeBadge } from "@/components/forecast/parts";
 import { Icon } from "@/components/ui/icons";
 import { Badge, Card, CardBody, CardHeader, Probability, SourceChip } from "@/components/ui/primitives";
@@ -128,6 +129,13 @@ export default async function PredictionDetailPage({ params }: { params: Promise
             </CardBody>
           </Card>
         )}
+
+        <Card>
+          <CardHeader title="Roadmap" description="The roadmap items this forecast affects." />
+          <CardBody>
+            <RoadmapLinks predictionId={prediction.id} initialLinks={prediction.roadmap_links} />
+          </CardBody>
+        </Card>
 
         <Card>
           <CardHeader

@@ -1,0 +1,131 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { createMock, updateMock, deleteMock } = vi.hoisted(() => ({
+  createMock: vi.fn(),
+  updateMock: vi.fn(),
+  deleteMock: vi.fn(),
+}));
+
+vi.mock("../../lib/api", () => {
+  class ApiError extends Error {
+    constructor(public status: number) {
+      super(`status ${status}`);
+    }
+  }
+  return { ApiError, createRoadmapLink: createMock, updateRoadmapLink: updateMock, deleteRoadmapLink: deleteMock };
+});
+
+import { RoadmapLinks } from "../../components/forecast/RoadmapLinks";
+import { ApiError, type RoadmapLink } from "../../lib/api";
+
+function link(n: number, overrides: Partial<RoadmapLink> = {}): RoadmapLink {
+  return {
+    id: `l${n}`,
+    workspace_id: "w",
+    prediction_id: "p1",
+    title: `Item ${n}`,
+    url: `https://tracker.example.com/${n}`,
+    stance: "watching",
+    created_by: null,
+    created_at: "2026-10-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const err = (status: number) => new (ApiError as unknown as new (s: number) => Error)(status);
+
+beforeEach(() => {
+  createMock.mockReset();
+  updateMock.mockReset();
+  deleteMock.mockReset();
+});
+
+describe("RoadmapLinks", () => {
+  it("renders each link as a safe external anchor with its host", () => {
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    const a = screen.getByRole("link", { name: "Item 1" });
+    expect(a).toHaveAttribute("href", "https://tracker.example.com/1");
+    expect(a).toHaveAttribute("target", "_blank");
+    expect(a).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText("tracker.example.com")).toBeInTheDocument();
+  });
+
+  it("shows the current stance and saves a change", async () => {
+    updateMock.mockResolvedValue(link(1, { stance: "accelerate" }));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    const select = screen.getByRole("combobox", { name: "Stance for Item 1" });
+    expect(select).toHaveValue("watching");
+    fireEvent.change(select, { target: { value: "accelerate" } });
+    await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p1", "l1", { stance: "accelerate" }));
+    expect(select).toHaveValue("accelerate");
+  });
+
+  it("removes a row", async () => {
+    deleteMock.mockResolvedValue(undefined);
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Item 1" }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("p1", "l1"));
+    expect(screen.queryByText("Item 1")).toBeNull();
+  });
+
+  it("adds a link with the default stance", async () => {
+    createMock.mockResolvedValue(link(2, { title: "New one", url: "https://a.example.org/x" }));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[]} />);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "New one" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://a.example.org/x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith("p1", { title: "New one", url: "https://a.example.org/x", stance: "watching" })
+    );
+    expect(await screen.findByRole("link", { name: "New one" })).toBeInTheDocument();
+  });
+
+  it.each([
+    [409, "This forecast already has 10 roadmap links."],
+    [400, "Enter a title and an http(s) link."],
+    [500, "Couldn't save. Try again."],
+  ])("shows the add error for %i", async (status, message) => {
+    createMock.mockRejectedValue(err(status));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[]} />);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://a.example.org" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  });
+
+  it("reverts a failed stance change", async () => {
+    updateMock.mockRejectedValue(err(404));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    const select = screen.getByRole("combobox", { name: "Stance for Item 1" });
+    fireEvent.change(select, { target: { value: "deprioritize" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
+    expect(select).toHaveValue("watching");
+  });
+
+  it("restores a row whose removal failed", async () => {
+    deleteMock.mockRejectedValue(err(404));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1), link(2)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Item 1" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(within(items[0]).getByText("Item 1")).toBeInTheDocument();
+  });
+
+  it("hides the add form at the 10 link limit", () => {
+    render(<RoadmapLinks predictionId="p1" initialLinks={Array.from({ length: 10 }, (_, i) => link(i))} />);
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
+
+  it("shows the empty state", () => {
+    render(<RoadmapLinks predictionId="p1" initialLinks={[]} />);
+    expect(screen.getByText("Link the roadmap items this forecast affects.")).toBeInTheDocument();
+  });
+
+  it("hides controls when read-only", () => {
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} readOnly />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+});

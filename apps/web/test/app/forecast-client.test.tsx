@@ -42,6 +42,23 @@ describe("ForecastClient", () => {
     expect(screen.getByText("No open forecasts")).toBeInTheDocument();
   });
 
+  it("shows a roadmap item count only when there are links", () => {
+    render(
+      <ForecastClient
+        calibration={EMPTY}
+        competitors={competitors}
+        predictions={[
+          prediction({ id: "a", statement: "Has two", roadmap_link_count: 2 }),
+          prediction({ id: "b", statement: "Has none", roadmap_link_count: 0 }),
+          prediction({ id: "c", statement: "Has one", roadmap_link_count: 1 }),
+        ]}
+      />
+    );
+    expect(screen.getByText("2 roadmap items")).toBeInTheDocument();
+    expect(screen.getByText("1 roadmap item")).toBeInTheDocument();
+    expect(screen.getAllByText(/roadmap item/)).toHaveLength(2);
+  });
+
   it("orders open forecasts by the date they settle", () => {
     render(
       <ForecastClient

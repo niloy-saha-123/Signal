@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Icon } from "@/components/ui/icons";
 import { Badge, Probability, Tabs } from "@/components/ui/primitives";
 import type { PredictionRow } from "@/lib/api";
 import { daysUntil, formatDate, patternLabel } from "@/lib/format";
@@ -28,6 +29,7 @@ export function ForecastAreaTabs({ active }: { active: "forecasts" | "scorecard"
 export function ForecastCard({ prediction, competitor }: { prediction: PredictionRow; competitor: string }) {
   const open = prediction.status === "open";
   const days = daysUntil(prediction.resolves_at);
+  const linkCount = prediction.roadmap_link_count ?? 0;
   return (
     <li>
       <Link
@@ -50,6 +52,12 @@ export function ForecastCard({ prediction, competitor }: { prediction: Predictio
               : `Settled ${formatDate(prediction.resolved_at ?? prediction.resolves_at)}`}
             {` · ${prediction.evidence_count} signal${prediction.evidence_count === 1 ? "" : "s"} behind it`}
           </p>
+          {linkCount > 0 ? (
+            <p className="mt-1.5 inline-flex items-center gap-1.5 text-[13px] text-ink-muted">
+              <Icon name="link" className="h-3.5 w-3.5" />
+              {linkCount} roadmap item{linkCount === 1 ? "" : "s"}
+            </p>
+          ) : null}
         </div>
         <div className="shrink-0 text-right">
           <Probability value={prediction.probability} meter={open} />
