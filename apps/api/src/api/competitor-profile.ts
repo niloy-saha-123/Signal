@@ -265,6 +265,9 @@ export async function loadCompetitorProfile(
     ),
   ]);
 
+  // listSignalFeed returns limit + 1 rows as a pagination sentinel
+  const recentSignals = signals.slice(0, 50);
+
   return {
     competitor,
     score: scoreSummary(scores),
@@ -272,7 +275,7 @@ export async function loadCompetitorProfile(
     trend: trendSeries(scores.slice(0, 30), volume, competitorId),
     hiring: computeHiringDeltas(jobs, 30, now),
     forecasts: [...forecasts].sort((a, b) => a.resolves_at.getTime() - b.resolves_at.getTime()),
-    signals,
-    coverage: coverageFor(competitor, signals),
+    signals: recentSignals,
+    coverage: coverageFor(competitor, recentSignals),
   };
 }

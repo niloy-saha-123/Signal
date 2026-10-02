@@ -221,6 +221,16 @@ describe("loadCompetitorProfile", () => {
     expect(p!.forecasts.map((f: any) => f.id)).toEqual(["a", "b"]);
   });
 
+  it("trims the feed's pagination sentinel row so at most 50 signals come back", async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => ({
+      source: i === 50 ? "docs" : "reddit",
+    }));
+    const deps = makeDeps({ listSignalFeed: vi.fn(async () => rows) as any });
+    const p = await loadCompetitorProfile(WS, ID, deps, NOW);
+    expect(p!.signals).toHaveLength(50);
+    expect(stateOf(p!.coverage, "docs")).not.toBe("Reporting");
+  });
+
   it("queries the last 30 days of signals, capped at 50", async () => {
     const deps = makeDeps();
     await loadCompetitorProfile(WS, ID, deps, NOW);
