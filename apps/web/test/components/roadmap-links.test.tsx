@@ -107,7 +107,7 @@ describe("RoadmapLinks", () => {
   });
 
   it("restores a row whose removal failed", async () => {
-    deleteMock.mockRejectedValue(err(404));
+    deleteMock.mockRejectedValue(err(500));
     render(<RoadmapLinks predictionId="p1" initialLinks={[link(1), link(2)]} />);
     fireEvent.click(screen.getByRole("button", { name: "Remove Item 1" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
@@ -116,15 +116,51 @@ describe("RoadmapLinks", () => {
     expect(within(items[0]).getByText("Item 1")).toBeInTheDocument();
   });
 
-  it("re-syncs from the server after a 404 on remove", async () => {
+  it("treats a 404 on remove as already gone: no error, re-synced", async () => {
     deleteMock.mockRejectedValue(err(404));
     getMock.mockResolvedValue({ roadmap_links: [link(2)] });
     render(<RoadmapLinks predictionId="p1" initialLinks={[link(1), link(2)]} />);
     fireEvent.click(screen.getByRole("button", { name: "Remove Item 1" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
-    await waitFor(() => expect(screen.queryByText("Item 1")).toBeNull());
-    expect(getMock).toHaveBeenCalledWith("p1");
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("p1"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Item 1")).toBeNull();
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("keeps the row removed on a 404 even if the re-sync fails", async () => {
+    deleteMock.mockRejectedValue(err(404));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1), link(2)]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Item 1" }));
+    await waitFor(() => expect(getMock).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Item 1")).toBeNull();
+  });
+
+  it("re-syncs from the server after a 409 on add", async () => {
+    createMock.mockRejectedValue(err(409));
+    getMock.mockResolvedValue({ roadmap_links: [link(1), link(2)] });
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://a.example.org" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already has 10 roadmap links");
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
+    expect(getMock).toHaveBeenCalledWith("p1");
+  });
+
+  it("disables the add form while a request is in flight", async () => {
+    let resolve!: (v: unknown) => void;
+    createMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[]} />);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://a.example.org" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(screen.getByLabelText("Title")).toBeDisabled());
+    expect(screen.getByLabelText("URL")).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "New link stance" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    resolve(link(1));
+    await waitFor(() => expect(screen.getByLabelText("Title")).toBeEnabled());
   });
 
   it("re-syncs from the server after a 404 on a stance change", async () => {

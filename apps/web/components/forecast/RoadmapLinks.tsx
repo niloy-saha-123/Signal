@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { MAX_ROADMAP_LINKS_PER_PREDICTION, ROADMAP_STANCES } from "@signal/shared";
 import { Badge, Button, Select, TextInput } from "@/components/ui/primitives";
 import {
   ApiError,
@@ -12,17 +13,11 @@ import {
   type RoadmapStance,
 } from "@/lib/api";
 
-const MAX_LINKS = 10;
-
-const STANCES: Array<{
-  value: RoadmapStance;
-  label: string;
-  tone: "hit" | "miss" | "neutral";
-}> = [
-  { value: "accelerate", label: "Accelerate", tone: "hit" },
-  { value: "deprioritize", label: "Deprioritize", tone: "miss" },
-  { value: "watching", label: "Watching", tone: "neutral" },
-];
+const STANCE_META: Record<RoadmapStance, { label: string; tone: "hit" | "miss" | "neutral" }> = {
+  accelerate: { label: "Accelerate", tone: "hit" },
+  deprioritize: { label: "Deprioritize", tone: "miss" },
+  watching: { label: "Watching", tone: "neutral" },
+};
 
 function host(url: string): string {
   try {
@@ -34,7 +29,7 @@ function host(url: string): string {
 
 function addErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 409)
-    return `This forecast already has ${MAX_LINKS} roadmap links.`;
+    return `This forecast already has ${MAX_ROADMAP_LINKS_PER_PREDICTION} roadmap links.`;
   if (error instanceof ApiError && error.status === 400)
     return "Enter a title and an http(s) link.";
   return "Couldn't save. Try again.";
@@ -56,9 +51,18 @@ export function RoadmapLinks({
   const [url, setUrl] = useState("");
   const [stance, setStance] = useState<RoadmapStance>("watching");
 
+  async function resync(onFailure?: () => void) {
+    try {
+      setLinks((await getPrediction(predictionId)).roadmap_links);
+    } catch {
+      onFailure?.();
+    }
+  }
+
   async function mutate(
     optimistic: RoadmapLink[],
     call: () => Promise<unknown>,
+    goneIsSuccess = false,
   ) {
     const previous = links;
     setError(null);
@@ -66,12 +70,12 @@ export function RoadmapLinks({
     setLinks(optimistic);
     try {
       await call();
-    } catch {
-      setError("Couldn't save. Try again.");
-      try {
-        setLinks((await getPrediction(predictionId)).roadmap_links);
-      } catch {
-        setLinks(previous);
+    } catch (e) {
+      if (goneIsSuccess && e instanceof ApiError && e.status === 404) {
+        await resync();
+      } else {
+        setError("Couldn't save. Try again.");
+        await resync(() => setLinks(previous));
       }
     } finally {
       setBusy(false);
@@ -89,6 +93,7 @@ export function RoadmapLinks({
     return mutate(
       links.filter((l) => l.id !== link.id),
       () => deleteRoadmapLink(predictionId, link.id),
+      true,
     );
   }
 
@@ -108,6 +113,7 @@ export function RoadmapLinks({
       setStance("watching");
     } catch (e) {
       setError(addErrorMessage(e));
+      if (e instanceof ApiError && e.status === 409) await resync();
     } finally {
       setBusy(false);
     }
@@ -122,8 +128,7 @@ export function RoadmapLinks({
       ) : (
         <ul className="divide-y divide-line">
           {links.map((link) => {
-            const current =
-              STANCES.find((s) => s.value === link.stance) ?? STANCES[2];
+            const current = STANCE_META[link.stance] ?? STANCE_META.watching;
             return (
               <li
                 key={link.id}
@@ -155,9 +160,9 @@ export function RoadmapLinks({
                         void changeStance(link, value as RoadmapStance)
                       }
                     >
-                      {STANCES.map((s) => (
-                        <option key={s.value} value={s.value}>
-                          {s.label}
+                      {ROADMAP_STANCES.map((value) => (
+                        <option key={value} value={value}>
+                          {STANCE_META[value].label}
                         </option>
                       ))}
                     </Select>
@@ -184,7 +189,7 @@ export function RoadmapLinks({
         </p>
       ) : null}
 
-      {readOnly || links.length >= MAX_LINKS ? null : (
+      {readOnly || links.length >= MAX_ROADMAP_LINKS_PER_PREDICTION ? null : (
         <form
           onSubmit={add}
           className="mt-4 grid gap-3 sm:grid-cols-[1fr_1.4fr_auto_auto] sm:items-end"
@@ -192,6 +197,7 @@ export function RoadmapLinks({
           <TextInput
             label="Title"
             value={title}
+            disabled={busy}
             maxLength={200}
             onChange={(e) => setTitle(e.target.value)}
             required
@@ -200,17 +206,19 @@ export function RoadmapLinks({
             label="URL"
             type="url"
             value={url}
+            disabled={busy}
             onChange={(e) => setUrl(e.target.value)}
             required
           />
           <Select
             label="New link stance"
             value={stance}
+            disabled={busy}
             onChange={(value) => setStance(value as RoadmapStance)}
           >
-            {STANCES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
+            {ROADMAP_STANCES.map((value) => (
+              <option key={value} value={value}>
+                {STANCE_META[value].label}
               </option>
             ))}
           </Select>

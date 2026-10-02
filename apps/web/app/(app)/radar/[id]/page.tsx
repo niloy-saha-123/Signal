@@ -1,6 +1,7 @@
 // Competitor profile — the PM battlecard: activity score, open forecasts, recent
-// evidence by source, which sources are live, trend and hiring. Secondary fetches
-// degrade to designed empty panels; only the competitor itself is required.
+// evidence by source, which sources are live, trend and hiring. getCompetitorProfile's
+// schema degrades each malformed secondary piece to an empty value, so a bad row blanks
+// one panel instead of the page; only the competitor itself is required.
 //
 // Without a session (dev preview) only the fictional preview competitors render,
 // and never with forecasts.

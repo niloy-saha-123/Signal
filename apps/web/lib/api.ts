@@ -211,15 +211,19 @@ export type CoverageState = "Reporting" | "Watching" | "Looking" | "Not found";
 
 const CompetitorProfileSchema = z.object({
   competitor: z.object({ id: z.string() }).passthrough().transform((value) => value as unknown as Competitor),
-  score: z.object({ score: z.number(), delta_7d: z.number().nullable() }).passthrough().nullable(),
-  history: z.array(z.object({ date: z.string(), score: z.number() })),
-  trend: z.array(TrendChartDataPointSchema),
-  hiring: z.array(HiringChartDataPointSchema),
-  forecasts: z.array(PredictionSchema),
-  signals: z.array(SignalSchema),
-  coverage: z.array(
-    z.object({ source: z.string(), state: z.enum(["Reporting", "Watching", "Looking", "Not found"]) })
-  ),
+  score: z
+    .object({ score: z.number(), delta_7d: z.number().nullable() })
+    .passthrough()
+    .nullable()
+    .catch(null),
+  history: z.array(z.object({ date: z.string(), score: z.number() })).catch([]),
+  trend: z.array(TrendChartDataPointSchema).catch([]),
+  hiring: z.array(HiringChartDataPointSchema).catch([]),
+  forecasts: z.array(PredictionSchema).catch([]),
+  signals: z.array(SignalSchema).catch([]),
+  coverage: z
+    .array(z.object({ source: z.string(), state: z.enum(["Reporting", "Watching", "Looking", "Not found"]) }))
+    .catch([]),
 });
 export type CompetitorProfile = z.infer<typeof CompetitorProfileSchema>;
 

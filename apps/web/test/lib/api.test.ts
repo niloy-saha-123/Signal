@@ -18,6 +18,7 @@ import {
   getCompetitor,
   getCompetitorDiscovery,
   getCompetitorHiring,
+  getCompetitorProfile,
   getCompetitorScore,
   getCompetitorTrend,
   listAlerts,
@@ -390,5 +391,30 @@ describe("lib/api company-profile endpoints", () => {
       saveCompanyProfile({ icp_industries: [] })
     ).rejects.toThrow();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+
+  it("getCompetitorProfile degrades a malformed piece instead of failing the whole profile", async () => {
+    mockFetchOnce(200, {
+      competitor: { id: "c1", name: "Acme" },
+      score: { score: 70, delta_7d: null, components: {} },
+      history: [{ date: "2026-10-01", score: 70 }],
+      trend: [],
+      hiring: [],
+      forecasts: [],
+      signals: [{ id: "s1", title: 42 }],
+      coverage: [{ source: "hn", state: "Reporting" }],
+    });
+    const profile = await getCompetitorProfile("c1");
+    expect(profile.competitor.id).toBe("c1");
+    expect(profile.signals).toEqual([]);
+    expect(profile.score?.score).toBe(70);
+    expect(profile.history).toHaveLength(1);
+    expect(profile.coverage).toHaveLength(1);
+  });
+
+  it("getCompetitorProfile still rejects a malformed competitor", async () => {
+    mockFetchOnce(200, { competitor: {}, score: null });
+    await expect(getCompetitorProfile("c1")).rejects.toThrow();
   });
 });
