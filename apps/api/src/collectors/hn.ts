@@ -2,7 +2,12 @@
 import type { Job } from "bullmq";
 import { z } from "zod";
 import { withRetry } from "../lib/retry";
-import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
+import {
+  isCircuitOpen,
+  isCircuitMarkedOpen,
+  recordFailure,
+  recordSuccess,
+} from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
@@ -189,7 +194,7 @@ export async function hnCollectorProcessor(_job: Job<CollectorJobData>): Promise
       // re-check before every attempt so the remaining competitors don't
       // each still pay the full withRetry cost against a dependency the
       // breaker just confirmed is down.
-      if (await isCircuitOpen(SERVICE_NAME)) {
+      if (await isCircuitMarkedOpen(SERVICE_NAME)) {
         circuitTrippedMidRun = true;
         logger.warn("hn circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,

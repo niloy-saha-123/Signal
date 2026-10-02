@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -51,7 +52,7 @@ vi.mock("@/lib/retry", () => ({
 }));
 
 import { githubCollectorProcessor } from "@/collectors/github";
-import { isCircuitOpen, recordSuccess, recordFailure } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, isCircuitMarkedOpen, recordSuccess, recordFailure } from "@/reliability/circuit-breaker";
 import type { Job } from "bullmq";
 
 const job = {} as Job<Record<string, never>>;
@@ -109,6 +110,7 @@ describe("github collector", () => {
     signalExistsBySourceUrlMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async () => ({ id: "signal-1" }));
     vi.mocked(isCircuitOpen).mockResolvedValue(false);
+    vi.mocked(isCircuitMarkedOpen).mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -340,5 +342,21 @@ describe("github collector", () => {
 
     const [, init] = safeFetchMock.mock.calls[0];
     expect(init.headers.Authorization).toBe("Bearer test-token");
+  });
+
+  it("runs every competitor and closes the circuit during a half-open trial", async () => {
+    // The start check claims the trial, so any later claiming check reads "open".
+    listCompetitorsMock.mockResolvedValue([
+      { id: "comp-1", name: "Acme", is_active: true, github_org: "acme" },
+      { id: "comp-2", name: "Beta", is_active: true, github_org: "beta" },
+    ]);
+    safeFetchMock.mockResolvedValue({ status: 200, headers: new Headers(), text: async () => "[]" });
+    vi.mocked(isCircuitOpen).mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await githubCollectorProcessor(job);
+
+    const urls = safeFetchMock.mock.calls.map(([url]) => url as string);
+    expect(urls.some((u) => u.includes("/orgs/beta/repos"))).toBe(true);
+    expect(recordSuccess).toHaveBeenCalledWith("github");
   });
 });

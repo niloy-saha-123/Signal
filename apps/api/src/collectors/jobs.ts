@@ -15,7 +15,12 @@ import type { Job } from "bullmq";
 import * as cheerio from "cheerio";
 import { z } from "zod";
 import { withRetry } from "../lib/retry";
-import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
+import {
+  isCircuitOpen,
+  isCircuitMarkedOpen,
+  recordFailure,
+  recordSuccess,
+} from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
@@ -188,7 +193,7 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
 
   for (const competitor of competitors) {
     if (competitor.greenhouse_token && greenhouseStillClosed) {
-      if (await isCircuitOpen(GREENHOUSE_SERVICE)) {
+      if (await isCircuitMarkedOpen(GREENHOUSE_SERVICE)) {
         greenhouseStillClosed = false;
         greenhouseTrippedMidRun = true;
         logger.warn("greenhouse circuit opened mid-run — stopping before remaining competitors", {
@@ -212,7 +217,7 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
     }
 
     if (competitor.lever_token && leverStillClosed) {
-      if (await isCircuitOpen(LEVER_SERVICE)) {
+      if (await isCircuitMarkedOpen(LEVER_SERVICE)) {
         leverStillClosed = false;
         leverTrippedMidRun = true;
         logger.warn("lever circuit opened mid-run — stopping before remaining competitors", {

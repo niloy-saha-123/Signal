@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -39,7 +40,7 @@ vi.mock("@/pipeline/recovery", () => ({
   enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
-import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, isCircuitMarkedOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import { hnCollectorProcessor, initHnWorker } from "@/collectors/hn";
 
 const activeCompetitor = { id: "c1", name: "Acme", is_active: true };
@@ -60,6 +61,7 @@ describe("collectors/hn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (isCircuitMarkedOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([activeCompetitor, inactiveCompetitor]);
     getCompetitorByIdMock.mockResolvedValue(activeCompetitor);
     getLatestSignalCollectedAtMock.mockResolvedValue(undefined);
@@ -370,8 +372,7 @@ describe("collectors/hn", () => {
   it("stops attempting remaining competitors once the circuit trips mid-run", async () => {
     const secondCompetitor = { id: "c2b", name: "Later", is_active: true };
     listCompetitorsMock.mockResolvedValue([activeCompetitor, secondCompetitor]);
-    (isCircuitOpen as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(false) // initial job-level check
+    (isCircuitMarkedOpen as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(false) // before competitor 1
       .mockResolvedValueOnce(true); // before competitor 2 — breaks
 
@@ -385,6 +386,19 @@ describe("collectors/hn", () => {
     // this same collector) — recordSuccess must not fire on this exit path,
     // even though every competitor actually attempted came back clean.
     expect(recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("runs every competitor and closes the circuit during a half-open trial", async () => {
+    // The start check claims the trial, so any later claiming check reads "open".
+    const secondCompetitor = { id: "c2b", name: "Later", is_active: true };
+    listCompetitorsMock.mockResolvedValue([activeCompetitor, secondCompetitor]);
+    (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await hnCollectorProcessor({} as never);
+
+    const queries = fetchMock.mock.calls.filter((call: any[]) => call[0].includes("hn.algolia.com"));
+    expect(queries).toHaveLength(2);
+    expect(recordSuccess).toHaveBeenCalledWith("hn");
   });
 
   it("registers the collect-hn worker via initHnWorker without registering at import time", () => {

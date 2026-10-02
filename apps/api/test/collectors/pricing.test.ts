@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -69,7 +70,7 @@ vi.mock("playwright", () => ({
   chromium: { launch: launchMock },
 }));
 
-import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, isCircuitMarkedOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import { pricingCollectorProcessor, initPricingWorker } from "@/collectors/pricing";
 
 const competitorWithPricing = {
@@ -98,6 +99,7 @@ describe("collectors/pricing", () => {
     vi.clearAllMocks();
     process.env.ENABLE_PLAYWRIGHT = "true";
     (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (isCircuitMarkedOpen as ReturnType<typeof vi.fn>).mockResolvedValue(false);
 
     listCompetitorsMock.mockResolvedValue([
       competitorWithPricing,
@@ -370,8 +372,7 @@ describe("collectors/pricing", () => {
   it("stops attempting remaining competitors once the circuit trips mid-run", async () => {
     const secondCompetitor = { id: "c4", name: "Gamma", is_active: true, pricing_url: "https://gamma.com/pricing" };
     listCompetitorsMock.mockResolvedValue([competitorWithPricing, secondCompetitor]);
-    (isCircuitOpen as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(false) // initial job-level check
+    (isCircuitMarkedOpen as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(false) // before competitor 1
       .mockResolvedValueOnce(true); // before competitor 2 — breaks
 
@@ -387,6 +388,18 @@ describe("collectors/pricing", () => {
     // this same collector) — recordSuccess must not fire on this exit path,
     // even though every competitor actually attempted came back clean.
     expect(recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("runs every competitor and closes the circuit during a half-open trial", async () => {
+    // The start check claims the trial, so any later claiming check reads "open".
+    const secondCompetitor = { id: "c4", name: "Gamma", is_active: true, pricing_url: "https://gamma.com/pricing" };
+    listCompetitorsMock.mockResolvedValue([competitorWithPricing, secondCompetitor]);
+    (isCircuitOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await pricingCollectorProcessor({} as never);
+
+    expect(createPricingBaselineMock).toHaveBeenCalledTimes(2);
+    expect(recordSuccess).toHaveBeenCalledWith("pricing");
   });
 
   it("registers the collect-pricing worker via initPricingWorker without registering at import time", () => {

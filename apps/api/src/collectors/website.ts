@@ -13,7 +13,12 @@
 import type { Job } from "bullmq";
 import * as cheerio from "cheerio";
 import { withRetry } from "../lib/retry";
-import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
+import {
+  isCircuitOpen,
+  isCircuitMarkedOpen,
+  recordFailure,
+  recordSuccess,
+} from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
@@ -225,7 +230,7 @@ export async function websiteCollectorProcessor(_job: Job<WebsiteCollectJobData>
     let stoppedEarly = false;
 
     for (const competitor of competitors) {
-      if (await isCircuitOpen(SERVICE_NAME)) {
+      if (await isCircuitMarkedOpen(SERVICE_NAME)) {
         stoppedEarly = true;
         logger.warn("website circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,
