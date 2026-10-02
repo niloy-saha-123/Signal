@@ -23,6 +23,7 @@ import type {
   PredictionPatternType,
   PredictionStatus,
   ResolutionCriteria,
+  RoadmapStance,
   SignalSource,
 } from "@signal/shared";
 
@@ -662,6 +663,35 @@ export const predictionsTable = pgTable(
     index("predictions_competitor_created_idx").on(table.competitor_id, table.created_at),
     // The calibration aggregate: every resolved prediction in a workspace.
     index("predictions_workspace_status_idx").on(table.workspace_id, table.status),
+  ]
+);
+
+// ── prediction_roadmap_links ─────────────────────────────────────────────
+// A team's own roadmap items tied to a forecast, with what the team decided
+// because of it (stance). When the forecast settles, the ledger shows whether
+// that call was right. URL is rendered as an href: http(s) only, enforced by
+// zod at the route and by CHECK here.
+export const predictionRoadmapLinksTable = pgTable(
+  "prediction_roadmap_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspacesTable.id, { onDelete: "cascade" }),
+    prediction_id: uuid("prediction_id")
+      .notNull()
+      .references(() => predictionsTable.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    stance: text("stance").$type<RoadmapStance>().notNull().default("watching"),
+    created_by: text("created_by"),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("prediction_roadmap_links_title_check", sql`char_length(${table.title}) BETWEEN 1 AND 200`),
+    check("prediction_roadmap_links_url_check", sql`${table.url} ~* '^https?://' AND char_length(${table.url}) <= 2000`),
+    check("prediction_roadmap_links_stance_check", sql`${table.stance} IN ('accelerate', 'deprioritize', 'watching')`),
+    index("prediction_roadmap_links_prediction_id_idx").on(table.prediction_id),
   ]
 );
 

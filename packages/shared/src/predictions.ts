@@ -100,3 +100,29 @@ export const PredictionSchema = z.object({
   created_at: z.string().datetime(),
 });
 export type Prediction = z.infer<typeof PredictionSchema>;
+
+export const ROADMAP_STANCES = ["accelerate", "deprioritize", "watching"] as const;
+export const RoadmapStanceSchema = z.enum(ROADMAP_STANCES);
+export type RoadmapStance = (typeof ROADMAP_STANCES)[number];
+export const MAX_ROADMAP_LINKS_PER_PREDICTION = 10;
+
+// The URL is rendered as an href, so only http(s) is accepted (z.url() alone
+// allows javascript: and data:).
+export const RoadmapLinkCreateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    url: z
+      .string()
+      .trim()
+      .max(2000)
+      .url()
+      .refine((u) => /^https?:\/\//i.test(u), "http(s) only"),
+    stance: RoadmapStanceSchema.default("watching"),
+  })
+  .strict();
+
+export const RoadmapLinkUpdateSchema = z
+  .object({ title: z.string().trim().min(1).max(200), stance: RoadmapStanceSchema })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, "nothing to update");

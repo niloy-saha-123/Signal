@@ -15,6 +15,8 @@ import {
   type CompetitorCreateInput,
   type ChatAgentResult,
   PredictionSchema,
+  RoadmapStanceSchema,
+  type RoadmapStance,
   type DiscoveryStatus,
   type PredictionPatternType,
   type PredictionStatus,
@@ -203,6 +205,30 @@ export async function getCompetitorHiring(
     token
   );
   return raw.data.map((row) => HiringChartDataPointSchema.parse(row));
+}
+
+export type CoverageState = "Reporting" | "Watching" | "Looking" | "Not found";
+
+const CompetitorProfileSchema = z.object({
+  competitor: z.object({ id: z.string() }).passthrough().transform((value) => value as unknown as Competitor),
+  score: z
+    .object({ score: z.number(), delta_7d: z.number().nullable() })
+    .passthrough()
+    .nullable()
+    .catch(null),
+  history: z.array(z.object({ date: z.string(), score: z.number() })).catch([]),
+  trend: z.array(TrendChartDataPointSchema).catch([]),
+  hiring: z.array(HiringChartDataPointSchema).catch([]),
+  forecasts: z.array(PredictionSchema).catch([]),
+  signals: z.array(SignalSchema).catch([]),
+  coverage: z
+    .array(z.object({ source: z.string(), state: z.enum(["Reporting", "Watching", "Looking", "Not found"]) }))
+    .catch([]),
+});
+export type CompetitorProfile = z.infer<typeof CompetitorProfileSchema>;
+
+export async function getCompetitorProfile(id: string, token?: string): Promise<CompetitorProfile> {
+  return CompetitorProfileSchema.parse(await request(`/api/competitors/${id}/profile`, undefined, token));
 }
 
 const CompetitorDiscoverySchema = z.object({
@@ -618,10 +644,29 @@ export async function disconnectSlack(): Promise<void> {
 // brier_score is null while open and null for unresolved/void — those carry no
 // information about accuracy. Render the absence; never coerce it to 0, because
 // zero is a perfect Brier score.
-export type PredictionRow = z.infer<typeof PredictionSchema>;
+// roadmap_link_count is optional: the competitor profile endpoint reuses
+// PredictionSchema and does not return it.
+const PredictionRowSchema = PredictionSchema.extend({
+  roadmap_link_count: z.number().int().nonnegative().optional(),
+});
+export type PredictionRow = z.infer<typeof PredictionRowSchema>;
+
+export const RoadmapLinkSchema = z.object({
+  id: z.string().uuid(),
+  workspace_id: z.string().uuid(),
+  prediction_id: z.string().uuid(),
+  title: z.string(),
+  url: z.string(),
+  stance: RoadmapStanceSchema,
+  created_by: z.string().nullable(),
+  created_at: z.string(),
+});
+export type RoadmapLink = z.infer<typeof RoadmapLinkSchema>;
+export type { RoadmapStance };
 
 export interface PredictionDetail extends PredictionRow {
   evidence: Signal[];
+  roadmap_links: RoadmapLink[];
 }
 
 export interface ListPredictionsParams {
@@ -636,9 +681,9 @@ export interface ListPredictionsParams {
 // invariant in this product — null means "nothing resolved", 0 means "a perfect
 // score" — and an unvalidated response is the one place a backend change could
 // flip it silently, with no type error and no failing test.
-const PredictionRowSchema = PredictionSchema;
-const PredictionDetailSchema = PredictionSchema.extend({
+const PredictionDetailSchema = PredictionRowSchema.extend({
   evidence: z.array(SignalSchema),
+  roadmap_links: z.array(RoadmapLinkSchema).default([]),
 });
 
 const CalibrationBucketSchema = z.object({
@@ -676,6 +721,38 @@ export async function listPredictions(
 export async function getPrediction(id: string, token?: string): Promise<PredictionDetail> {
   const res = await request<unknown>(`/api/predictions/${id}`, undefined, token);
   return PredictionDetailSchema.parse(res);
+}
+
+export async function createRoadmapLink(
+  predictionId: string,
+  input: { title: string; url: string; stance: RoadmapStance }
+): Promise<RoadmapLink> {
+  const res = await request<unknown>(`/api/predictions/${predictionId}/links`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return RoadmapLinkSchema.parse(res);
+}
+
+export async function updateRoadmapLink(
+  predictionId: string,
+  linkId: string,
+  patch: { title?: string; stance?: RoadmapStance }
+): Promise<RoadmapLink> {
+  const res = await request<unknown>(`/api/predictions/${predictionId}/links/${linkId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  return RoadmapLinkSchema.parse(res);
+}
+
+// Not via request(): a 204 has no JSON body to parse.
+export async function deleteRoadmapLink(predictionId: string, linkId: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/predictions/${predictionId}/links/${linkId}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => undefined));
 }
 
 export type CalibrationBucket = z.infer<typeof CalibrationBucketSchema>;

@@ -89,8 +89,13 @@ import {
   ragEvalRunsTable,
   workspacesTable,
   workspaceMembersTable,
+  predictionRoadmapLinksTable,
 } from "@/db/schema";
 import {
+  countRoadmapLinksByPrediction,
+  createRoadmapLink,
+  updateRoadmapLink,
+  deleteRoadmapLink,
   getCompetitorsByIds,
   getCompetitorById,
   listCompetitors,
@@ -3111,5 +3116,59 @@ describe("replaceSlackInstallation", () => {
     const { txDelete } = wireTx([]);
     expect(await replaceSlackInstallation(input)).toBeNull();
     expect(txDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe("db/queries — roadmap links", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    insertMock.mockReturnValue({ values: insertValuesMock });
+    insertValuesMock.mockReturnValue({ returning: insertReturningMock });
+    updateMock.mockReturnValue({ set: updateSetMock });
+    updateSetMock.mockReturnValue({ where: updateWhereMock });
+    updateWhereMock.mockReturnValue({ returning: updateReturningMock });
+    deleteMock.mockReturnValue({ where: deleteWhereMock });
+    deleteWhereMock.mockReturnValue({ returning: deleteReturningMock });
+  });
+
+  it("countRoadmapLinksByPrediction returns an empty Map without querying for no ids", async () => {
+    await expect(countRoadmapLinksByPrediction([], "w1")).resolves.toEqual(new Map());
+    expect(selectMock).not.toHaveBeenCalled();
+  });
+
+  it("createRoadmapLink inserts the input and returns the row", async () => {
+    const input = {
+      workspace_id: "w1",
+      prediction_id: "p1",
+      title: "SSO v2",
+      url: "https://linear.app/a/issue/ENG-42",
+      stance: "watching" as const,
+      created_by: null,
+    };
+    insertReturningMock.mockResolvedValue([{ id: "l1", ...input }]);
+    await expect(createRoadmapLink(input)).resolves.toEqual({ id: "l1", ...input });
+    expect(insertMock).toHaveBeenCalledWith(predictionRoadmapLinksTable);
+    expect(insertValuesMock).toHaveBeenCalledWith(input);
+  });
+
+  it("updateRoadmapLink returns null when no row matches", async () => {
+    updateReturningMock.mockResolvedValue([]);
+    await expect(updateRoadmapLink("l1", "p1", "w1", { stance: "accelerate" })).resolves.toBeNull();
+  });
+
+  it("updateRoadmapLink returns the updated row", async () => {
+    updateReturningMock.mockResolvedValue([{ id: "l1", stance: "accelerate" }]);
+    await expect(updateRoadmapLink("l1", "p1", "w1", { stance: "accelerate" })).resolves.toEqual({
+      id: "l1",
+      stance: "accelerate",
+    });
+    expect(updateSetMock).toHaveBeenCalledWith({ stance: "accelerate" });
+  });
+
+  it("deleteRoadmapLink reports whether a row was removed", async () => {
+    deleteReturningMock.mockResolvedValueOnce([]);
+    await expect(deleteRoadmapLink("l1", "p1", "w1")).resolves.toBe(false);
+    deleteReturningMock.mockResolvedValueOnce([{ id: "l1" }]);
+    await expect(deleteRoadmapLink("l1", "p1", "w1")).resolves.toBe(true);
   });
 });

@@ -332,11 +332,13 @@ export function Select({
   label,
   value,
   onChange,
+  disabled,
   children,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -344,8 +346,9 @@ export function Select({
       <span className="sr-only">{label}</span>
       <select
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 rounded-[10px] border border-line-strong bg-surface px-3 text-[14px] font-semibold text-ink focus:border-ink focus:outline-none"
+        className="h-10 rounded-[10px] border border-line-strong bg-surface px-3 text-[14px] font-semibold text-ink focus:border-ink focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
       >
         {children}
       </select>
