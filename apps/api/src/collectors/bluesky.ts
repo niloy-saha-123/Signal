@@ -94,6 +94,7 @@ async function collectBluesky(competitor: Competitor, configured: string): Promi
         title: post.text.trim().split("\n")[0].slice(0, 120),
         raw_text: `Bluesky post by @${handle}:\n\n${post.text}`,
       });
+      if (!signal) continue;
       try {
         await enqueueInitialSignalPipeline(signal.id);
       } catch (err) {

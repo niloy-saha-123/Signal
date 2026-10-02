@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
+const { lookupMock, cbLookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn(), cbLookupMock: vi.fn() }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
+vi.mock("node:dns", () => ({ lookup: cbLookupMock }));
 
-import { isPublicHostname, safeFetch } from "@/lib/safe-fetch";
+import { isPublicHostname, safeFetch, vetLookup } from "@/lib/safe-fetch";
 
 const PUBLIC_ANSWER = [{ address: "93.184.216.34", family: 4 }];
 
@@ -236,5 +237,58 @@ describe("lib/safe-fetch — safeFetch", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("");
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("lib/safe-fetch — connect-time pinning", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lookupMock.mockResolvedValue(PUBLIC_ANSWER);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function resolveTo(addresses: { address: string; family: number }[]) {
+    cbLookupMock.mockImplementation((_host, _opts, cb) => cb(null, addresses));
+  }
+
+  function vet(all: boolean) {
+    return new Promise<{ err: Error | null; address: unknown; family?: number }>((resolve) =>
+      vetLookup("acme.com", { all }, (err, address, family) => resolve({ err, address, family }))
+    );
+  }
+
+  it("hands the vetted public address to the connection", async () => {
+    resolveTo(PUBLIC_ANSWER);
+    expect(await vet(false)).toEqual({ err: null, address: "93.184.216.34", family: 4 });
+    expect((await vet(true)).address).toEqual(PUBLIC_ANSWER);
+  });
+
+  it("refuses at connect time when the host now resolves to a private address", async () => {
+    // A rebind after assertPublicUrl's own lookup lands here.
+    resolveTo([{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.5", family: 4 }]);
+    const { err } = await vet(false);
+    expect(err?.message).toBe("domain resolves to a non-public address");
+  });
+
+  it("refuses a private IPv6 answer and an empty answer", async () => {
+    resolveTo([{ address: "fd00::1", family: 6 }]);
+    expect((await vet(true)).err).toBeInstanceOf(Error);
+    resolveTo([]);
+    expect((await vet(true)).err).toBeInstanceOf(Error);
+  });
+
+  it("passes a lookup error through", async () => {
+    cbLookupMock.mockImplementation((_host, _opts, cb) => cb(new Error("ENOTFOUND")));
+    expect((await vet(false)).err?.message).toBe("ENOTFOUND");
+  });
+
+  it("sends every request through the pinning dispatcher", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", fetchMock);
+    await safeFetch("https://acme.com/");
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
   });
 });

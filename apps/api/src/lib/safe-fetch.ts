@@ -7,12 +7,15 @@
 // followed by hand). Bodies are read through a size-capped reader so a hostile
 // endpoint can't stream hundreds of MB into cheerio/xml2js.
 //
-// Residual: a DNS rebind between our dns.lookup and fetch's own resolution is
-// still theoretically possible — accepted for Phase 0, same class as the
-// analysis-graph AbortSignal debt (docs/tech-debt.md). Closing it needs a
-// custom undici connect() pinned to the vetted IP.
+// DNS rebinding: assertPublicUrl's lookup and the connection's own lookup are
+// separate resolutions, so a rebind between them could reach a private host.
+// Every request therefore goes through an undici Agent whose connect lookup
+// re-vets the answers it hands to the socket (vetLookup): the address checked
+// is the address connected to.
+import { lookup as lookupCallback, type LookupAddress } from "node:dns";
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
+import { Agent } from "undici";
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 5_000_000;
@@ -101,6 +104,26 @@ function isBlockedV6(ip: string): boolean {
   return (b[0] & 0xe0) !== 0x20;
 }
 
+function isBlockedAddress({ address, family }: LookupAddress): boolean {
+  return family === 4 ? isBlockedV4(address) : isBlockedV6(address);
+}
+
+export const vetLookup: LookupFunction = (hostname, options, callback) => {
+  lookupCallback(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) return callback(err, "");
+    const answers = addresses as LookupAddress[];
+    if (answers.length === 0 || answers.some(isBlockedAddress)) {
+      return callback(new Error(NON_PUBLIC_ADDRESS_MESSAGE), "");
+    }
+    if (options.all) return callback(null, answers);
+    callback(null, answers[0].address, answers[0].family);
+  });
+};
+
+// IP-literal hosts skip lookup entirely; assertPublicUrl already vets those
+// and a literal cannot rebind.
+const pinnedAgent = new Agent({ connect: { lookup: vetLookup } });
+
 export async function isPublicHostname(host: string): Promise<boolean> {
   const name = host.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   if (!name) return false;
@@ -115,7 +138,7 @@ export async function isPublicHostname(host: string): Promise<boolean> {
   try {
     const answers = await lookup(name, { all: true });
     if (answers.length === 0) return false;
-    return answers.every((a) => (a.family === 4 ? !isBlockedV4(a.address) : !isBlockedV6(a.address)));
+    return !answers.some(isBlockedAddress);
   } catch {
     return false;
   }
@@ -192,7 +215,12 @@ export async function safeFetch(url: string, init: SafeFetchInit = {}): Promise<
   for (let hop = 0; ; hop++) {
     await assertPublicUrl(current);
     await assertHop?.(current);
-    const res = await fetch(current, { ...requestInit, redirect: "manual" });
+    // `dispatcher` is undici's extension to RequestInit; Node's fetch honours it.
+    const res = await fetch(current, {
+      ...requestInit,
+      redirect: "manual",
+      dispatcher: pinnedAgent,
+    } as unknown as RequestInit);
     const location =
       res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
 

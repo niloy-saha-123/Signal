@@ -15,7 +15,12 @@ import type { Job } from "bullmq";
 import * as cheerio from "cheerio";
 import { z } from "zod";
 import { withRetry } from "../lib/retry";
-import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
+import {
+  isCircuitOpen,
+  isCircuitMarkedOpen,
+  recordFailure,
+  recordSuccess,
+} from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
@@ -94,6 +99,7 @@ async function collectGreenhouse(competitor: { id: string; greenhouse_token: str
       title: job.title ?? null,
       raw_text: plainContent || job.title || "",
     });
+    if (!signal) continue;
 
     await enqueueInitialSignalPipeline(signal.id);
   }
@@ -116,6 +122,7 @@ async function collectLever(competitor: { id: string; lever_token: string }): Pr
       title: posting.text ?? null,
       raw_text: posting.descriptionPlain || posting.text || "",
     });
+    if (!signal) continue;
 
     await enqueueInitialSignalPipeline(signal.id);
   }
@@ -188,7 +195,7 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
 
   for (const competitor of competitors) {
     if (competitor.greenhouse_token && greenhouseStillClosed) {
-      if (await isCircuitOpen(GREENHOUSE_SERVICE)) {
+      if (await isCircuitMarkedOpen(GREENHOUSE_SERVICE)) {
         greenhouseStillClosed = false;
         greenhouseTrippedMidRun = true;
         logger.warn("greenhouse circuit opened mid-run — stopping before remaining competitors", {
@@ -212,7 +219,7 @@ export async function jobsCollectorProcessor(_job: Job<JobsCollectJobData>): Pro
     }
 
     if (competitor.lever_token && leverStillClosed) {
-      if (await isCircuitOpen(LEVER_SERVICE)) {
+      if (await isCircuitMarkedOpen(LEVER_SERVICE)) {
         leverStillClosed = false;
         leverTrippedMidRun = true;
         logger.warn("lever circuit opened mid-run — stopping before remaining competitors", {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -33,7 +34,7 @@ vi.mock("@/lib/safe-fetch", () => ({
 }));
 
 import { changedText, websiteCollectorProcessor } from "@/collectors/website";
-import { recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import type { Job } from "bullmq";
 
 const job = {} as Job<Record<string, never>>;
@@ -80,6 +81,7 @@ describe("changedText", () => {
 describe("website collector", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isCircuitOpen).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([
       { id: "c1", name: "Kestrel", is_active: true, website_urls: ["https://kestrel.dev/"] },
     ]);
@@ -170,5 +172,21 @@ describe("website collector", () => {
     expect(createSnapshotMock).toHaveBeenCalledTimes(1);
     expect(recordFailure).toHaveBeenCalled();
     expect(recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("runs every competitor and closes the circuit during a half-open trial", async () => {
+    // The start check claims the trial, so any later claiming check reads "open".
+    listCompetitorsMock.mockResolvedValue([
+      { id: "c1", name: "Kestrel", is_active: true, website_urls: ["https://kestrel.dev/"] },
+      { id: "c2", name: "Osprey", is_active: true, website_urls: ["https://osprey.dev/"] },
+    ]);
+    getSnapshotMock.mockResolvedValue(undefined);
+    safeFetchMock.mockResolvedValue(page(BEFORE));
+    vi.mocked(isCircuitOpen).mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await websiteCollectorProcessor(job);
+
+    expect(createSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(recordSuccess).toHaveBeenCalled();
   });
 });

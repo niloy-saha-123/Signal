@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/reliability/circuit-breaker", () => ({
   isCircuitOpen: vi.fn().mockResolvedValue(false),
+  isCircuitMarkedOpen: vi.fn().mockResolvedValue(false),
   recordFailure: vi.fn().mockResolvedValue(undefined),
   recordSuccess: vi.fn().mockResolvedValue(undefined),
 }));
@@ -34,7 +35,7 @@ vi.mock("@/pipeline/recovery", () => ({
   enqueueInitialSignalPipeline: enqueueInitialSignalPipelineMock,
 }));
 
-import { isCircuitOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
+import { isCircuitOpen, isCircuitMarkedOpen, recordFailure, recordSuccess } from "@/reliability/circuit-breaker";
 import { jobsCollectorProcessor, initJobsWorker } from "@/collectors/jobs";
 
 const bothTokensCompetitor = {
@@ -91,6 +92,7 @@ describe("collectors/jobs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isCircuitOpenMock().mockResolvedValue(false);
+    vi.mocked(isCircuitMarkedOpen).mockResolvedValue(false);
     listCompetitorsMock.mockResolvedValue([bothTokensCompetitor]);
     signalExistsBySourceUrlMock.mockResolvedValue(false);
     createSignalMock.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -457,12 +459,11 @@ describe("collectors/jobs", () => {
     listCompetitorsMock.mockResolvedValue([bothTokensCompetitor, secondGhCompetitor]);
 
     let greenhouseCallCount = 0;
-    isCircuitOpenMock().mockImplementation(async (service: string) => {
+    vi.mocked(isCircuitMarkedOpen).mockImplementation(async (service: string) => {
       if (service !== "greenhouse") return false;
       greenhouseCallCount += 1;
-      // 1st call: initial job-level check. 2nd: before competitor 1. 3rd:
-      // before competitor 2 — trips here.
-      return greenhouseCallCount >= 3;
+      // 1st peek: before competitor 1. 2nd: before competitor 2 — trips here.
+      return greenhouseCallCount >= 2;
     });
 
     await jobsCollectorProcessor({} as never);
@@ -478,6 +479,30 @@ describe("collectors/jobs", () => {
     // circuit was never observed open, so its recordSuccess is unaffected.
     expect(recordSuccess).not.toHaveBeenCalledWith("greenhouse");
     expect(recordSuccess).toHaveBeenCalledWith("lever");
+  });
+
+  it("runs every competitor and closes the circuit during a half-open trial", async () => {
+    // The start check claims the trial, so any later claiming check reads "open".
+    const secondGhCompetitor = {
+      id: "c2z",
+      name: "SecondGh",
+      is_active: true,
+      greenhouse_token: "second-gh",
+      lever_token: null,
+    };
+    listCompetitorsMock.mockResolvedValue([bothTokensCompetitor, secondGhCompetitor]);
+    let greenhouseChecks = 0;
+    isCircuitOpenMock().mockImplementation(async (service: string) => {
+      if (service !== "greenhouse") return false;
+      greenhouseChecks += 1;
+      return greenhouseChecks > 1;
+    });
+
+    await jobsCollectorProcessor({} as never);
+
+    const urls = fetchMock.mock.calls.map((c: any[]) => c[0]);
+    expect(urls).toContain("https://boards-api.greenhouse.io/v1/boards/second-gh/jobs");
+    expect(recordSuccess).toHaveBeenCalledWith("greenhouse");
   });
 
   it("registers the collect-jobs worker via initJobsWorker without registering at import time", () => {

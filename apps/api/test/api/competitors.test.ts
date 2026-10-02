@@ -739,6 +739,13 @@ describe("POST /api/competitors/:id/field-intel", () => {
     expect(deps.fetchPublicPageText).not.toHaveBeenCalled();
   });
 
+  it("409s when a concurrent submission of the same URL wins the insert", async () => {
+    const deps = makeDeps({ createSignal: vi.fn(async () => null) as any });
+    const res = await call(app(deps), "POST", path, { note: "dup", url: "https://kestrel.dev/pricing" });
+    expect(res.status).toBe(409);
+    expect(deps.enqueueInitialSignalPipeline).not.toHaveBeenCalled();
+  });
+
   it("returns 201 even if enqueueing fails — the outbox row recovers it", async () => {
     const deps = makeDeps({
       enqueueInitialSignalPipeline: vi.fn(async () => { throw new Error("redis down"); }) as any,

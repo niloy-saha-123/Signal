@@ -15,7 +15,12 @@
 // stream would reveal about direction shows up in a PR title first.
 import type { Job } from "bullmq";
 import { withRetry as baseWithRetry } from "../lib/retry";
-import { isCircuitOpen, recordFailure, recordSuccess } from "../reliability/circuit-breaker";
+import {
+  isCircuitOpen,
+  isCircuitMarkedOpen,
+  recordFailure,
+  recordSuccess,
+} from "../reliability/circuit-breaker";
 import { logger } from "../lib/logger";
 import { registerWorker } from "../queues/registry";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
@@ -385,6 +390,7 @@ async function collectForCompetitor(
         title: artifact.title,
         raw_text: artifact.rawText,
       });
+      if (!signal) continue;
 
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
@@ -444,7 +450,7 @@ export async function githubCollectorProcessor(_job: Job<GithubCollectJobData>):
       // re-check before every attempt so the remaining competitors don't each
       // still pay the full withRetry cost against a dependency just confirmed
       // to be down.
-      if (await isCircuitOpen(SERVICE_NAME)) {
+      if (await isCircuitMarkedOpen(SERVICE_NAME)) {
         stoppedEarly = true;
         logger.warn("github circuit opened mid-run — stopping before remaining competitors", {
           competitor_id: competitor.id,

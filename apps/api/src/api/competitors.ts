@@ -623,6 +623,11 @@ export function createCompetitorRouter(
         title: note.split("\n")[0].slice(0, 120),
         raw_text: fieldIntelText(note, url, pageText),
       });
+      // Lost a race with a concurrent submission of the same URL.
+      if (!signal) {
+        res.status(409).json({ error: "duplicate_url" });
+        return;
+      }
       try {
         await deps.enqueueInitialSignalPipeline(signal.id);
       } catch (err) {

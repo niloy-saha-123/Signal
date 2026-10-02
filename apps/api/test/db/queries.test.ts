@@ -1203,7 +1203,9 @@ describe("db/queries — hn collector support", () => {
         raw_text: "Acme just raised a Series B",
       };
       const row = { id: "s1", ...input, quality_score: 0, collected_at: new Date(), created_at: new Date() };
-      const signalValues = vi.fn(() => ({ returning: vi.fn(async () => [row]) }));
+      const signalValues = vi.fn(() => ({
+        onConflictDoNothing: () => ({ returning: vi.fn(async () => [row]) }),
+      }));
       const outboxValues = vi.fn(async () => undefined);
       transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
         callback({ insert: insertMock })
@@ -1237,7 +1239,9 @@ describe("db/queries — hn collector support", () => {
       );
       insertMock.mockImplementation((table) => {
         if (table === signalsTable) {
-          return { values: vi.fn(() => ({ returning: vi.fn(async () => [row]) })) };
+          return {
+            values: vi.fn(() => ({ onConflictDoNothing: () => ({ returning: vi.fn(async () => [row]) }) })),
+          };
         }
         return {
           values: vi.fn(async () => {
@@ -1249,6 +1253,38 @@ describe("db/queries — hn collector support", () => {
       await expect(createSignal(input)).rejects.toThrow("outbox insert failed");
       expect(transactionMock).toHaveBeenCalledTimes(1);
     });
+
+    it("returns null and writes no outbox row when the signal already exists", async () => {
+      const outboxValues = vi.fn(async () => undefined);
+      transactionMock.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ insert: insertMock })
+      );
+      insertMock.mockImplementation((table) =>
+        table === signalsTable
+          ? { values: vi.fn(() => ({ onConflictDoNothing: () => ({ returning: vi.fn(async () => []) }) })) }
+          : { values: outboxValues }
+      );
+
+      const result = await createSignal({
+        competitor_id: "c1",
+        source: "hn",
+        source_url: "https://news.ycombinator.com/item?id=1",
+        raw_text: "dup",
+      });
+
+      expect(result).toBeNull();
+      expect(outboxValues).not.toHaveBeenCalled();
+    });
+
+    it.each(["javascript:alert(1)", "ftp://acme.com/x", "data:text/html,hi", "not a url"])(
+      "refuses source_url %s before writing anything",
+      async (sourceUrl) => {
+        await expect(
+          createSignal({ competitor_id: "c1", source: "field", source_url: sourceUrl, raw_text: "x" })
+        ).rejects.toThrow(/source_url/);
+        expect(transactionMock).not.toHaveBeenCalled();
+      }
+    );
   });
 });
 

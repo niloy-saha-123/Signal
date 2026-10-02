@@ -89,6 +89,7 @@ async function collectDiscourse(
         title: topic.title,
         raw_text: body,
       });
+      if (!signal) continue;
       await enqueueInitialSignalPipeline(signal.id);
     } catch (err) {
       logger.error("community collector failed on one topic — continuing", {
