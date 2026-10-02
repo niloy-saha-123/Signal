@@ -17,10 +17,11 @@ const GROUPS = [
     blurb: "Docs, forums and threads fill in as the work gets close.",
     sources: [
       { key: "docs", name: "Docs sites", detail: "New pages appearing in the docs sitemap" },
-      { key: "community", name: "Community forums", detail: "Their Discourse and GitHub Discussions" },
+      { key: "community", name: "Community forums", detail: "Discourse, other forums and Stack Overflow" },
+      { key: "social", name: "Social", detail: "Their YouTube, Bluesky and Mastodon posts" },
       { key: "hn", name: "Hacker News", detail: "Launches, comments and complaints" },
       { key: "reddit", name: "Reddit", detail: "The subreddits their users live in" },
-      { key: "field", name: "Your team", detail: "Links and notes sent from Slack" },
+      { key: "field", name: "Your team", detail: "Links and notes from the field" },
     ],
   },
   {
@@ -28,6 +29,7 @@ const GROUPS = [
     blurb: "The announcement lands, and Signal checks its own forecast against it.",
     sources: [
       { key: "changelog", name: "Changelogs", detail: "RSS and Atom feeds" },
+      { key: "blog", name: "Their blog", detail: "Company blog, Medium, Hashnode and Dev.to" },
       { key: "website", name: "Their website", detail: "Copy changes on product and home pages" },
       { key: "pricing", name: "Pricing pages", detail: "Plan and price diffs" },
       { key: "postings", name: "Newsrooms", detail: "Press and announcement feeds" },
