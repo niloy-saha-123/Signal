@@ -18,6 +18,8 @@ import { createPredictionRouter } from "./predictions";
 import { createActivityRouter } from "./activity";
 import { createSlackRouter, type SlackQuestion } from "./slack";
 import { getSlackInstallation } from "../db/queries";
+import { exchangeSlackCode, slackOAuthConfig } from "../integrations/slack/oauth";
+import { savePendingInstall } from "../integrations/slack/pending-install";
 import { createResolveCompanyRouter } from "./resolve-company";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
@@ -124,6 +126,12 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
         await queues["slack-question"].add("slack-question", question, {
           jobId: question.dedupe_key,
         });
+      },
+      oauth: {
+        config: () => slackOAuthConfig(),
+        exchangeCode: exchangeSlackCode,
+        savePendingInstall,
+        frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:3001",
       },
     })
   );
