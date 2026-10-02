@@ -14,6 +14,7 @@
 //     screenshotted.
 //   - Announce misses as plainly as hits. A ledger that only broadcasts wins is
 //     marketing wearing a track record's clothes.
+import type { WeeklyDigest } from "../../db/queries";
 
 export interface SlackBlock {
   type: string;
@@ -158,4 +159,60 @@ export function alertBlocks(alert: AlertMessage): SlackBlock[] {
   }
 
   return blocks;
+}
+
+// Weekly digest. Hits and misses are listed side by side, same rule as
+// resolutionBlocks: a digest that only reports wins is not a track record.
+export function digestBlocks(
+  digest: WeeklyDigest,
+  appUrl: string
+): { blocks: SlackBlock[]; fallbackText: string } {
+  const blocks: SlackBlock[] = [
+    section(
+      `*Signal weekly digest* — ${plural(digest.alert_count, "alert")}, ` +
+        `${plural(digest.new_forecast_count, "new forecast")}, ${digest.settled.length} settled`
+    ),
+  ];
+  if (digest.top_alerts.length) {
+    blocks.push(
+      divider(),
+      section(
+        "*Top alerts*\n" +
+          digest.top_alerts
+            .map((a) => `• *${a.competitor_name}*: ${a.pattern} (${percent(a.confidence)} confidence)`)
+            .join("\n")
+      )
+    );
+  }
+  if (digest.new_forecasts.length) {
+    blocks.push(
+      divider(),
+      section(
+        "*New forecasts*\n" +
+          digest.new_forecasts
+            .map((f) => `• *${f.competitor_name}*: ${f.statement} — ${percent(f.probability)}`)
+            .join("\n")
+      )
+    );
+  }
+  if (digest.settled.length) {
+    blocks.push(
+      divider(),
+      section(
+        "*Settled this week*\n" +
+          digest.settled
+            .map((s) => `• ${s.status === "hit" ? "Hit" : "Miss"} — *${s.competitor_name}*: ${s.statement}`)
+            .join("\n")
+      )
+    );
+  }
+  blocks.push(
+    context(`${plural(digest.open_count, "open forecast")} · <${appUrl}/briefing|Open the briefing in Signal>`)
+  );
+  return {
+    blocks,
+    fallbackText:
+      `Signal weekly digest: ${plural(digest.alert_count, "alert")}, ` +
+      `${plural(digest.new_forecast_count, "new forecast")}, ${digest.settled.length} settled`,
+  };
 }

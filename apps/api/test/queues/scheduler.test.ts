@@ -26,6 +26,7 @@ vi.mock("@/queues/registry", () => ({
     "daily-analysis-sweep": {},
     "pending-confirmation-expiry": {},
     "resolve-predictions": {},
+    "slack-digest": {},
     "collect-website": {},
     "collect-community": {},
     "collect-postings": {},
@@ -48,6 +49,7 @@ vi.mock("@/queues/registry", () => ({
     "daily-analysis-sweep": { upsertJobScheduler: upsertJobSchedulerMock },
     "pending-confirmation-expiry": { upsertJobScheduler: upsertJobSchedulerMock },
     "resolve-predictions": { upsertJobScheduler: upsertJobSchedulerMock },
+    "slack-digest": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-website": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-community": { upsertJobScheduler: upsertJobSchedulerMock },
     "collect-postings": { upsertJobScheduler: upsertJobSchedulerMock },
@@ -77,6 +79,8 @@ import {
   CONFIRMATION_EXPIRY_SCHEDULER_ID,
   PREDICTION_RESOLVER_CRON,
   PREDICTION_RESOLVER_SCHEDULER_ID,
+  SLACK_DIGEST_CRON,
+  SLACK_DIGEST_SCHEDULER_ID,
 } from "@/queues/scheduler";
 
 describe("queues/scheduler", () => {
@@ -216,7 +220,7 @@ describe("queues/scheduler", () => {
 
     await registerQueueSchedules();
 
-    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(20);
+    expect(upsertJobSchedulerMock).toHaveBeenCalledTimes(21);
     expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
       collectorSchedulerId("collect-reddit"),
       { pattern: "0 */6 * * *" },
@@ -294,4 +298,14 @@ describe("queues/scheduler", () => {
     );
   });
 
+  it("schedules the weekly Slack digest for Monday 09:00 UTC", async () => {
+    upsertJobSchedulerMock.mockClear();
+    await registerQueueSchedules();
+    expect(SLACK_DIGEST_CRON).toBe("0 9 * * 1");
+    expect(upsertJobSchedulerMock).toHaveBeenCalledWith(
+      SLACK_DIGEST_SCHEDULER_ID,
+      { pattern: "0 9 * * 1" },
+      { name: "slack-digest", data: {} }
+    );
+  });
 });

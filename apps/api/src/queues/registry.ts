@@ -86,7 +86,8 @@ export type QueueName =
   | "daily-analysis-sweep"
   | "pending-confirmation-expiry"
   | "resolve-predictions"
-  | "slack-question";
+  | "slack-question"
+  | "slack-digest";
 
 export interface QueueConfig {
   concurrency: number;
@@ -257,6 +258,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // second answer into the same thread, and a duplicate answer in a channel is
   // worse than a missing one.
   "slack-question": { concurrency: 3, attempts: 1 },
+  // Weekly Slack digest coordinator. attempts: 1 — a retry would re-post the
+  // digest to every workspace that already got it.
+  "slack-digest": { concurrency: 1, attempts: 1 },
 };
 
 // Inferred, not stub-sourced — no per-queue retention spec exists yet. Bounds
