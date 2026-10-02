@@ -15,6 +15,7 @@ import {
 import { SettingsAreaTabs } from "@/components/area-tabs";
 import { Button, LoadingRows, PageHeader, TextInput } from "@/components/ui/primitives";
 import type { ReactNode } from "react";
+import { McpAccess } from "./mcp-access";
 
 export function SettingsClient() {
   const router = useRouter();
@@ -233,6 +234,8 @@ export function SettingsClient() {
             </>
           )}
         </section>
+
+        <McpAccess />
 
         <Section title="Password" onSubmit={savePassword}>
           <TextInput

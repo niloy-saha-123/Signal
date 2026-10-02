@@ -637,6 +637,40 @@ export async function disconnectSlack(): Promise<void> {
 }
 
 
+// --- MCP API tokens (apps/api/src/api/api-tokens.ts) ---
+
+export const MCP_URL = `${API_BASE}/mcp`;
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export function listApiTokens(): Promise<ApiToken[]> {
+  return request<ApiToken[]>("/api/api-tokens");
+}
+
+// The plaintext token is only ever in this response.
+export function createApiToken(name: string): Promise<ApiToken & { token: string }> {
+  return request<ApiToken & { token: string }>("/api/api-tokens", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+// Not via request(): a 204 has no JSON body to parse.
+export async function revokeApiToken(id: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/api-tokens/${id}`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => undefined));
+}
+
 // --- Prediction ledger ---
 
 // Inferred from the shared schema rather than hand-mirrored, so a field rename
