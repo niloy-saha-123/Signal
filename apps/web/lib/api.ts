@@ -580,6 +580,36 @@ export function renameWorkspace(name: string): Promise<Workspace> {
   });
 }
 
+// --- Slack integration (apps/api/src/api/slack-integration.ts) ---
+
+export type SlackStatus =
+  | { connected: false }
+  | { connected: true; team_name: string | null; channel_name: string | null };
+
+export function getSlackStatus(): Promise<SlackStatus> {
+  return request<SlackStatus>("/api/integrations/slack");
+}
+
+export function startSlackInstall(): Promise<{ url: string }> {
+  return request<{ url: string }>("/api/integrations/slack/install", { method: "POST" });
+}
+
+export function confirmSlackInstall(installId: string): Promise<SlackStatus> {
+  return request<SlackStatus>("/api/integrations/slack/confirm", {
+    method: "POST",
+    body: JSON.stringify({ install_id: installId }),
+  });
+}
+
+// Not via request(): a 204 has no JSON body to parse.
+export async function disconnectSlack(): Promise<void> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/integrations/slack`, {
+    method: "DELETE",
+    headers: await authHeader(),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => undefined));
+}
+
 
 // --- Prediction ledger ---
 

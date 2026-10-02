@@ -17,14 +17,18 @@ vi.mock("../../lib/supabase-browser", () => ({
   }),
 }));
 
-const { resolveCompanyMock, createCompetitorMock } = vi.hoisted(() => ({
+const { resolveCompanyMock, createCompetitorMock, startSlackInstallMock } = vi.hoisted(() => ({
   resolveCompanyMock: vi.fn(),
   createCompetitorMock: vi.fn(),
+  startSlackInstallMock: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
   resolveCompany: resolveCompanyMock,
   createCompetitor: createCompetitorMock,
+  startSlackInstall: startSlackInstallMock,
+  getSlackStatus: vi.fn(),
+  disconnectSlack: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -101,6 +105,18 @@ describe("OnboardingForm", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Go to Home" }));
     expect(pushMock).toHaveBeenCalledWith("/briefing");
     expect(refreshMock).toHaveBeenCalled();
+  });
+
+  it("offers Add to Slack beside Go to Home on the ready step", async () => {
+    resolveCompanyMock.mockResolvedValue({ name: "Kestrel", domain: "kestrel.dev" });
+    createCompetitorMock.mockResolvedValue({ id: "c1", name: "Kestrel", domain: "kestrel.dev" });
+    await reachCompetitorStep();
+    fireEvent.change(screen.getByLabelText("Competitor website"), { target: { value: "kestrel.dev" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add competitor" }));
+    await screen.findByText("Added");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("button", { name: /add to slack/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /go to home/i })).toBeInTheDocument();
   });
 
   it("rejects an invalid website without calling the API", async () => {
