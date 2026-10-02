@@ -86,4 +86,22 @@ describe("McpAccess", () => {
     });
     expect(JSON.parse(desktop.code).mcpServers.signal.args).toContain("Authorization: Bearer sig_X");
   });
+
+  it("does not claim there are no tokens when the list failed to load", async () => {
+    listMock.mockRejectedValue(new Error("down"));
+    render(<McpAccess />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Couldn't load/);
+    expect(screen.queryByText("No active tokens.")).not.toBeInTheDocument();
+  });
+
+  it("blocks a second create until the revealed token is dismissed", async () => {
+    createMock.mockResolvedValue({ ...existing, id: "t3", name: "Cursor", token: "sig_SECRET123" });
+    render(<McpAccess />);
+    await screen.findByText("Laptop");
+    fireEvent.change(screen.getByLabelText("Token name"), { target: { value: "Cursor" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create token" }));
+    await screen.findByText("sig_SECRET123");
+    fireEvent.change(screen.getByLabelText("Token name"), { target: { value: "Another" } });
+    expect(screen.getByRole("button", { name: "Create token" })).toBeDisabled();
+  });
 });

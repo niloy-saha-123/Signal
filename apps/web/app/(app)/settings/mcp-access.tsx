@@ -198,14 +198,14 @@ export function McpAccess() {
         <Button
           type="submit"
           variant="secondary"
-          disabled={busy || !name.trim()}
+          disabled={busy || created !== null || !name.trim()}
         >
           Create token
         </Button>
       </form>
 
-      {tokens === null && !error ? (
-        <p className="text-[13.5px] text-ink-muted">Loading tokens…</p>
+      {tokens === null ? (
+        error ? null : <p className="text-[13.5px] text-ink-muted">Loading tokens…</p>
       ) : active.length === 0 ? (
         <p className="text-[13.5px] text-ink-muted">No active tokens.</p>
       ) : (
