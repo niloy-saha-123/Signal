@@ -205,6 +205,26 @@ export async function getCompetitorHiring(
   return raw.data.map((row) => HiringChartDataPointSchema.parse(row));
 }
 
+export type CoverageState = "Reporting" | "Watching" | "Looking" | "Not found";
+
+const CompetitorProfileSchema = z.object({
+  competitor: z.object({ id: z.string() }).passthrough().transform((value) => value as unknown as Competitor),
+  score: z.object({ score: z.number(), delta_7d: z.number().nullable() }).passthrough().nullable(),
+  history: z.array(z.object({ date: z.string(), score: z.number() })),
+  trend: z.array(TrendChartDataPointSchema),
+  hiring: z.array(HiringChartDataPointSchema),
+  forecasts: z.array(PredictionSchema),
+  signals: z.array(SignalSchema),
+  coverage: z.array(
+    z.object({ source: z.string(), state: z.enum(["Reporting", "Watching", "Looking", "Not found"]) })
+  ),
+});
+export type CompetitorProfile = z.infer<typeof CompetitorProfileSchema>;
+
+export async function getCompetitorProfile(id: string, token?: string): Promise<CompetitorProfile> {
+  return CompetitorProfileSchema.parse(await request(`/api/competitors/${id}/profile`, undefined, token));
+}
+
 const CompetitorDiscoverySchema = z.object({
   discovery_status: DiscoveryStatusSchema,
   log: z.array(DiscoveryLogSchema),

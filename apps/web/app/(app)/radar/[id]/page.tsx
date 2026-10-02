@@ -4,24 +4,10 @@
 //
 // Without a session (dev preview) only the fictional preview competitors render,
 // and never with forecasts.
-import type { Signal } from "@signal/shared";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
-import {
-  ApiError,
-  getCompetitor,
-  getCompetitorHiring,
-  getCompetitorScore,
-  getCompetitorScoreHistory,
-  getCompetitorTrend,
-  listPredictions,
-  listSignals,
-  type Competitor,
-  type CompetitorHiringDelta,
-  type CompetitorTrendPoint,
-  type PredictionRow,
-} from "@/lib/api";
+import { ApiError, getCompetitorProfile, type CompetitorProfile, type CoverageState } from "@/lib/api";
 import { getOptionalAccessToken } from "@/lib/supabase-server";
 import { previewCompetitorProfile } from "@/lib/preview-workspace";
 import { SignalScoreCard } from "@/components/SignalScoreCard";
@@ -39,62 +25,37 @@ import { sourceColor, sourceLabel } from "@/lib/chart-colors";
 
 const EVIDENCE_DAYS = 30;
 
-interface Profile {
-  competitor: Competitor;
-  score: { score: number; delta_7d: number | null } | null;
-  history: Array<{ date: string; score: number }>;
-  trend: CompetitorTrendPoint[];
-  hiring: CompetitorHiringDelta[];
-  forecasts: PredictionRow[];
-  signals: Signal[];
-}
-
-async function loadProfile(id: string, token: string): Promise<Profile> {
-  let competitor: Competitor;
+async function loadProfile(id: string, token: string): Promise<CompetitorProfile> {
   try {
-    competitor = await getCompetitor(id, token);
+    return await getCompetitorProfile(id, token);
   } catch (error) {
     if (error instanceof ApiError && (error.status === 404 || error.status === 401)) notFound();
     throw error;
   }
-
-  const since = new Date(Date.now() - EVIDENCE_DAYS * 86_400_000).toISOString();
-  const [score, history, trend, hiring, forecasts, signals] = await Promise.all([
-    getCompetitorScore(id, token).catch(() => null),
-    getCompetitorScoreHistory(id, 90, token).catch(() => []),
-    getCompetitorTrend(id, 30, token).catch(() => []),
-    getCompetitorHiring(id, 30, token).catch(() => []),
-    listPredictions({ competitor_id: id, status: "open", limit: 20 }, token).catch(() => []),
-    listSignals({ competitor_ids: [id], created_after: since, limit: 50 }, token)
-      .then((page) => page.data)
-      .catch(() => []),
-  ]);
-
-  return {
-    competitor,
-    score,
-    history: history.map((row) => ({ date: row.computed_at, score: row.score })),
-    trend,
-    hiring,
-    forecasts: forecasts.sort((a, b) => new Date(a.resolves_at).getTime() - new Date(b.resolves_at).getTime()),
-    signals,
-  };
 }
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const token = await getOptionalAccessToken();
 
-  let profile: Profile;
+  let profile: CompetitorProfile;
   if (token) {
     profile = await loadProfile(id, token);
   } else {
     const preview = previewCompetitorProfile(id);
     if (!preview) notFound();
-    profile = { ...preview, history: [], trend: [], hiring: [], forecasts: [] };
+    const reporting = [...new Set(preview.signals.map((signal) => signal.source))];
+    profile = {
+      ...preview,
+      history: [],
+      trend: [],
+      hiring: [],
+      forecasts: [],
+      coverage: reporting.map((source) => ({ source, state: "Reporting" as const })),
+    };
   }
 
-  const { competitor, score, history, trend, hiring, forecasts, signals } = profile;
+  const { competitor, score, history, trend, hiring, forecasts, signals, coverage } = profile;
   const discovering = competitor.discovery_status === "pending" || competitor.discovery_status === "in_progress";
 
   return (
@@ -185,7 +146,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         </Panel>
 
         <Panel title="Sources" description="What Signal watches for this competitor">
-          <SourceCoverage competitor={competitor} signals={signals} />
+          <SourceCoverage coverage={coverage} />
           {discovering ? (
             <div className="mt-5 border-t border-line pt-4">
               <p className="mb-2 text-[13px] font-semibold text-ink">Still looking</p>
@@ -245,38 +206,10 @@ function Panel({
   );
 }
 
-type Coverage = "Reporting" | "Watching" | "Looking" | "Not found";
-
-// "Reporting" = produced evidence in the window; "Watching" = configured but
-// quiet; "Not found" = discovery found nothing to watch. Sources without a
-// per-competitor setting appear only once they report.
-function coverageFor(competitor: Competitor, signals: Signal[]): Array<{ source: string; state: Coverage }> {
-  const reporting = new Set<string>(signals.map((signal) => signal.source));
-  const configured: Record<string, boolean> = {
-    website: Boolean(competitor.domain),
-    pricing: Boolean(competitor.pricing_url),
-    changelog: Boolean(competitor.changelog_rss),
-    jobs: Boolean(competitor.greenhouse_token || competitor.lever_token),
-    reddit: competitor.subreddits.length > 0,
-    hn: true,
-  };
-  const sources = [...Object.keys(configured), ...[...reporting].filter((source) => !(source in configured))];
-  return sources.map((source) => ({
-    source,
-    state: reporting.has(source)
-      ? "Reporting"
-      : configured[source]
-        ? "Watching"
-        : competitor.discovery_status === "complete" || competitor.discovery_status === "failed"
-          ? "Not found"
-          : "Looking",
-  }));
-}
-
-function SourceCoverage({ competitor, signals }: { competitor: Competitor; signals: Signal[] }) {
+function SourceCoverage({ coverage }: { coverage: Array<{ source: string; state: CoverageState }> }) {
   return (
     <ul className="space-y-2.5">
-      {coverageFor(competitor, signals).map(({ source, state }) => (
+      {coverage.map(({ source, state }) => (
         <li key={source} className="flex items-center justify-between gap-3 text-[14px]">
           <span className="flex items-center gap-2 font-medium text-ink">
             <StatusDot color={sourceColor(source)} />
