@@ -29,7 +29,6 @@ import {
   CompetitorCreateInputSchema,
   CompetitorSourceConfigSchema,
   FieldIntelInputSchema,
-  SignalScoreComponentsSchema,
 } from "@signal/shared";
 import * as queries from "../db/queries";
 import { isPublicHostname } from "../lib/safe-fetch";
@@ -38,6 +37,13 @@ import { logger } from "../lib/logger";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
 import { fetchPublicPageText } from "../agents/chat/fetch-url";
 import { consumeChatInputBudget } from "../agents/chat/input-budget";
+import {
+  computeHiringDeltas,
+  loadCompetitorProfile,
+  scoreHistory,
+  scoreSummary,
+  trendSeries,
+} from "./competitor-profile";
 import { wrap, fallbackErrorHandler, requireUuidParam } from "./http";
 
 // getLatestSignalScores takes a row-count limit, not a day range — one row per day in
@@ -61,84 +67,6 @@ const ListCompetitorsQuerySchema = z.object({
     ),
 });
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-// competitor_signal_scores.components is jsonb with no DB-level shape enforcement
-// (db/schema.ts) — the SignalScore/components TS type is a compile-time promise, not a
-// runtime guarantee. Every route returning it validates with SignalScoreComponentsSchema and
-// degrades to this rather than trusting the column or crashing the request.
-const DEFAULT_SCORE_COMPONENTS = {
-  mention_velocity: 0,
-  sentiment_trajectory: 0,
-  hiring_momentum: 0,
-  pricing_change_recency: 0,
-  vulnerability_window_status: "none" as const,
-};
-
-// ponytail: keyword-based job-title classifier — a heuristic, not ground truth. First
-// regex to match wins, so order encodes priority for titles that could plausibly span two
-// departments ("Sales Engineer" -> Sales, not Engineering; "Product Marketing Manager" ->
-// Marketing, not Product). Upgrade path: capture a real `department` field from
-// Greenhouse/Lever's API in the jobs collector once this needs to be more precise than
-// "roughly right."
-const DEPARTMENT_KEYWORDS: [string, RegExp][] = [
-  [
-    "Data",
-    /\b(data scientist|data engineer|data analyst|analytics|machine learning|ml engineer)\b/i,
-  ],
-  ["Sales", /\b(sales|account executive|\bsdr\b|\bbdr\b|business development)\b/i],
-  ["Marketing", /\b(marketing|growth|\bseo\b|brand|content strategist)\b/i],
-  [
-    "Customer Success/Support",
-    /\b(customer success|customer support|support engineer|technical support|help desk)\b/i,
-  ],
-  ["Product", /\b(product manager|product owner|product lead|product analyst)\b/i],
-  ["Design", /\b(designer|design|\bux\b|ui\/ux|user experience)\b/i],
-  ["Engineering", /\b(engineer|engineering|developer|\bswe\b|software)\b/i],
-  [
-    "People/HR",
-    /\b(people ops|people operations|human resources|recruiter|recruiting|talent acquisition|\bhr\b)\b/i,
-  ],
-  ["Operations", /\b(operations|logistics|supply chain|facilities)\b/i],
-  ["Finance", /\b(finance|accounting|controller|treasury|fp&a)\b/i],
-];
-
-function classifyDepartment(title: string | null): string {
-  const text = title ?? "";
-  for (const [department, pattern] of DEPARTMENT_KEYWORDS) {
-    if (pattern.test(text)) return department;
-  }
-  return "Other";
-}
-
-// Recent-vs-prior split mirrors synthesis.ts's computeMentionVelocity, adapted to an
-// arbitrary caller-supplied `days` instead of the hardcoded 7/14: the window's first half
-// is "recent", the second half is "prior". Departments whose delta is 0 are dropped so the
-// chart isn't a wall of zero-bars; ties in delta preserve first-seen order (stable sort).
-function computeHiringDeltas(
-  jobSignals: { title: string | null; created_at: Date }[],
-  days: number,
-  now: number
-): { department: string; delta: number }[] {
-  const half = days / 2;
-  const recentCounts = new Map<string, number>();
-  const priorCounts = new Map<string, number>();
-  for (const signal of jobSignals) {
-    const ageDays = (now - signal.created_at.getTime()) / MS_PER_DAY;
-    const bucket = ageDays < half ? recentCounts : priorCounts;
-    const department = classifyDepartment(signal.title);
-    bucket.set(department, (bucket.get(department) ?? 0) + 1);
-  }
-  const departments = new Set([...recentCounts.keys(), ...priorCounts.keys()]);
-  return [...departments]
-    .map((department) => ({
-      department,
-      delta: (recentCounts.get(department) ?? 0) - (priorCounts.get(department) ?? 0),
-    }))
-    .filter((row) => row.delta !== 0)
-    .sort((a, b) => b.delta - a.delta);
-}
-
 export interface CompetitorRouterDeps {
   createCompetitorForWorkspace: typeof queries.createCompetitorForWorkspace;
   getCompetitorByIdForWorkspace: typeof queries.getCompetitorByIdForWorkspace;
@@ -149,6 +77,8 @@ export interface CompetitorRouterDeps {
   getSignalVolumeByDay: typeof queries.getSignalVolumeByDay;
   getJobSignalsForHiringDelta: typeof queries.getJobSignalsForHiringDelta;
   getRecentPricingDiffs: typeof queries.getRecentPricingDiffs;
+  listPredictionsForWorkspace: typeof queries.listPredictionsForWorkspace;
+  listSignalFeed: typeof queries.listSignalFeed;
   createAgentRun: typeof queries.createAgentRun;
   failRunIfRunning: typeof queries.failRunIfRunning;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
@@ -170,6 +100,8 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   getSignalVolumeByDay: queries.getSignalVolumeByDay,
   getJobSignalsForHiringDelta: queries.getJobSignalsForHiringDelta,
   getRecentPricingDiffs: queries.getRecentPricingDiffs,
+  listPredictionsForWorkspace: queries.listPredictionsForWorkspace,
+  listSignalFeed: queries.listSignalFeed,
   createAgentRun: queries.createAgentRun,
   failRunIfRunning: queries.failRunIfRunning,
   enqueue: (queue, data) => queues[queue].add(queue, data),
@@ -372,6 +304,20 @@ export function createCompetitorRouter(
   );
 
   router.get(
+    "/:id/profile",
+    wrap(async (req, res) => {
+      const id = requireUuidParam(req, res);
+      if (id === null) return;
+      const profile = await loadCompetitorProfile(req.workspaceId!, id, deps);
+      if (!profile) {
+        res.status(404).json({ error: "not_found" });
+        return;
+      }
+      res.status(200).json(profile);
+    })
+  );
+
+  router.get(
     "/:id/score",
     wrap(async (req, res) => {
       const id = requireUuidParam(req, res);
@@ -386,21 +332,7 @@ export function createCompetitorRouter(
         res.status(404).json({ error: "no_score", message: "No Signal Score computed yet." });
         return;
       }
-      const latest = scores[0];
-      const parsedComponents = SignalScoreComponentsSchema.safeParse(latest.components);
-      if (!parsedComponents.success) {
-        logger.warn("Signal score row has malformed components — returning zeroed defaults", {
-          competitor_id: id,
-          score_id: latest.id,
-        });
-      }
-      res.status(200).json({
-        score: latest.score,
-        components: parsedComponents.success ? parsedComponents.data : DEFAULT_SCORE_COMPONENTS,
-        computed_at: latest.computed_at,
-        delta_7d: latest.delta_7d ?? null,
-        delta_30d: latest.delta_30d ?? null,
-      });
+      res.status(200).json(scoreSummary(scores));
     })
   );
 
@@ -419,29 +351,8 @@ export function createCompetitorRouter(
         res.status(404).json({ error: "not_found" });
         return;
       }
-      // Newest-first from the query — reverse to chronological order, the shape every
-      // sparkline/trend chart on the frontend expects.
-      const scores = (await deps.getLatestSignalScores(id, parsedLimit.data.limit)).reverse();
-      res.status(200).json({
-        data: scores.map((row) => {
-          const parsedComponents = SignalScoreComponentsSchema.safeParse(row.components);
-          if (!parsedComponents.success) {
-            logger.warn("Signal score row has malformed components — returning zeroed defaults", {
-              competitor_id: id,
-              score_id: row.id,
-            });
-          }
-          return {
-            id: row.id,
-            competitor_id: row.competitor_id,
-            score: row.score,
-            components: parsedComponents.success ? parsedComponents.data : DEFAULT_SCORE_COMPONENTS,
-            delta_7d: row.delta_7d ?? null,
-            delta_30d: row.delta_30d ?? null,
-            computed_at: row.computed_at.toISOString(),
-          };
-        }),
-      });
+      const scores = await deps.getLatestSignalScores(id, parsedLimit.data.limit);
+      res.status(200).json({ data: scoreHistory(scores, id) });
     })
   );
 
@@ -468,29 +379,7 @@ export function createCompetitorRouter(
         deps.getLatestSignalScores(id, days),
         deps.getSignalVolumeByDay(id, days),
       ]);
-      // getSignalVolumeByDay's `day` is already a plain UTC "YYYY-MM-DD" string (a Postgres
-      // ::date cast, not ::text) — no Date round-trip needed or wanted here, that's exactly
-      // the timezone-ambiguous parsing this join used to be exposed to.
-      const volumeByDate = new Map(volumeByDay.map((row) => [row.day, row.count]));
-      const chronological = [...scores].reverse();
-      res.status(200).json({
-        data: chronological.map((row) => {
-          const date = row.computed_at.toISOString().slice(0, 10);
-          const parsedComponents = SignalScoreComponentsSchema.safeParse(row.components);
-          if (!parsedComponents.success) {
-            logger.warn("Signal score row has malformed components — defaulting sentiment to 0", {
-              competitor_id: id,
-              score_id: row.id,
-            });
-          }
-          return {
-            date,
-            mention_volume: volumeByDate.get(date) ?? 0,
-            sentiment: parsedComponents.success ? parsedComponents.data.sentiment_trajectory : 0,
-            score: row.score,
-          };
-        }),
-      });
+      res.status(200).json({ data: trendSeries(scores, volumeByDay, id) });
     })
   );
 

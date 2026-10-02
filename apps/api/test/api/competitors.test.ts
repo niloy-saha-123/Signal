@@ -64,6 +64,8 @@ function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDep
     getSignalVolumeByDay: vi.fn(async () => []) as any,
     getJobSignalsForHiringDelta: vi.fn(async () => []) as any,
     getRecentPricingDiffs: vi.fn(async () => []) as any,
+    listPredictionsForWorkspace: vi.fn(async () => []) as any,
+    listSignalFeed: vi.fn(async () => []) as any,
     createAgentRun: vi.fn(async () => ({ id: "run-1" })) as any,
     failRunIfRunning: vi.fn(async () => undefined) as any,
     enqueue: vi.fn(async () => undefined),
@@ -441,6 +443,48 @@ describe("GET /api/competitors/:id/scores", () => {
       pricing_change_recency: 0,
       vulnerability_window_status: "none",
     });
+  });
+});
+
+describe("GET /api/competitors/:id/profile", () => {
+  it("200s with the loader's shape", async () => {
+    const bare = {
+      id: UUID,
+      discovery_status: "pending",
+      website_urls: [],
+      subreddits: [],
+      npm_packages: [],
+      pypi_packages: [],
+      blog_feeds: [],
+      social_feeds: [],
+      forum_feeds: [],
+      is_own_company: false,
+    };
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => bare) as any });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/profile`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      competitor: { id: UUID },
+      score: null,
+      history: [],
+      trend: [],
+      hiring: [],
+      forecasts: [],
+      signals: [],
+    });
+    expect(res.body.coverage).toHaveLength(14);
+  });
+
+  it("404s for a foreign competitor", async () => {
+    const deps = makeDeps({ getCompetitorByIdForWorkspace: vi.fn(async () => undefined) as any });
+    const res = await call(app(deps), "GET", `/api/competitors/${UUID}/profile`);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "not_found" });
+  });
+
+  it("400s for a non-uuid id", async () => {
+    const res = await call(app(makeDeps()), "GET", "/api/competitors/nope/profile");
+    expect(res.status).toBe(400);
   });
 });
 
