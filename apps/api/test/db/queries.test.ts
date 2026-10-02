@@ -3077,11 +3077,18 @@ describe("replaceSlackInstallation", () => {
     const where = vi.fn(async () => undefined);
     const txDelete = vi.fn(() => ({ where }));
     const onConflictDoUpdate = vi.fn(() => ({ returning: vi.fn(async () => returned) }));
-    const txInsert = vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) }));
+    const order: string[] = [];
+    const txExecute = vi.fn(async () => {
+      order.push("execute");
+    });
+    const txInsert = vi.fn(() => {
+      order.push("insert");
+      return { values: vi.fn(() => ({ onConflictDoUpdate })) };
+    });
     transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
-      cb({ insert: txInsert, delete: txDelete })
+      cb({ insert: txInsert, delete: txDelete, execute: txExecute })
     );
-    return { txDelete, onConflictDoUpdate };
+    return { txDelete, onConflictDoUpdate, txExecute, order };
   }
 
   it("upserts on team_id only when the team is unclaimed or already this workspace's, then drops the workspace's other rows", async () => {
@@ -3091,6 +3098,13 @@ describe("replaceSlackInstallation", () => {
     const conflict = (onConflictDoUpdate.mock.calls[0] as unknown[])[0] as { setWhere?: unknown };
     expect(conflict.setWhere).toBeDefined();
     expect(txDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a per-workspace advisory lock before inserting so concurrent confirms serialize", async () => {
+    const { txExecute, order } = wireTx([{ id: "row-1", ...input }]);
+    await replaceSlackInstallation(input);
+    expect(txExecute).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["execute", "insert"]);
   });
 
   it("returns null and deletes nothing when another workspace owns the team", async () => {

@@ -1443,6 +1443,9 @@ export async function replaceSlackInstallation(
   input: UpsertSlackInstallationInput
 ): Promise<SlackInstallation | null> {
   return db.transaction(async (tx) => {
+    // READ COMMITTED: two confirms for different teams would each miss the
+    // other's uncommitted insert when deleting "others". Serialize per workspace.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.workspace_id}))`);
     const [row] = await tx
       .insert(slackInstallationsTable)
       .values(input)
