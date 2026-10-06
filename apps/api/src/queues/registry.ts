@@ -87,6 +87,7 @@ export type QueueName =
   | "pending-confirmation-expiry"
   | "resolve-predictions"
   | "slack-question"
+  | "slack-intel"
   | "slack-digest";
 
 export interface QueueConfig {
@@ -167,14 +168,14 @@ export async function ensureStableJob(
   throw new Error(`Unexpected BullMQ job state "${state}" for job "${input.jobId}"`);
 }
 
-// Job payloads are logged verbatim when a job fails, and at least one queue
-// (slack-question) carries a live OAuth token. A stalled job during a routine
+// Job payloads are logged verbatim when a job fails, and a queue may carry a
+// credential (slack-question's response_url can post to a channel). A stalled job during a routine
 // deploy would print a working credential into the log stream, where anyone
 // with log read access could lift it.
 //
 // Matches on key shape rather than a fixed list, so a queue added later that
 // carries a credential is covered without anyone remembering to update this.
-const SECRET_KEY_PATTERN = /token|secret|password|passwd|api[-_]?key|credential|authorization/i;
+const SECRET_KEY_PATTERN = /token|secret|password|passwd|api[-_]?key|credential|authorization|response_url/i;
 
 export function redactJobData(data: unknown): unknown {
   if (data === null || typeof data !== "object" || Array.isArray(data)) return data;
@@ -258,6 +259,9 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // second answer into the same thread, and a duplicate answer in a channel is
   // worse than a missing one.
   "slack-question": { concurrency: 3, attempts: 1 },
+  // Field intel filed from the Slack modal. attempts: 1 — the submitter gets a
+  // DM with the outcome either way, and a retry would DM twice.
+  "slack-intel": { concurrency: 3, attempts: 1 },
   // Weekly Slack digest coordinator. Retry-safe: each workspace's send is
   // claimed per ISO week in Redis, so a retry skips workspaces already served.
   "slack-digest": {

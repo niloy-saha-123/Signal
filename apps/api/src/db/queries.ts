@@ -824,6 +824,7 @@ export type CreateSignalInput = {
   source_url?: string | null;
   title?: string | null;
   raw_text: string;
+  submitted_by?: string | null;
 };
 
 // source_url is rendered as a link in the dashboard, so only http(s) is stored.

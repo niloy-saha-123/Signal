@@ -18,7 +18,15 @@ import { createPredictionRouter } from "./predictions";
 import { createActivityRouter } from "./activity";
 import { createSlackIntegrationRouter } from "./slack-integration";
 import { createSlackRouter, type SlackQuestion } from "./slack";
-import { getSlackInstallation } from "../db/queries";
+import {
+  deleteSlackInstallationForTeam,
+  getCompetitorByIdForWorkspace,
+  getSlackInstallation,
+  listCompetitorsForWorkspace,
+  listPredictionsForWorkspace,
+} from "../db/queries";
+import { openView } from "../integrations/slack/client";
+import type { SlackIntel } from "../integrations/slack/intel-worker";
 import { exchangeSlackCode, slackOAuthConfig } from "../integrations/slack/oauth";
 import { savePendingInstall } from "../integrations/slack/pending-install";
 import { createResolveCompanyRouter } from "./resolve-company";
@@ -125,6 +133,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
     createSlackRouter({
       signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
       getSlackInstallation,
+      deleteSlackInstallationForTeam,
       enqueueSlackQuestion: async (question: SlackQuestion) => {
         await queues["slack-question"].add("slack-question", question, {
           jobId: question.dedupe_key,
@@ -135,6 +144,15 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
         exchangeCode: exchangeSlackCode,
         savePendingInstall,
         frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:3001",
+      },
+      commands: {
+        listCompetitorsForWorkspace,
+        getCompetitorByIdForWorkspace,
+        listPredictionsForWorkspace,
+        openView,
+        enqueueSlackIntel: async (intel: SlackIntel) => {
+          await queues["slack-intel"].add("slack-intel", intel, { jobId: intel.dedupe_key });
+        },
       },
     })
   );

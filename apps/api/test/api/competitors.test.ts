@@ -749,6 +749,7 @@ describe("POST /api/competitors/:id/field-intel", () => {
       source_url: null,
       title: "Lost a deal to them on SSO",
       raw_text: "Teammate note: Lost a deal to them on SSO\nmore",
+      submitted_by: `user:${USER_UUID}`,
     });
     expect(deps.enqueueInitialSignalPipeline).toHaveBeenCalledWith("sig-1");
   });

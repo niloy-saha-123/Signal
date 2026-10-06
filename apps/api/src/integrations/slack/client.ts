@@ -39,7 +39,8 @@ const TRANSPORT_ERRORS = new Set([
 async function slackPost(
   method: string,
   token: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<SlackApiResponse> {
   // Host is the hardcoded slack.com constant, never derived from user data, so
   // there is no SSRF surface here. safeFetch is used for its timeout and cap.
@@ -50,7 +51,7 @@ async function slackPost(
       "Content-Type": "application/json; charset=utf-8",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
     maxBytes: MAX_RESPONSE_BYTES,
   });
 
@@ -104,5 +105,47 @@ export async function postMessageBestEffort(input: PostMessageInput): Promise<vo
       channel: input.channel,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+// Slack voids a trigger_id 3 seconds after the click, so views.open gets a
+// short timeout and no retry.
+const VIEWS_OPEN_TIMEOUT_MS = 2_500;
+
+export async function openView(token: string, triggerId: string, view: Record<string, unknown>): Promise<void> {
+  const result = await withCircuitBreaker(SLACK_SERVICE_NAME, () =>
+    slackPost("views.open", token, { trigger_id: triggerId, view }, VIEWS_OPEN_TIMEOUT_MS)
+  );
+  if (!result.ok) throw new Error(`Slack views.open failed: ${result.error ?? "unknown_error"}`);
+}
+
+// response_url comes from a signed Slack payload, but it is still a URL we
+// were handed, so only Slack's own hook host is ever fetched.
+export function isSlackResponseUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && parsed.hostname === "hooks.slack.com" && !parsed.port;
+  } catch {
+    return false;
+  }
+}
+
+export interface ResponseUrlMessage {
+  response_type: "in_channel" | "ephemeral";
+  blocks: SlackBlock[];
+  text: string;
+}
+
+export async function postToResponseUrl(url: string, message: ResponseUrlMessage): Promise<void> {
+  if (!isSlackResponseUrl(url)) throw new Error("refusing a response_url outside hooks.slack.com");
+  const response = await safeFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(message),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    maxBytes: MAX_RESPONSE_BYTES,
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Slack response_url returned HTTP ${response.status}`);
   }
 }

@@ -104,7 +104,7 @@ describe("slack oauth config and URL", () => {
     );
     expect(url.searchParams.get("client_id")).toBe("123.456");
     expect(url.searchParams.get("scope")).toBe(
-      "app_mentions:read,chat:write,incoming-webhook",
+      "app_mentions:read,chat:write,commands,im:history,incoming-webhook",
     );
     expect(url.searchParams.get("redirect_uri")).toBe(CONFIG.redirectUri);
     expect(url.searchParams.get("state")).toBe("st");
@@ -157,6 +157,21 @@ describe("exchangeSlackCode", () => {
       }),
     );
     await expect(exchangeSlackCode(CONFIG, "c")).rejects.toThrow(/missing/);
+  });
+
+  it("rejects a response with the wrong shape, without echoing it", async () => {
+    safeFetchMock.mockResolvedValue(
+      slackResponse({
+        ok: true,
+        access_token: "xoxb-1",
+        bot_user_id: "U",
+        team: { id: 42 },
+        incoming_webhook: { channel_id: "C1" },
+      }),
+    );
+    const error = await exchangeSlackCode(CONFIG, "c").catch((e: Error) => e);
+    expect(String(error)).toMatch(/failed validation/);
+    expect(String(error)).not.toContain("xoxb-1");
   });
 });
 

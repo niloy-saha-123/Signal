@@ -27,6 +27,7 @@ import { initConfirmationExpiryWorker } from "./src/queues/confirmation-expiry-w
 import { initPredictionResolverWorker } from "./src/agents/resolver/resolver-worker";
 import { initSlackQuestionWorker } from "./src/integrations/slack/slack-worker";
 import { initSlackDigestWorker } from "./src/integrations/slack/digest";
+import { initSlackIntelWorker } from "./src/integrations/slack/intel-worker";
 import { closeRedisConnections } from "./src/lib/redis-client";
 import { closeDatabase } from "./src/db/client";
 import { logger } from "./src/lib/logger";
@@ -91,6 +92,7 @@ const defaultDeps: WorkerRuntimeDeps = {
         initConfirmationExpiryWorker,
         initPredictionResolverWorker,
         initSlackQuestionWorker,
+        initSlackIntelWorker,
         initSlackDigestWorker,
       ]) {
         initialized.push(initialize());

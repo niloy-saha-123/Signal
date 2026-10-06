@@ -94,7 +94,7 @@ describe("/api/integrations/slack", () => {
     const res = await call(app(makeDeps()), "POST", "/api/integrations/slack/install");
     expect(res.status).toBe(200);
     const url = new URL(res.body.url);
-    expect(url.searchParams.get("scope")).toBe("app_mentions:read,chat:write,incoming-webhook");
+    expect(url.searchParams.get("scope")).toBe("app_mentions:read,chat:write,commands,im:history,incoming-webhook");
     expect(verifySlackState(url.searchParams.get("state")!, "cs")).toMatchObject({ workspace_id: WS, user_id: "user-1" });
   });
 
