@@ -32,6 +32,19 @@ describe("primitives", () => {
     expect(screen.getByText("carrier-pigeon")).toBeInTheDocument();
   });
 
+  it("says where field intel came from", () => {
+    render(
+      <>
+        <SourceChip source="field" submittedBy="slack:T1:U1" />
+        <SourceChip source="field" submittedBy="user:abc" />
+        <SourceChip source="news" submittedBy="slack:T1:U1" />
+      </>
+    );
+    expect(screen.getByText("· via Slack")).toBeInTheDocument();
+    expect(screen.getByText("· via Signal")).toBeInTheDocument();
+    expect(screen.getAllByText(/· via/)).toHaveLength(2);
+  });
+
   it("renders an empty state with its next action", () => {
     render(<EmptyState title="Nothing yet" note="Add one." action={<button>Add</button>} />);
     expect(screen.getByText("Nothing yet")).toBeInTheDocument();

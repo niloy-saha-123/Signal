@@ -209,6 +209,8 @@ export const SignalSchema = z.object({
   source_url: z.string().url().nullable().optional(),
   title: z.string().nullable().optional(),
   raw_text: z.string(),
+  // Field intel only: `user:<uuid>` (web) or `slack:<team>:<user>`.
+  submitted_by: z.string().nullable().optional(),
   quality_score: z.number().min(0).max(1),
   entities: z.record(z.string(), z.unknown()).nullable().default({}),
   cluster_id: z.string().uuid().nullable().optional(),

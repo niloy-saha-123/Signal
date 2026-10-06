@@ -72,7 +72,7 @@ export function SignalFeed({
           <li key={signal.id} className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-start">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <SourceChip source={signal.source} />
+                <SourceChip source={signal.source} submittedBy={signal.submitted_by} />
                 {competitor ? <span className="text-[13px] font-bold text-ink">{competitor}</span> : null}
                 <span className="text-[12.5px] text-ink-muted" suppressHydrationWarning>
                   {relativeTime(signal.collected_at)}

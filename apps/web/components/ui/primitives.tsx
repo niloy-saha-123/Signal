@@ -379,7 +379,23 @@ export function Badge({ children, tone = "neutral" }: { children: ReactNode; ton
 }
 
 // Source identity: dot carries colour, the name carries meaning.
-export function SourceChip({ source, className }: { source: string; className?: string }) {
+// Field intel says where it came from: `slack:<team>:<user>` or `user:<uuid>`.
+function submittedVia(submittedBy: string | null | undefined): string | null {
+  if (submittedBy?.startsWith("slack:")) return "via Slack";
+  if (submittedBy?.startsWith("user:")) return "via Signal";
+  return null;
+}
+
+export function SourceChip({
+  source,
+  submittedBy,
+  className,
+}: {
+  source: string;
+  submittedBy?: string | null;
+  className?: string;
+}) {
+  const via = source === "field" ? submittedVia(submittedBy) : null;
   return (
     <span
       className={cx(
@@ -389,6 +405,7 @@ export function SourceChip({ source, className }: { source: string; className?: 
     >
       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: sourceColor(source) }} aria-hidden="true" />
       {sourceLabel(source)}
+      {via ? <span className="font-normal text-ink-muted">· {via}</span> : null}
     </span>
   );
 }
