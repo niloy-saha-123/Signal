@@ -52,11 +52,12 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       trend: [],
       hiring: [],
       forecasts: [],
+      degraded: [],
       coverage: reporting.map((source) => ({ source, state: "Reporting" as const })),
     };
   }
 
-  const { competitor, score, history, trend, hiring, forecasts, signals, coverage } = profile;
+  const { competitor, score, history, trend, hiring, forecasts, signals, coverage, degraded } = profile;
   const discovering = competitor.discovery_status === "pending" || competitor.discovery_status === "in_progress";
 
   return (
@@ -103,6 +104,12 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           </>
         }
       />
+
+      {degraded.length > 0 ? (
+        <p role="status" className="mb-4 rounded-[10px] bg-tint-sun px-3 py-2 text-[13.5px] text-ink">
+          Some sections couldn&apos;t load and are shown empty. Refresh to try again.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <Panel title="Pulse">

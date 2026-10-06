@@ -50,6 +50,7 @@ export const defaultMcpToolDeps: Omit<McpToolDeps, "beginAsk"> = {
     getJobSignalsForHiringDelta: queries.getJobSignalsForHiringDelta,
     listPredictionsForWorkspace: queries.listPredictionsForWorkspace,
     listSignalFeed: queries.listSignalFeed,
+    countRoadmapLinksByPrediction: queries.countRoadmapLinksByPrediction,
   },
   listPredictionsForWorkspace: queries.listPredictionsForWorkspace,
   getPredictionForWorkspace: queries.getPredictionForWorkspace,

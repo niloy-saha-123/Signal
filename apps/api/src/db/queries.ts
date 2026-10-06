@@ -56,6 +56,8 @@ import {
   companyGoalsTable,
   type SignalPipelineStage,
 } from "./schema";
+import { decryptSlackToken, encryptSlackToken } from "../integrations/slack/token-crypto";
+import { logger } from "../lib/logger";
 import {
   AgentTestCaseSchema,
   PromotePromptVersionInputSchema,
@@ -823,6 +825,7 @@ export type CreateSignalInput = {
   source_url?: string | null;
   title?: string | null;
   raw_text: string;
+  submitted_by?: string | null;
 };
 
 // source_url is rendered as a link in the dashboard, so only http(s) is stored.
@@ -1188,7 +1191,7 @@ export interface PredictionListQuery {
 }
 
 export async function listPredictionsForWorkspace(
-  query: PredictionListQuery
+  query: PredictionListQuery & { soonest_first?: boolean }
 ): Promise<Array<typeof predictionsTable.$inferSelect>> {
   const conditions = [eq(predictionsTable.workspace_id, query.workspace_id)];
   if (query.status) conditions.push(eq(predictionsTable.status, query.status));
@@ -1201,7 +1204,9 @@ export async function listPredictionsForWorkspace(
     .select()
     .from(predictionsTable)
     .where(and(...conditions))
-    .orderBy(desc(predictionsTable.created_at))
+    .orderBy(
+      query.soonest_first ? asc(predictionsTable.resolves_at) : desc(predictionsTable.created_at)
+    )
     .limit(query.limit);
 }
 
@@ -1390,6 +1395,24 @@ export async function createWebsiteChangeSignal(
 
 // ── slack ────────────────────────────────────────────────────────────────
 
+// bot_token is encrypted at rest; every read path returns it decrypted. A row
+// that can't be decrypted (key unset or rotated, corrupt value) comes back with
+// an empty token instead of throwing, so lookups, uninstall cleanup, Settings
+// and the digest's other workspaces keep working; Slack calls with it fail
+// with invalid_auth and are logged where they're made.
+function withPlainToken<T extends { bot_token: string; team_id: string } | undefined>(row: T): T {
+  if (!row) return row;
+  try {
+    return { ...row, bot_token: decryptSlackToken(row.bot_token) };
+  } catch (error) {
+    logger.error("slack: stored bot token could not be decrypted — check SLACK_TOKEN_ENCRYPTION_KEY", {
+      team_id: row.team_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { ...row, bot_token: "" };
+  }
+}
+
 export async function getSlackInstallation(
   teamId: string
 ): Promise<typeof slackInstallationsTable.$inferSelect | undefined> {
@@ -1398,7 +1421,11 @@ export async function getSlackInstallation(
     .from(slackInstallationsTable)
     .where(eq(slackInstallationsTable.team_id, teamId))
     .limit(1);
-  return row;
+  return withPlainToken(row);
+}
+
+export async function deleteSlackInstallationForTeam(teamId: string): Promise<void> {
+  await db.delete(slackInstallationsTable).where(eq(slackInstallationsTable.team_id, teamId));
 }
 
 // The delivery-side lookup: given a Signal workspace, where do we post?
@@ -1410,7 +1437,7 @@ export async function getSlackInstallationForWorkspace(
     .from(slackInstallationsTable)
     .where(eq(slackInstallationsTable.workspace_id, workspaceId))
     .limit(1);
-  return row;
+  return withPlainToken(row);
 }
 
 export interface UpsertSlackInstallationInput {
@@ -1424,28 +1451,6 @@ export interface UpsertSlackInstallationInput {
   installed_by: string | null;
 }
 
-export async function upsertSlackInstallation(
-  input: UpsertSlackInstallationInput
-): Promise<typeof slackInstallationsTable.$inferSelect> {
-  const [row] = await db
-    .insert(slackInstallationsTable)
-    .values(input)
-    .onConflictDoUpdate({
-      target: slackInstallationsTable.team_id,
-      set: {
-        workspace_id: input.workspace_id,
-        team_name: input.team_name,
-        bot_token: input.bot_token,
-        bot_user_id: input.bot_user_id,
-        default_channel: input.default_channel,
-        default_channel_name: input.default_channel_name,
-        updated_at: new Date(),
-      },
-    })
-    .returning();
-  return row;
-}
-
 export type SlackInstallation = typeof slackInstallationsTable.$inferSelect;
 
 // Install-time write. The team_id upsert only takes effect when the team is
@@ -1456,18 +1461,19 @@ export type SlackInstallation = typeof slackInstallationsTable.$inferSelect;
 export async function replaceSlackInstallation(
   input: UpsertSlackInstallationInput
 ): Promise<SlackInstallation | null> {
+  const stored = { ...input, bot_token: encryptSlackToken(input.bot_token) };
   return db.transaction(async (tx) => {
     // READ COMMITTED: two confirms for different teams would each miss the
     // other's uncommitted insert when deleting "others". Serialize per workspace.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.workspace_id}))`);
     const [row] = await tx
       .insert(slackInstallationsTable)
-      .values(input)
+      .values(stored)
       .onConflictDoUpdate({
         target: slackInstallationsTable.team_id,
         set: {
           team_name: input.team_name,
-          bot_token: input.bot_token,
+          bot_token: stored.bot_token,
           bot_user_id: input.bot_user_id,
           default_channel: input.default_channel,
           default_channel_name: input.default_channel_name,
@@ -1486,7 +1492,7 @@ export async function replaceSlackInstallation(
           ne(slackInstallationsTable.id, row.id)
         )
       );
-    return row;
+    return withPlainToken(row);
   });
 }
 
@@ -1497,10 +1503,11 @@ export async function deleteSlackInstallationsForWorkspace(workspaceId: string):
 }
 
 export async function listSlackInstallationsWithChannel(): Promise<SlackInstallation[]> {
-  return db
+  const rows = await db
     .select()
     .from(slackInstallationsTable)
     .where(sql`${slackInstallationsTable.default_channel} IS NOT NULL`);
+  return rows.map(withPlainToken);
 }
 
 export interface WeeklyDigest {
@@ -2609,9 +2616,43 @@ export async function createRoadmapLink(input: {
   url: string;
   stance: RoadmapStance;
   created_by: string | null;
-}): Promise<RoadmapLink> {
-  const [row] = await db.insert(predictionRoadmapLinksTable).values(input).returning();
-  return row;
+}): Promise<{ link: RoadmapLink; created: boolean }> {
+  // The conflicting row can be deleted between the insert and the read; one
+  // more insert then succeeds.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await insertOrFindRoadmapLink(input);
+    if (result) return result;
+  }
+  throw new Error("roadmap link create raced a concurrent delete twice");
+}
+
+// On a URL already on this forecast, returns that link unchanged: the repeat's
+// title and stance are not applied (PATCH changes those).
+async function insertOrFindRoadmapLink(input: {
+  workspace_id: string;
+  prediction_id: string;
+  title: string;
+  url: string;
+  stance: RoadmapStance;
+  created_by: string | null;
+}): Promise<{ link: RoadmapLink; created: boolean } | null> {
+  const [row] = await db
+    .insert(predictionRoadmapLinksTable)
+    .values(input)
+    .onConflictDoNothing({ target: [predictionRoadmapLinksTable.prediction_id, predictionRoadmapLinksTable.url] })
+    .returning();
+  if (row) return { link: row, created: true };
+  const [existing] = await db
+    .select()
+    .from(predictionRoadmapLinksTable)
+    .where(
+      and(
+        eq(predictionRoadmapLinksTable.prediction_id, input.prediction_id),
+        eq(predictionRoadmapLinksTable.workspace_id, input.workspace_id),
+        eq(predictionRoadmapLinksTable.url, input.url)
+      )
+    );
+  return existing ? { link: existing, created: false } : null;
 }
 
 export async function updateRoadmapLink(

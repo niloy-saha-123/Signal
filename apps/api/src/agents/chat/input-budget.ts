@@ -1,5 +1,7 @@
 // Per-workspace rate limits for chat input tools. Fail closed: a Redis error
 // or a crossed cap both refuse the call rather than letting spend run unbounded.
+import { logger } from "../../lib/logger";
+
 export const FETCH_URL_WORKSPACE_LIMIT = 20;
 export const FETCH_URL_WINDOW_SECONDS = 60;
 export const IMAGE_WORKSPACE_LIMIT = 20;
@@ -65,7 +67,13 @@ export async function consumeChatInputBudget(kind: BudgetKind, workspaceId: stri
   let n: number;
   try {
     n = await store.increment(`chat:${kind}:${workspaceId}`, window);
-  } catch {
+  } catch (error) {
+    // Fails closed, but the cause is a store outage, not a breach.
+    logger.error("chat input budget store unavailable — refusing", {
+      kind,
+      workspace_id: workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new BudgetExceededError(kind);
   }
   if (n > limit) throw new BudgetExceededError(kind);

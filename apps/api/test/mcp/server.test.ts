@@ -76,6 +76,7 @@ function makeDeps(over: Partial<McpRouterDeps["tools"]> = {}, rateLimit?: McpRou
       getCompetitorByIdForWorkspace: vi.fn(async (id: string) => (id === COMP ? competitor : undefined)) as any,
       getLatestSignalScores: vi.fn(async () => []) as any,
       getSignalVolumeByDay: vi.fn(async () => []) as any,
+      countRoadmapLinksByPrediction: vi.fn(async () => new Map()) as any,
       getJobSignalsForHiringDelta: vi.fn(async () => []) as any,
       listPredictionsForWorkspace: vi.fn(async () => [prediction]) as any,
       listSignalFeed: vi.fn(async () => [signal]) as any,

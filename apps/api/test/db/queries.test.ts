@@ -158,6 +158,7 @@ import {
   createOwnCompanyCompetitorRow,
   saveDiscoveredLinks,
   replaceSlackInstallation,
+  listSlackInstallationsWithChannel,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -3112,6 +3113,53 @@ describe("replaceSlackInstallation", () => {
     expect(order).toEqual(["execute", "insert"]);
   });
 
+  it("stores the bot token encrypted and returns it decrypted", async () => {
+    vi.stubEnv("SLACK_TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64"));
+    try {
+      let storedToken = "";
+      const onConflictDoUpdate = vi.fn((cfg: { set: { bot_token: string } }) => ({
+        returning: vi.fn(async () => [{ id: "row-1", ...input, bot_token: cfg.set.bot_token }]),
+      }));
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({
+          execute: vi.fn(async () => undefined),
+          delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+          insert: vi.fn(() => ({
+            values: vi.fn((v: { bot_token: string }) => {
+              storedToken = v.bot_token;
+              return { onConflictDoUpdate };
+            }),
+          })),
+        })
+      );
+      const row = await replaceSlackInstallation(input);
+      expect(storedToken.startsWith("enc:v1:")).toBe(true);
+      expect(storedToken).not.toContain("xoxb-1");
+      expect(row?.bot_token).toBe("xoxb-1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("lists installations even when one stored token can't be decrypted", async () => {
+    vi.stubEnv("SLACK_TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64"));
+    try {
+      selectMock.mockReturnValue({ from: fromMock });
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([
+        { team_id: "T1", bot_token: "enc:v1:bad.bad.bad", default_channel: "C1" },
+        { team_id: "T2", bot_token: "xoxb-legacy", default_channel: "C2" },
+      ]);
+      const rows = await listSlackInstallationsWithChannel();
+      expect(rows.map((r) => [r.team_id, r.bot_token])).toEqual([
+        ["T1", ""],
+        ["T2", "xoxb-legacy"],
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns null and deletes nothing when another workspace owns the team", async () => {
     const { txDelete } = wireTx([]);
     expect(await replaceSlackInstallation(input)).toBeNull();
@@ -3136,19 +3184,67 @@ describe("db/queries — roadmap links", () => {
     expect(selectMock).not.toHaveBeenCalled();
   });
 
-  it("createRoadmapLink inserts the input and returns the row", async () => {
-    const input = {
-      workspace_id: "w1",
-      prediction_id: "p1",
-      title: "SSO v2",
-      url: "https://linear.app/a/issue/ENG-42",
-      stance: "watching" as const,
-      created_by: null,
-    };
-    insertReturningMock.mockResolvedValue([{ id: "l1", ...input }]);
-    await expect(createRoadmapLink(input)).resolves.toEqual({ id: "l1", ...input });
+  const linkInput = {
+    workspace_id: "w1",
+    prediction_id: "p1",
+    title: "SSO v2",
+    url: "https://linear.app/a/issue/ENG-42",
+    stance: "watching" as const,
+    created_by: null,
+  };
+
+  function scopeOf(condition: unknown) {
+    const query = new PgDialect().sqlToQuery(condition as Parameters<PgDialect["sqlToQuery"]>[0]);
+    return { sql: query.sql, params: query.params };
+  }
+
+  it("createRoadmapLink inserts the input and reports it created", async () => {
+    const onConflictDoNothing = vi.fn(() => ({ returning: insertReturningMock }));
+    insertValuesMock.mockReturnValue({ onConflictDoNothing });
+    insertReturningMock.mockResolvedValue([{ id: "l1", ...linkInput }]);
+    await expect(createRoadmapLink(linkInput)).resolves.toEqual({
+      link: { id: "l1", ...linkInput },
+      created: true,
+    });
     expect(insertMock).toHaveBeenCalledWith(predictionRoadmapLinksTable);
-    expect(insertValuesMock).toHaveBeenCalledWith(input);
+    expect(insertValuesMock).toHaveBeenCalledWith(linkInput);
+  });
+
+  it("createRoadmapLink returns the existing row, scoped to the workspace, on a duplicate URL", async () => {
+    insertValuesMock.mockReturnValue({ onConflictDoNothing: vi.fn(() => ({ returning: insertReturningMock })) });
+    insertReturningMock.mockResolvedValue([]);
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockResolvedValue([{ id: "l0", ...linkInput }]);
+    await expect(createRoadmapLink(linkInput)).resolves.toEqual({
+      link: { id: "l0", ...linkInput },
+      created: false,
+    });
+    const scope = scopeOf((whereMock.mock.calls[0] as unknown[])[0]);
+    expect(scope.sql).toContain('"workspace_id"');
+    expect(scope.params).toEqual(expect.arrayContaining(["w1", "p1", linkInput.url]));
+  });
+
+  it("createRoadmapLink inserts again when the conflicting row vanished before the read", async () => {
+    insertValuesMock.mockReturnValue({ onConflictDoNothing: vi.fn(() => ({ returning: insertReturningMock })) });
+    insertReturningMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "l2", ...linkInput }]);
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockResolvedValue([]);
+    await expect(createRoadmapLink(linkInput)).resolves.toEqual({ link: { id: "l2", ...linkInput }, created: true });
+    expect(insertMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("update and delete are scoped to the link, forecast and workspace", async () => {
+    updateReturningMock.mockResolvedValue([]);
+    deleteReturningMock.mockResolvedValue([]);
+    await updateRoadmapLink("l1", "p1", "w1", { stance: "accelerate" });
+    await deleteRoadmapLink("l1", "p1", "w1");
+    for (const where of [updateWhereMock, deleteWhereMock]) {
+      const scope = scopeOf((where.mock.calls[0] as unknown[])[0]);
+      expect(scope.sql).toContain('"workspace_id"');
+      expect(scope.params).toEqual(["l1", "p1", "w1"]);
+    }
   });
 
   it("updateRoadmapLink returns null when no row matches", async () => {

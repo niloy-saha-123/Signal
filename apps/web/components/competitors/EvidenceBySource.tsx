@@ -48,7 +48,7 @@ export function EvidenceBySource({ signals }: { signals: Signal[] }) {
         {visible.map((signal) => (
           <li key={signal.id} className="py-3.5 first:pt-0 last:pb-0">
             <div className="flex flex-wrap items-center gap-2">
-              <SourceChip source={signal.source} />
+              <SourceChip source={signal.source} submittedBy={signal.submitted_by} />
               <span className="text-[12.5px] text-ink-muted" suppressHydrationWarning>
                 {relativeTime(signal.collected_at)}
               </span>

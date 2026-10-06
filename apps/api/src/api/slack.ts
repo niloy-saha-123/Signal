@@ -34,6 +34,17 @@ import {
   type SlackOAuthResult,
 } from "../integrations/slack/oauth";
 import type { PendingSlackInstall } from "../integrations/slack/pending-install";
+import { isSlackResponseUrl, openView } from "../integrations/slack/client";
+import { escapeMrkdwn } from "../integrations/slack/blocks";
+import {
+  forecastListBlocks,
+  intelModal,
+  INTEL_BLOCK,
+  INTEL_MODAL_CALLBACK_ID,
+  SIGNAL_USAGE,
+} from "../integrations/slack/blocks";
+import type { SlackIntel } from "../integrations/slack/intel-worker";
+import { FieldIntelInputSchema } from "@signal/shared";
 import { logger } from "../lib/logger";
 
 export interface SlackQuestion {
@@ -43,7 +54,9 @@ export interface SlackQuestion {
   user: string;
   question: string;
   thread_ts: string;
-  bot_token: string;
+  // Set for /signal ask: the answer goes back through Slack's response_url
+  // (works where the bot is not a channel member) instead of chat.postMessage.
+  response_url?: string;
   // Stable per-event key, used as the BullMQ job id so a redelivered Slack
   // event collapses onto the job the first delivery already created instead of
   // running the agent a second time and posting a second answer.
@@ -60,8 +73,21 @@ export interface SlackOAuthCallbackDeps {
 export interface SlackRouterDeps {
   signingSecret: string;
   getSlackInstallation: typeof queries.getSlackInstallation;
+  deleteSlackInstallationForTeam: typeof queries.deleteSlackInstallationForTeam;
   enqueueSlackQuestion: (question: SlackQuestion) => Promise<void>;
+  // Per-user and per-team throttle on work a Slack user can trigger (agent
+  // runs, intel writes). Any member of a connected Slack team can reach these.
+  allowSlackRequest: (kind: "ask" | "intel", teamId: string, userId: string) => Promise<boolean>;
   oauth: SlackOAuthCallbackDeps;
+  commands: SlackCommandDeps;
+}
+
+export interface SlackCommandDeps {
+  listCompetitorsForWorkspace: typeof queries.listCompetitorsForWorkspace;
+  getCompetitorByIdForWorkspace: typeof queries.getCompetitorByIdForWorkspace;
+  listPredictionsForWorkspace: typeof queries.listPredictionsForWorkspace;
+  openView: typeof openView;
+  enqueueSlackIntel: (intel: SlackIntel) => Promise<void>;
 }
 
 const SlackEventSchema = z.object({
@@ -75,8 +101,11 @@ const SlackEventSchema = z.object({
       channel: z.string().optional(),
       user: z.string().optional(),
       bot_id: z.string().optional(),
+      subtype: z.string().optional(),
+      channel_type: z.string().optional(),
       ts: z.string().optional(),
       thread_ts: z.string().optional(),
+      tokens: z.object({ bot: z.array(z.string()).optional() }).optional(),
     })
     .optional(),
 });
@@ -88,20 +117,130 @@ function stripMention(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/g, "").trim();
 }
 
+function ephemeral(text: string) {
+  return { response_type: "ephemeral", text };
+}
+
+// BullMQ shares a Redis connection that retries forever, so an enqueue during
+// an outage never settles. Slack needs an answer within 3 seconds.
+const ENQUEUE_DEADLINE_MS = 2_000;
+
+async function withDeadline<T>(promise: Promise<T>, ms = ENQUEUE_DEADLINE_MS): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Slack voids a trigger_id 3 seconds after the click; views.open gets what's
+// left of that, measured from when the request arrived.
+function viewsOpenBudget(startedAt: number): number {
+  return Math.max(500, 2_700 - (Date.now() - startedAt));
+}
+
+const SLOW_DOWN = "You're sending Signal a lot right now. Try again in a few minutes.";
+
+const CommandSchema = z.object({
+  team_id: z.string().min(1),
+  user_id: z.string().min(1),
+  channel_id: z.string().default(""),
+  text: z.string().default(""),
+  response_url: z.string().default(""),
+  trigger_id: z.string().default(""),
+});
+
+const SlackIdSchema = z.object({ id: z.string().min(1) });
+
+const InteractionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("message_action"),
+    callback_id: z.string(),
+    trigger_id: z.string(),
+    team: SlackIdSchema,
+    user: SlackIdSchema,
+    message: z.object({ text: z.string().default("") }).default({ text: "" }),
+  }),
+  z.object({
+    type: z.literal("view_submission"),
+    team: SlackIdSchema,
+    user: SlackIdSchema,
+    view: z.object({
+      id: z.string().min(1),
+      callback_id: z.string(),
+      state: z.object({
+        values: z.record(
+          z.string(),
+          z.record(
+            z.string(),
+            z.object({
+              value: z.string().nullable().optional(),
+              selected_option: z.object({ value: z.string() }).nullable().optional(),
+            })
+          )
+        ),
+      }),
+    }),
+  }),
+]);
+
+// Slack renders links in message text as <https://x|label> or <https://x>.
+const SLACK_LINK = /<(https?:\/\/[^|>\s]+)(?:\|([^>]*))?>/g;
+
+// Slack escapes &, < and > everywhere in message text, link targets included.
+function decodeEntities(text: string): string {
+  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+export function prefillFromMessage(text: string): { url?: string; note?: string } {
+  const href = SLACK_LINK.exec(text)?.[1];
+  SLACK_LINK.lastIndex = 0;
+  const note = decodeEntities(
+    text.replace(SLACK_LINK, (_m, link: string, label?: string) => label || link).replace(/<[@#!][^>]*>/g, "")
+  ).trim();
+  return { url: href ? decodeEntities(href) : undefined, note: note || undefined };
+}
+
+// `intel https://x some note` → url + note; a leading non-URL word is note.
+function parseIntelArgs(args: string): { url?: string; note?: string } {
+  const unwrapped = decodeEntities(args.replace(SLACK_LINK, (_m, href: string) => href)).trim();
+  const [first, ...rest] = unwrapped.split(/\s+/);
+  if (first && /^https?:\/\//i.test(first)) return { url: first, note: rest.join(" ") || undefined };
+  return { note: unwrapped || undefined };
+}
+
+function matchCompetitor<T extends { name: string }>(competitors: T[], query: string): T | undefined {
+  const q = query.trim().toLowerCase();
+  if (!q) return undefined;
+  const exact = competitors.find((c) => c.name.toLowerCase() === q);
+  if (exact) return exact;
+  const partial = competitors.filter((c) => c.name.toLowerCase().includes(q));
+  return partial.length === 1 ? partial[0] : undefined;
+}
+
+const FORECASTS_SHOWN = 5;
+
 export function createSlackRouter(deps: SlackRouterDeps): Router {
   const router = express.Router();
 
   // Capture the exact bytes Slack signed. express.json()'s verify hook is the
   // only place they are still available.
-  router.use(
-    express.json({
-      verify: (req, _res, buf) => {
-        (req as express.Request & { rawBody?: string }).rawBody = buf.toString("utf8");
-      },
-    })
-  );
+  // Events arrive as JSON; slash commands and interactions as form posts.
+  const captureRawBody = (req: express.Request, _res: express.Response, buf: Buffer) => {
+    (req as express.Request & { rawBody?: string }).rawBody = buf.toString("utf8");
+  };
+  router.use(express.json({ verify: captureRawBody }));
+  router.use(express.urlencoded({ extended: false, verify: captureRawBody }));
 
-  router.post("/events", async (req, res) => {
+  // True when the request carries a valid Slack signature; otherwise answers
+  // and returns false.
+  function authenticated(req: express.Request, res: express.Response): boolean {
     const rawBody = (req as express.Request & { rawBody?: string }).rawBody;
     const timestamp = req.header("x-slack-request-timestamp") ?? "";
     const signature = req.header("x-slack-signature") ?? "";
@@ -115,7 +254,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         { hint: "body-parser sets req._body on first parse; later parsers skip their verify hook" }
       );
       res.status(500).json({ error: "slack_raw_body_unavailable" });
-      return;
+      return false;
     }
 
     if (
@@ -129,8 +268,36 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
       // No detail in the response. An unauthenticated caller learns only that
       // it failed, not which check it failed.
       res.status(401).json({ error: "unauthorized" });
-      return;
+      return false;
     }
+    return true;
+  }
+
+  // Resolves the Signal installation for a signed command or interaction.
+  // Answers (200, so Slack shows the text) and returns null when it can't.
+  // A modal submission only honours response_action, so its failures are
+  // shown as a field error instead of an ephemeral message.
+  async function installationFor(teamId: string, res: express.Response, asModalError = false) {
+    const fail = (text: string) =>
+      res
+        .status(200)
+        .json(asModalError ? { response_action: "errors", errors: { [INTEL_BLOCK.note]: text } } : ephemeral(text));
+    try {
+      const installation = teamId ? await deps.getSlackInstallation(teamId) : undefined;
+      if (installation) return installation;
+      fail("This Slack workspace isn't connected to Signal. Connect it in Signal's Settings.");
+    } catch (error) {
+      logger.error("slack: installation lookup failed", {
+        team_id: teamId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      fail("Signal couldn't look up this workspace right now. Try again in a moment.");
+    }
+    return null;
+  }
+
+  router.post("/events", async (req, res) => {
+    if (!authenticated(req, res)) return;
 
     const parsed = SlackEventSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -182,10 +349,34 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
     }
 
     if (!installation) {
+      // Already disconnected in Signal: nothing to clean up, and a 401 here
+      // would count against the app's event subscription.
+      if (event.type === "app_uninstalled" || event.type === "tokens_revoked") {
+        res.status(200).json({ ok: true });
+        return;
+      }
       // A signed request from a Slack team nobody connected. Serving it would
       // mean running an agent with no workspace to scope it to.
       logger.warn("slack: event from an unmapped team", { team_id: teamId });
       res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+
+    // Uninstalled, or its bot token revoked: the row can never post again.
+    if (
+      event.type === "app_uninstalled" ||
+      (event.type === "tokens_revoked" && (event.tokens?.bot?.length ?? 0) > 0)
+    ) {
+      try {
+        await deps.deleteSlackInstallationForTeam(teamId);
+        logger.info("slack: installation removed", { team_id: teamId, reason: event.type });
+      } catch (error) {
+        logger.error("slack: failed to remove an uninstalled installation", {
+          team_id: teamId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      res.status(200).json({ ok: true });
       return;
     }
 
@@ -196,7 +387,10 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
       return;
     }
 
-    if (event.type !== "app_mention" && event.type !== "message") {
+    // Plain messages count only as DMs to the bot. Edits, joins and other
+    // subtyped messages are not questions.
+    const isDm = event.type === "message" && event.channel_type === "im" && !event.subtype;
+    if (event.type !== "app_mention" && !isDm) {
       res.status(200).json({ ok: true });
       return;
     }
@@ -208,7 +402,12 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
     }
 
     try {
-      await deps.enqueueSlackQuestion({
+      if (!(await deps.allowSlackRequest("ask", teamId, event.user ?? ""))) {
+        logger.warn("slack: question throttled", { team_id: teamId, user: event.user });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      await withDeadline(deps.enqueueSlackQuestion({
         workspace_id: installation.workspace_id,
         team_id: teamId,
         channel: event.channel,
@@ -216,12 +415,12 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         question,
         // Reply in the thread when there is one, otherwise start a thread on
         // the message itself — so an answer never lands as a loose message in
-        // a busy channel.
-        thread_ts: event.thread_ts ?? event.ts ?? "",
-        bot_token: installation.bot_token,
-        // team_id + the event's own timestamp is unique per Slack event.
-        dedupe_key: `${teamId}:${event.ts ?? ""}`,
-      });
+        // a busy channel. A DM is a conversation already: answer inline.
+        thread_ts: isDm ? (event.thread_ts ?? "") : (event.thread_ts ?? event.ts ?? ""),
+        // team_id + the event's own timestamp is unique per Slack event. "-", not
+        // ":": BullMQ rejects custom job ids containing ":".
+        dedupe_key: `${teamId}-${event.ts ?? ""}`,
+      }));
     } catch (error) {
       // Still ack. A non-200 makes Slack retry, and a retry against a broken
       // queue produces the same failure plus a duplicate if it later recovers.
@@ -232,6 +431,203 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
     }
 
     res.status(200).json({ ok: true });
+  });
+
+  router.post("/commands", async (req, res) => {
+    const startedAt = Date.now();
+    if (!authenticated(req, res)) return;
+    const parsed = CommandSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "validation" });
+      return;
+    }
+    const command = parsed.data;
+    const installation = await installationFor(command.team_id, res);
+    if (!installation) return;
+    const workspaceId = installation.workspace_id;
+
+    const trimmed = command.text.trim();
+    const space = trimmed.search(/\s/);
+    const sub = (space === -1 ? trimmed : trimmed.slice(0, space)).toLowerCase();
+    const args = space === -1 ? "" : trimmed.slice(space + 1).trim();
+
+    try {
+      if (sub === "ask") {
+        if (!args) {
+          res.status(200).json(ephemeral("Ask a question: `/signal ask what is Acme planning?`"));
+          return;
+        }
+        if (!isSlackResponseUrl(command.response_url)) {
+          res.status(400).json({ error: "validation" });
+          return;
+        }
+        if (!(await deps.allowSlackRequest("ask", command.team_id, command.user_id))) {
+          res.status(200).json(ephemeral(SLOW_DOWN));
+          return;
+        }
+        await withDeadline(deps.enqueueSlackQuestion({
+          workspace_id: workspaceId,
+          team_id: command.team_id,
+          channel: command.channel_id,
+          user: command.user_id,
+          question: args,
+          thread_ts: "",
+          response_url: command.response_url,
+          dedupe_key: `${command.team_id}-cmd-${command.trigger_id || Date.now()}`,
+        }));
+        res.status(200).json(ephemeral("Looking into it. The answer will post here."));
+        return;
+      }
+
+      if (sub === "forecast" || sub === "forecasts") {
+        const competitors = (await deps.commands.listCompetitorsForWorkspace(workspaceId)).filter((c) => c.is_active);
+        const competitor = matchCompetitor(competitors, args);
+        if (!competitor) {
+          const names = competitors.map((c) => escapeMrkdwn(c.name)).join(", ");
+          res
+            .status(200)
+            .json(
+              ephemeral(
+                competitors.length === 0
+                  ? "This workspace isn't tracking any competitors yet."
+                  : `${args ? `No single competitor matches "${escapeMrkdwn(args)}".` : "Which competitor?"} Try one of: ${names}`
+              )
+            );
+          return;
+        }
+        const forecasts = await deps.commands.listPredictionsForWorkspace({
+          workspace_id: workspaceId,
+          competitor_id: competitor.id,
+          status: "open",
+          limit: FORECASTS_SHOWN,
+          soonest_first: true,
+        });
+        res.status(200).json({
+          response_type: "ephemeral",
+          text: `${escapeMrkdwn(competitor.name)}: ${forecasts.length} open forecast(s)`,
+          blocks: forecastListBlocks(competitor.name, forecasts),
+        });
+        return;
+      }
+
+      if (sub === "intel") {
+        const competitors = (await deps.commands.listCompetitorsForWorkspace(workspaceId)).filter((c) => c.is_active);
+        await deps.commands.openView(
+          installation.bot_token,
+          command.trigger_id,
+          intelModal(competitors, parseIntelArgs(args)),
+          viewsOpenBudget(startedAt)
+        );
+        res.status(200).end();
+        return;
+      }
+    } catch (error) {
+      logger.error("slack: /signal command failed", {
+        team_id: command.team_id,
+        subcommand: sub,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(200).json(ephemeral("Something went wrong. The failure is logged — try again in a moment."));
+      return;
+    }
+
+    res.status(200).json(ephemeral(SIGNAL_USAGE));
+  });
+
+  router.post("/interactions", async (req, res) => {
+    const startedAt = Date.now();
+    if (!authenticated(req, res)) return;
+    let payload: z.infer<typeof InteractionSchema>;
+    try {
+      const raw = typeof req.body?.payload === "string" ? JSON.parse(req.body.payload) : null;
+      const parsed = InteractionSchema.safeParse(raw);
+      if (!parsed.success) {
+        // Block actions and other interaction types Signal doesn't use.
+        res.status(200).end();
+        return;
+      }
+      payload = parsed.data;
+    } catch {
+      res.status(400).json({ error: "validation" });
+      return;
+    }
+
+    const installation = await installationFor(payload.team.id, res, payload.type === "view_submission");
+    if (!installation) return;
+    const workspaceId = installation.workspace_id;
+
+    try {
+      if (payload.type === "message_action") {
+        if (payload.callback_id !== "send_to_signal") {
+          res.status(200).end();
+          return;
+        }
+        const competitors = (await deps.commands.listCompetitorsForWorkspace(workspaceId)).filter((c) => c.is_active);
+        await deps.commands.openView(
+          installation.bot_token,
+          payload.trigger_id,
+          intelModal(competitors, prefillFromMessage(payload.message.text)),
+          viewsOpenBudget(startedAt)
+        );
+        res.status(200).end();
+        return;
+      }
+
+      if (payload.view.callback_id !== INTEL_MODAL_CALLBACK_ID) {
+        res.status(200).end();
+        return;
+      }
+      const values = payload.view.state.values;
+      const competitorId = values[INTEL_BLOCK.competitor]?.value?.selected_option?.value ?? "";
+      const url = values[INTEL_BLOCK.url]?.value?.value?.trim() || undefined;
+      const note = values[INTEL_BLOCK.note]?.value?.value ?? "";
+
+      const errors: Record<string, string> = {};
+      const input = FieldIntelInputSchema.safeParse({ note, ...(url ? { url } : {}) });
+      if (!input.success) {
+        for (const issue of input.error.issues) {
+          const field = issue.path[0] === "url" ? INTEL_BLOCK.url : INTEL_BLOCK.note;
+          errors[field] ??= field === INTEL_BLOCK.url ? "Enter an http(s) link." : "Add a note (up to 4,000 characters).";
+        }
+      }
+      const competitor = /^[0-9a-f-]{36}$/i.test(competitorId)
+        ? await deps.commands.getCompetitorByIdForWorkspace(competitorId, workspaceId)
+        : undefined;
+      if (!competitor) errors[INTEL_BLOCK.competitor] = "Pick a competitor.";
+      if (Object.keys(errors).length > 0 || !input.success || !competitor) {
+        res.status(200).json({ response_action: "errors", errors });
+        return;
+      }
+
+      if (!(await deps.allowSlackRequest("intel", payload.team.id, payload.user.id))) {
+        res.status(200).json({ response_action: "errors", errors: { [INTEL_BLOCK.note]: SLOW_DOWN } });
+        return;
+      }
+      await withDeadline(deps.commands.enqueueSlackIntel({
+        workspace_id: workspaceId,
+        team_id: payload.team.id,
+        user: payload.user.id,
+        competitor_id: competitor.id,
+        note: input.data.note,
+        url: input.data.url,
+        dedupe_key: `${payload.team.id}-view-${payload.view.id}`,
+      }));
+      res.status(200).end();
+    } catch (error) {
+      logger.error("slack: interaction failed", {
+        team_id: payload.team.id,
+        type: payload.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (payload.type === "view_submission") {
+        res.status(200).json({
+          response_action: "errors",
+          errors: { [INTEL_BLOCK.note]: "Signal couldn't save this right now. Try again in a moment." },
+        });
+      } else {
+        res.status(200).end();
+      }
+    }
   });
 
   // Where Slack sends the browser back after "Add to Slack". Public by

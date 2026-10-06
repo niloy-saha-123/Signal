@@ -24,7 +24,7 @@ export interface SlackBlock {
 // Names, patterns and statements come from users or LLM output over scraped
 // content. Unescaped, "<!channel>" pings the channel and "<url|label>" renders
 // a disguised link.
-function escapeMrkdwn(s: string): string {
+export function escapeMrkdwn(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
@@ -221,5 +221,112 @@ export function digestBlocks(
     fallbackText:
       `Signal weekly digest: ${plural(digest.alert_count, "alert")}, ` +
       `${plural(digest.new_forecast_count, "new forecast")}, ${digest.settled.length} settled`,
+  };
+}
+
+// ── /signal and "Send to Signal" ──────────────────────────────────────────
+
+export const SIGNAL_USAGE = [
+  "*/signal* commands:",
+  "• `/signal ask <question>`: Signal answers in this channel",
+  "• `/signal forecast <competitor>`: that competitor's open forecasts (only you see it)",
+  "• `/signal intel [url] [note]`: file a link or note under a competitor",
+  "Or use *Send to Signal* from any message's ⋯ menu.",
+].join("\n");
+
+export interface ForecastLine {
+  statement: string;
+  probability: number;
+  resolves_at: Date;
+}
+
+export function forecastListBlocks(competitorName: string, forecasts: ForecastLine[]): SlackBlock[] {
+  const name = escapeMrkdwn(competitorName);
+  if (forecasts.length === 0) {
+    return [section(`No open forecasts for *${name}*. Signal forecasts only when several independent signals agree.`)];
+  }
+  return [
+    section(`*${name}* — ${plural(forecasts.length, "open forecast")}`),
+    ...forecasts.map((f) =>
+      section(
+        `${escapeMrkdwn(f.statement)}\n*${percent(f.probability)}* likely  ·  resolves ${formatDate(f.resolves_at)}`
+      )
+    ),
+  ];
+}
+
+export const INTEL_MODAL_CALLBACK_ID = "signal_intel";
+export const INTEL_BLOCK = { competitor: "competitor", url: "url", note: "note" } as const;
+
+const SLACK_OPTIONS_MAX = 100;
+const NOTE_MAX = 4_000;
+
+function plainText(text: string) {
+  return { type: "plain_text", text, emoji: false };
+}
+
+export function intelModal(
+  competitors: Array<{ id: string; name: string }>,
+  prefill: { url?: string; note?: string }
+): Record<string, unknown> {
+  const base = { type: "modal", callback_id: INTEL_MODAL_CALLBACK_ID, title: plainText("Send to Signal") };
+  if (competitors.length === 0) {
+    return {
+      ...base,
+      close: plainText("Close"),
+      blocks: [section("This workspace isn't tracking any competitors yet. Add one in Signal first.")],
+    };
+  }
+  const sorted = [...competitors].sort((a, b) => a.name.localeCompare(b.name));
+  const options = sorted.slice(0, SLACK_OPTIONS_MAX).map((c) => ({
+    text: plainText(c.name.slice(0, 75)),
+    value: c.id,
+  }));
+  const note = prefill.note?.slice(0, NOTE_MAX);
+  return {
+    ...base,
+    submit: plainText("Save"),
+    close: plainText("Cancel"),
+    blocks: [
+      {
+        type: "input",
+        block_id: INTEL_BLOCK.competitor,
+        label: plainText("Competitor"),
+        element: {
+          type: "static_select",
+          action_id: "value",
+          placeholder: plainText("Pick a competitor"),
+          options,
+          ...(options.length === 1 ? { initial_option: options[0] } : {}),
+        },
+        ...(sorted.length > SLACK_OPTIONS_MAX
+          ? { hint: plainText(`Showing the first ${SLACK_OPTIONS_MAX} competitors A–Z. File the rest from Signal.`) }
+          : {}),
+      },
+      {
+        type: "input",
+        block_id: INTEL_BLOCK.url,
+        optional: true,
+        label: plainText("Link"),
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          placeholder: plainText("https://"),
+          ...(prefill.url ? { initial_value: prefill.url.slice(0, 2_000) } : {}),
+        },
+      },
+      {
+        type: "input",
+        block_id: INTEL_BLOCK.note,
+        label: plainText("What did you learn?"),
+        element: {
+          type: "plain_text_input",
+          action_id: "value",
+          multiline: true,
+          max_length: NOTE_MAX,
+          ...(note ? { initial_value: note } : {}),
+        },
+      },
+    ],
   };
 }

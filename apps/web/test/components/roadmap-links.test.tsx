@@ -10,7 +10,7 @@ const { createMock, updateMock, deleteMock, getMock } = vi.hoisted(() => ({
 
 vi.mock("../../lib/api", () => {
   class ApiError extends Error {
-    constructor(public status: number) {
+    constructor(public status: number, public body: unknown = null) {
       super(`status ${status}`);
     }
   }
@@ -34,7 +34,8 @@ function link(n: number, overrides: Partial<RoadmapLink> = {}): RoadmapLink {
   };
 }
 
-const err = (status: number) => new (ApiError as unknown as new (s: number) => Error)(status);
+const err = (status: number, body: unknown = null) =>
+  new (ApiError as unknown as new (s: number, b: unknown) => Error)(status, body);
 
 beforeEach(() => {
   createMock.mockReset();
@@ -197,5 +198,25 @@ describe("RoadmapLinks", () => {
     render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} readOnly />);
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
+  });
+  it("locks the card when the server says the forecast settled", async () => {
+    updateMock.mockRejectedValue(err(409, { error: "forecast_settled" }));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Stance for Item 1" }), {
+      target: { value: "accelerate" },
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("locked");
+    expect(screen.queryByRole("combobox", { name: "Stance for Item 1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
+
+  it("does not duplicate a link the server already had", async () => {
+    createMock.mockResolvedValue(link(1));
+    render(<RoadmapLinks predictionId="p1" initialLinks={[link(1)]} />);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Item 1" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://tracker.example.com/1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Item 1" })).toHaveLength(1));
   });
 });

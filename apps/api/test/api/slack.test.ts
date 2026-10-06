@@ -8,12 +8,13 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { createSlackRouter, type SlackRouterDeps } from "@/api/slack";
+import { createSlackRouter, prefillFromMessage, type SlackRouterDeps } from "@/api/slack";
 import { signSlackState } from "@/integrations/slack/oauth";
 
 const SECRET = "8f742231b10e8888abcd99yyyzzz85a5";
 const TEAM_ID = "T0000001";
 const WS_UUID = "22222222-2222-4222-8222-222222222222";
+const COMP_UUID = "11111111-1111-4111-8111-111111111111";
 
 const RESULT = {
   team_id: TEAM_ID,
@@ -40,7 +41,25 @@ function makeDeps(overrides: Partial<SlackRouterDeps> = {}): SlackRouterDeps {
       bot_token: "xoxb-test",
       bot_user_id: "U0BOT",
     }),
+    deleteSlackInstallationForTeam: vi.fn().mockResolvedValue(undefined),
+    allowSlackRequest: vi.fn().mockResolvedValue(true),
     enqueueSlackQuestion: vi.fn().mockResolvedValue(undefined),
+    commands: {
+      listCompetitorsForWorkspace: vi.fn().mockResolvedValue([
+        { id: COMP_UUID, name: "Acme", is_active: true },
+        { id: "77777777-7777-4777-8777-777777777777", name: "Acme Cloud", is_active: true },
+        { id: "88888888-8888-4888-8888-888888888888", name: "Globex", is_active: true },
+        { id: "99999999-9999-4999-8999-999999999999", name: "Dormant", is_active: false },
+      ]),
+      getCompetitorByIdForWorkspace: vi.fn(async (id: string) =>
+        id === COMP_UUID ? { id: COMP_UUID, name: "Acme" } : undefined
+      ),
+      listPredictionsForWorkspace: vi.fn().mockResolvedValue([
+        { statement: "Acme ships SSO", probability: 0.7, resolves_at: new Date("2026-12-01T00:00:00Z") },
+      ]),
+      openView: vi.fn().mockResolvedValue(undefined),
+      enqueueSlackIntel: vi.fn().mockResolvedValue(undefined),
+    } as any,
     oauth: {
       config: () => ({ clientId: "1", clientSecret: "cs", redirectUri: "https://api.x/api/slack/oauth/callback" }),
       exchangeCode: vi.fn().mockResolvedValue(RESULT),
@@ -335,7 +354,8 @@ describe("POST /api/slack/events resilience", () => {
     await post(app, "/api/slack/events", body, signedHeaders(body));
 
     const [payload] = enqueueSlackQuestion.mock.calls[0];
-    expect(payload.dedupe_key).toBe(`${TEAM_ID}:1700000000.000100`);
+    // BullMQ rejects custom job ids containing ":".
+    expect(payload.dedupe_key).toBe(`${TEAM_ID}-1700000000.000100`);
   });
 });
 
@@ -395,5 +415,393 @@ describe("GET /api/slack/oauth/callback", () => {
     const res = await getRedirect(appWith(createSlackRouter(deps)), `/api/slack/oauth/callback?code=abc&state=${state()}`);
     expect(res.location).toBe("http://app.test/settings?slack=error");
     expect(deps.oauth.savePendingInstall).not.toHaveBeenCalled();
+  });
+});
+
+const FORM = { "Content-Type": "application/x-www-form-urlencoded" };
+
+function form(fields: Record<string, string>): string {
+  return new URLSearchParams(fields).toString();
+}
+
+async function signedForm(app: express.Express, path: string, fields: Record<string, string>) {
+  const body = form(fields);
+  return post(app, path, body, { ...FORM, ...signedHeaders(body) });
+}
+
+function eventBody(event: Record<string, unknown>): string {
+  return JSON.stringify({ type: "event_callback", team_id: TEAM_ID, event });
+}
+
+describe("POST /api/slack/events — DMs and uninstall", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("answers a DM inline, not in a thread", async () => {
+    const deps = makeDeps();
+    const body = eventBody({ type: "message", channel_type: "im", text: "what's new?", channel: "D1", user: "U1", ts: "5.0" });
+    await post(appWith(createSlackRouter(deps)), "/api/slack/events", body, signedHeaders(body));
+    expect(deps.enqueueSlackQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "D1", question: "what's new?", thread_ts: "" })
+    );
+  });
+
+  it.each([
+    ["a channel message", { type: "message", channel_type: "channel", text: "hi", channel: "C1", user: "U1", ts: "5.0" }],
+    ["an edited DM", { type: "message", channel_type: "im", subtype: "message_changed", text: "hi", channel: "D1", user: "U1", ts: "5.0" }],
+  ])("ignores %s", async (_label, event) => {
+    const deps = makeDeps();
+    const body = eventBody(event);
+    const res = await post(appWith(createSlackRouter(deps)), "/api/slack/events", body, signedHeaders(body));
+    expect(res.status).toBe(200);
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["app_uninstalled", { type: "app_uninstalled" }],
+    ["tokens_revoked for the bot", { type: "tokens_revoked", tokens: { bot: ["U0BOT"] } }],
+  ])("removes the installation on %s", async (_label, event) => {
+    const deps = makeDeps();
+    const body = eventBody(event);
+    const res = await post(appWith(createSlackRouter(deps)), "/api/slack/events", body, signedHeaders(body));
+    expect(res.status).toBe(200);
+    expect(deps.deleteSlackInstallationForTeam).toHaveBeenCalledWith(TEAM_ID);
+  });
+
+  it("keeps the installation when only user tokens were revoked", async () => {
+    const deps = makeDeps();
+    const body = eventBody({ type: "tokens_revoked", tokens: { oauth: ["U1"] } });
+    await post(appWith(createSlackRouter(deps)), "/api/slack/events", body, signedHeaders(body));
+    expect(deps.deleteSlackInstallationForTeam).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/slack/commands", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const base = {
+    team_id: TEAM_ID,
+    user_id: "U1",
+    channel_id: "C1",
+    response_url: "https://hooks.slack.com/commands/T1/1/abc",
+    trigger_id: "trig.1",
+    command: "/signal",
+  };
+
+  it("rejects an unsigned command", async () => {
+    const deps = makeDeps();
+    const res = await post(appWith(createSlackRouter(deps)), "/api/slack/commands", form({ ...base, text: "ask hi" }), FORM);
+    expect(res.status).toBe(401);
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("tells an unconnected team to connect, without doing work", async () => {
+    const deps = makeDeps({ getSlackInstallation: vi.fn().mockResolvedValue(undefined) });
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...base, text: "ask hi" });
+    expect(res.status).toBe(200);
+    expect(res.body.text).toMatch(/isn't connected/);
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("ask: queues the question with the response_url and acks privately", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", {
+      ...base,
+      text: "ask what is Acme planning?",
+    });
+    expect(res.body).toEqual({ response_type: "ephemeral", text: expect.stringMatching(/Looking into it/) });
+    const [question] = (deps.enqueueSlackQuestion as any).mock.calls[0];
+    expect(question).toMatchObject({
+      workspace_id: WS_UUID,
+      team_id: TEAM_ID,
+      user: "U1",
+      question: "what is Acme planning?",
+      response_url: base.response_url,
+    });
+    expect(question.dedupe_key).not.toContain(":");
+    expect(question).not.toHaveProperty("bot_token");
+  });
+
+  it("ask: refuses a response_url outside hooks.slack.com", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", {
+      ...base,
+      text: "ask hi",
+      response_url: "https://evil.example/hook",
+    });
+    expect(res.status).toBe(400);
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("ask with no question explains the syntax", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...base, text: "ask" });
+    expect(res.body.text).toMatch(/\/signal ask/);
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("forecast: an exact name wins over a longer match and lists the soonest open forecasts", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...base, text: "forecast acme" });
+    expect(deps.commands.listPredictionsForWorkspace).toHaveBeenCalledWith({
+      workspace_id: WS_UUID,
+      competitor_id: COMP_UUID,
+      status: "open",
+      limit: 5,
+      soonest_first: true,
+    });
+    expect(res.body.response_type).toBe("ephemeral");
+    expect(JSON.stringify(res.body.blocks)).toContain("Acme ships SSO");
+  });
+
+  it("forecast: an ambiguous name lists active competitors only", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...base, text: "forecast acm" });
+    expect(res.body.text).toMatch(/No single competitor matches "acm"/);
+    expect(res.body.text).toContain("Globex");
+    expect(res.body.text).not.toContain("Dormant");
+    expect(deps.commands.listPredictionsForWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("intel: opens the modal with the link and note prefilled", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", {
+      ...base,
+      text: "intel <https://acme.dev/pricing> they raised prices",
+    });
+    expect(res.status).toBe(200);
+    const [token, trigger, view] = (deps.commands.openView as any).mock.calls[0];
+    expect(token).toBe("xoxb-test");
+    expect(trigger).toBe("trig.1");
+    const json = JSON.stringify(view);
+    expect(json).toContain("https://acme.dev/pricing");
+    expect(json).toContain("they raised prices");
+    expect(json).not.toContain("Dormant");
+  });
+
+  it("intel: says so when the modal can't open", async () => {
+    const deps = makeDeps();
+    (deps.commands.openView as any).mockRejectedValue(new Error("expired_trigger_id"));
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...base, text: "intel" });
+    expect(res.status).toBe(200);
+    expect(res.body.text).toMatch(/Something went wrong/);
+  });
+
+  it.each(["", "help", "dance"])("shows usage for %j", async (text) => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...base, text });
+    expect(res.body.text).toContain("/signal ask");
+  });
+});
+
+describe("POST /api/slack/interactions", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const submission = (values: Record<string, unknown>) => ({
+    type: "view_submission",
+    team: { id: TEAM_ID },
+    user: { id: "U1" },
+    view: { id: "V1", callback_id: "signal_intel", state: { values } },
+  });
+  const goodValues = {
+    competitor: { value: { selected_option: { value: COMP_UUID } } },
+    url: { value: { value: "https://acme.dev/blog/sso" } },
+    note: { value: { value: "Sales heard SSO is coming" } },
+  };
+
+  it("rejects an unsigned interaction", async () => {
+    const deps = makeDeps();
+    const body = form({ payload: JSON.stringify(submission(goodValues)) });
+    const res = await post(appWith(createSlackRouter(deps)), "/api/slack/interactions", body, FORM);
+    expect(res.status).toBe(401);
+    expect(deps.commands.enqueueSlackIntel).not.toHaveBeenCalled();
+  });
+
+  it("Send to Signal opens the modal prefilled from the message", async () => {
+    const deps = makeDeps();
+    await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify({
+        type: "message_action",
+        callback_id: "send_to_signal",
+        trigger_id: "trig.2",
+        team: { id: TEAM_ID },
+        user: { id: "U1" },
+        message: { text: "<@U9> look: <https://acme.dev/changelog|Acme changelog> &amp; more" },
+      }),
+    });
+    const [, trigger, view] = (deps.commands.openView as any).mock.calls[0];
+    expect(trigger).toBe("trig.2");
+    const json = JSON.stringify(view);
+    expect(json).toContain('"initial_value":"https://acme.dev/changelog"');
+    expect(json).toContain("look: Acme changelog & more");
+  });
+
+  it("a valid submission queues the intel and closes the modal", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify(submission(goodValues)),
+    });
+    expect(res.status).toBe(200);
+    expect(res.raw).toBe("");
+    const [intel] = (deps.commands.enqueueSlackIntel as any).mock.calls[0];
+    expect(intel).toMatchObject({
+      workspace_id: WS_UUID,
+      team_id: TEAM_ID,
+      user: "U1",
+      competitor_id: COMP_UUID,
+      note: "Sales heard SSO is coming",
+      url: "https://acme.dev/blog/sso",
+    });
+    expect(intel.dedupe_key).not.toContain(":");
+  });
+
+  it("a competitor outside the workspace is a field error, not a write", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify(
+        submission({ ...goodValues, competitor: { value: { selected_option: { value: "66666666-6666-4666-8666-666666666666" } } } })
+      ),
+    });
+    expect(res.body).toEqual({ response_action: "errors", errors: { competitor: "Pick a competitor." } });
+    expect(deps.commands.enqueueSlackIntel).not.toHaveBeenCalled();
+  });
+
+  it("a non-http link and an empty note are field errors", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify(
+        submission({ ...goodValues, url: { value: { value: "javascript:alert(1)" } }, note: { value: { value: "  " } } })
+      ),
+    });
+    expect(res.body.response_action).toBe("errors");
+    expect(Object.keys(res.body.errors).sort()).toEqual(["note", "url"]);
+    expect(deps.commands.enqueueSlackIntel).not.toHaveBeenCalled();
+  });
+
+  it("acks interaction types Signal doesn't use", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify({ type: "block_actions", team: { id: TEAM_ID } }),
+    });
+    expect(res.status).toBe(200);
+    expect(deps.commands.openView).not.toHaveBeenCalled();
+  });
+});
+
+describe("prefillFromMessage", () => {
+  it("takes the first link and keeps link labels in the note", () => {
+    expect(prefillFromMessage("see <https://a.dev/x|this> and <https://b.dev>")).toEqual({
+      url: "https://a.dev/x",
+      note: "see this and https://b.dev",
+    });
+  });
+
+  it("drops user and channel mentions", () => {
+    expect(prefillFromMessage("<@U1> <#C1|general> hello")).toEqual({ url: undefined, note: "hello" });
+  });
+
+  it("returns nothing for an empty message", () => {
+    expect(prefillFromMessage("")).toEqual({ url: undefined, note: undefined });
+  });
+});
+
+describe("Slack review fixes", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const cmd = {
+    team_id: TEAM_ID,
+    user_id: "U1",
+    channel_id: "C1",
+    response_url: "https://hooks.slack.com/commands/T1/1/abc",
+    trigger_id: "trig.1",
+  };
+
+  it("throttled /signal ask says so and queues nothing", async () => {
+    const deps = makeDeps({ allowSlackRequest: vi.fn().mockResolvedValue(false) });
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...cmd, text: "ask hi" });
+    expect(res.body.text).toMatch(/a lot right now/);
+    expect(deps.allowSlackRequest).toHaveBeenCalledWith("ask", TEAM_ID, "U1");
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("throttled mentions are acked and dropped", async () => {
+    const deps = makeDeps({ allowSlackRequest: vi.fn().mockResolvedValue(false) });
+    const body = eventBody({ type: "app_mention", text: "<@U0BOT> hi", channel: "C1", user: "U1", ts: "1.0" });
+    const res = await post(appWith(createSlackRouter(deps)), "/api/slack/events", body, signedHeaders(body));
+    expect(res.status).toBe(200);
+    expect(deps.enqueueSlackQuestion).not.toHaveBeenCalled();
+  });
+
+  it("throttled intel submissions get a field error", async () => {
+    const deps = makeDeps({ allowSlackRequest: vi.fn().mockResolvedValue(false) });
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify({
+        type: "view_submission",
+        team: { id: TEAM_ID },
+        user: { id: "U1" },
+        view: {
+          id: "V1",
+          callback_id: "signal_intel",
+          state: {
+            values: {
+              competitor: { value: { selected_option: { value: COMP_UUID } } },
+              url: { value: { value: "" } },
+              note: { value: { value: "a note" } },
+            },
+          },
+        },
+      }),
+    });
+    expect(res.body.response_action).toBe("errors");
+    expect(res.body.errors.note).toMatch(/a lot right now/);
+    expect(deps.commands.enqueueSlackIntel).not.toHaveBeenCalled();
+  });
+
+  it("answers within Slack's deadline when the queue hangs (Redis down)", async () => {
+    const deps = makeDeps({ enqueueSlackQuestion: vi.fn(() => new Promise<void>(() => {})) });
+    const started = Date.now();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...cmd, text: "ask hi" });
+    expect(Date.now() - started).toBeLessThan(2_900);
+    expect(res.status).toBe(200);
+    expect(res.body.text).toMatch(/Something went wrong/);
+  });
+
+  it("a modal submission from a disconnected team gets a field error, not a silent close", async () => {
+    const deps = makeDeps({ getSlackInstallation: vi.fn().mockResolvedValue(undefined) });
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/interactions", {
+      payload: JSON.stringify({
+        type: "view_submission",
+        team: { id: TEAM_ID },
+        user: { id: "U1" },
+        view: { id: "V1", callback_id: "signal_intel", state: { values: {} } },
+      }),
+    });
+    expect(res.body.response_action).toBe("errors");
+    expect(res.body.errors.note).toMatch(/isn't connected/);
+  });
+
+  it("acks uninstall events from a team Signal already disconnected", async () => {
+    const deps = makeDeps({ getSlackInstallation: vi.fn().mockResolvedValue(undefined) });
+    const body = eventBody({ type: "app_uninstalled" });
+    const res = await post(appWith(createSlackRouter(deps)), "/api/slack/events", body, signedHeaders(body));
+    expect(res.status).toBe(200);
+  });
+
+  it("decodes Slack's &amp; inside a prefilled link", () => {
+    expect(prefillFromMessage("<https://a.dev/p?x=1&amp;y=2|label>").url).toBe("https://a.dev/p?x=1&y=2");
+  });
+
+  it("escapes what the user typed when echoing it back", async () => {
+    const deps = makeDeps();
+    const res = await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", {
+      ...cmd,
+      text: "forecast <!channel>",
+    });
+    expect(res.body.text).toContain("&lt;!channel&gt;");
+  });
+
+  it("passes views.open what's left of the 3 second window", async () => {
+    const deps = makeDeps();
+    await signedForm(appWith(createSlackRouter(deps)), "/api/slack/commands", { ...cmd, text: "intel" });
+    const timeout = (deps.commands.openView as any).mock.calls[0][3];
+    expect(timeout).toBeGreaterThanOrEqual(500);
+    expect(timeout).toBeLessThanOrEqual(2_700);
   });
 });

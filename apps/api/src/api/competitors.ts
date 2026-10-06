@@ -35,6 +35,7 @@ import { isPublicHostname } from "../lib/safe-fetch";
 import { queues, type QueueName } from "../queues/registry";
 import { logger } from "../lib/logger";
 import { enqueueInitialSignalPipeline } from "../pipeline/recovery";
+import { submitFieldIntel } from "../pipeline/field-intel";
 import { fetchPublicPageText } from "../agents/chat/fetch-url";
 import { consumeChatInputBudget } from "../agents/chat/input-budget";
 import {
@@ -79,6 +80,7 @@ export interface CompetitorRouterDeps {
   getRecentPricingDiffs: typeof queries.getRecentPricingDiffs;
   listPredictionsForWorkspace: typeof queries.listPredictionsForWorkspace;
   listSignalFeed: typeof queries.listSignalFeed;
+  countRoadmapLinksByPrediction: typeof queries.countRoadmapLinksByPrediction;
   createAgentRun: typeof queries.createAgentRun;
   failRunIfRunning: typeof queries.failRunIfRunning;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
@@ -102,6 +104,7 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   getRecentPricingDiffs: queries.getRecentPricingDiffs,
   listPredictionsForWorkspace: queries.listPredictionsForWorkspace,
   listSignalFeed: queries.listSignalFeed,
+  countRoadmapLinksByPrediction: queries.countRoadmapLinksByPrediction,
   createAgentRun: queries.createAgentRun,
   failRunIfRunning: queries.failRunIfRunning,
   enqueue: (queue, data) => queues[queue].add(queue, data),
@@ -112,14 +115,6 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   fetchPublicPageText,
   consumeBudget: consumeChatInputBudget,
 };
-
-const FIELD_PAGE_MAX_CHARS = 12_000;
-
-function fieldIntelText(note: string, url: string | undefined, pageText: string | null): string {
-  const parts = [`Teammate note: ${note}`];
-  if (url && pageText) parts.push(`Linked page (${url}):\n${pageText.slice(0, FIELD_PAGE_MAX_CHARS)}`);
-  return parts.join("\n\n");
-}
 
 const CreateBodySchema = CompetitorCreateInputSchema.strict();
 
@@ -478,56 +473,22 @@ export function createCompetitorRouter(
         res.status(404).json({ error: "not_found" });
         return;
       }
-      try {
-        await deps.consumeBudget("field_intel", req.workspaceId!);
-      } catch {
+      const result = await submitFieldIntel(deps, {
+        workspace_id: req.workspaceId!,
+        competitor_id: id,
+        note: parsed.data.note,
+        url: parsed.data.url,
+        submitted_by: `user:${req.user!.id}`,
+      });
+      if (result.status === "rate_limited") {
         res.status(429).json({ error: "rate_limited" });
         return;
       }
-
-      const { note, url } = parsed.data;
-      if (url && (await deps.signalExistsBySourceUrl(id, "field", url))) {
+      if (result.status === "duplicate") {
         res.status(409).json({ error: "duplicate_url" });
         return;
       }
-
-      // The note is the teammate's evidence; the page is context. A page that
-      // can't be fetched (private host, video, outage) never loses the note.
-      let pageText: string | null = null;
-      if (url) {
-        try {
-          pageText = (await deps.fetchPublicPageText(url, `field:fetch_url:${req.workspaceId}`)) || null;
-        } catch (err) {
-          logger.warn("field intel page fetch failed — saving the note alone", {
-            competitor_id: id,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      const signal = await deps.createSignal({
-        competitor_id: id,
-        source: "field",
-        source_url: url ?? null,
-        title: note.split("\n")[0].slice(0, 120),
-        raw_text: fieldIntelText(note, url, pageText),
-      });
-      // Lost a race with a concurrent submission of the same URL.
-      if (!signal) {
-        res.status(409).json({ error: "duplicate_url" });
-        return;
-      }
-      try {
-        await deps.enqueueInitialSignalPipeline(signal.id);
-      } catch (err) {
-        // createSignal wrote the outbox row in the same transaction;
-        // pipeline-recovery re-enqueues it.
-        logger.error("Failed to enqueue field intel pipeline — recovery will retry", {
-          signal_id: signal.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      res.status(201).json({ signal_id: signal.id, fetched: pageText !== null });
+      res.status(201).json({ signal_id: result.signal_id, fetched: result.fetched });
     })
   );
 

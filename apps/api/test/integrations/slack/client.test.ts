@@ -26,7 +26,7 @@ vi.mock("@/db/client", () => ({
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock("@/lib/safe-fetch", () => ({ safeFetch: safeFetchMock }));
 
-import { postMessage } from "@/integrations/slack/client";
+import { isSlackResponseUrl, openView, postMessage, postToResponseUrl } from "@/integrations/slack/client";
 
 const INPUT = { token: "xoxb-1", channel: "C1", blocks: [], fallbackText: "hi" };
 const slackAnswer = (body: object, status = 200) => ({
@@ -63,5 +63,42 @@ describe("postMessage circuit breaker", () => {
       await expect(postMessage(INPUT)).rejects.toThrow(/ratelimited/);
     }
     await expect(postMessage(INPUT)).rejects.toThrow(/circuit is open/);
+  });
+});
+
+describe("response_url and views.open", () => {
+  beforeEach(() => {
+    store.clear();
+    safeFetchMock.mockReset();
+  });
+
+  it.each([
+    ["https://hooks.slack.com/commands/T/1/x", true],
+    ["http://hooks.slack.com/commands/T/1/x", false],
+    ["https://hooks.slack.com.evil.dev/x", false],
+    ["https://hooks.slack.com:8443/x", false],
+    ["https://169.254.169.254/latest", false],
+    ["not a url", false],
+  ])("isSlackResponseUrl(%s) = %s", (url, ok) => {
+    expect(isSlackResponseUrl(url)).toBe(ok);
+  });
+
+  it("never fetches a response_url outside hooks.slack.com", async () => {
+    await expect(
+      postToResponseUrl("https://evil.dev/x", { response_type: "in_channel", blocks: [], text: "x" })
+    ).rejects.toThrow();
+    expect(safeFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("posts the message to a Slack response_url", async () => {
+    safeFetchMock.mockResolvedValue({ status: 200, text: async () => "ok" });
+    await postToResponseUrl("https://hooks.slack.com/x", { response_type: "in_channel", blocks: [], text: "hi" });
+    const [, init] = safeFetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({ response_type: "in_channel", blocks: [], text: "hi" });
+  });
+
+  it("views.open throws on ok:false", async () => {
+    safeFetchMock.mockResolvedValue(slackAnswer({ ok: false, error: "expired_trigger_id" }));
+    await expect(openView("xoxb-1", "trig", { type: "modal" })).rejects.toThrow(/expired_trigger_id/);
   });
 });

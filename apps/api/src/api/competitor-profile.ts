@@ -200,9 +200,13 @@ export interface CompetitorProfile {
   history: { date: string; score: number }[];
   trend: ReturnType<typeof trendSeries>;
   hiring: ReturnType<typeof computeHiringDeltas>;
-  forecasts: Awaited<ReturnType<typeof queries.listPredictionsForWorkspace>>;
+  forecasts: Array<
+    Awaited<ReturnType<typeof queries.listPredictionsForWorkspace>>[number] & { roadmap_link_count: number }
+  >;
   signals: Awaited<ReturnType<typeof queries.listSignalFeed>>;
   coverage: ReturnType<typeof coverageFor>;
+  // Pieces that failed to load and were replaced with empty data.
+  degraded: string[];
 }
 
 export interface CompetitorProfileDeps {
@@ -212,6 +216,7 @@ export interface CompetitorProfileDeps {
   getJobSignalsForHiringDelta: typeof queries.getJobSignalsForHiringDelta;
   listPredictionsForWorkspace: typeof queries.listPredictionsForWorkspace;
   listSignalFeed: typeof queries.listSignalFeed;
+  countRoadmapLinksByPrediction: typeof queries.countRoadmapLinksByPrediction;
 }
 
 async function settle<T>(
@@ -219,11 +224,13 @@ async function settle<T>(
   fallback: T,
   label: string,
   competitorId: string,
-  workspaceId: string
+  workspaceId: string,
+  degraded: string[]
 ): Promise<T> {
   try {
     return await promise;
   } catch (error) {
+    degraded.push(label);
     logger.warn(`competitor profile: ${label} failed`, {
       competitor_id: competitorId,
       workspace_id: workspaceId,
@@ -242,21 +249,24 @@ export async function loadCompetitorProfile(
   const competitor = await deps.getCompetitorByIdForWorkspace(competitorId, workspaceId);
   if (!competitor) return null;
 
+  const degraded: string[] = [];
   const [scores, volume, jobs, forecasts, signals] = await Promise.all([
-    settle(deps.getLatestSignalScores(competitorId, 90), [], "scores", competitorId, workspaceId),
-    settle(deps.getSignalVolumeByDay(competitorId, 30), [], "volume", competitorId, workspaceId),
-    settle(deps.getJobSignalsForHiringDelta(competitorId, 30), [], "hiring", competitorId, workspaceId),
+    settle(deps.getLatestSignalScores(competitorId, 90), [], "scores", competitorId, workspaceId, degraded),
+    settle(deps.getSignalVolumeByDay(competitorId, 30), [], "volume", competitorId, workspaceId, degraded),
+    settle(deps.getJobSignalsForHiringDelta(competitorId, 30), [], "hiring", competitorId, workspaceId, degraded),
     settle(
       deps.listPredictionsForWorkspace({
         workspace_id: workspaceId,
         competitor_id: competitorId,
         status: "open",
         limit: 20,
+        soonest_first: true,
       }),
       [],
       "forecasts",
       competitorId,
-      workspaceId
+      workspaceId,
+      degraded
     ),
     settle(
       deps.listSignalFeed({
@@ -268,9 +278,22 @@ export async function loadCompetitorProfile(
       [],
       "signals",
       competitorId,
-      workspaceId
+      workspaceId,
+      degraded
     ),
   ]);
+
+  const linkCounts = await settle(
+    deps.countRoadmapLinksByPrediction(
+      forecasts.map((f) => f.id),
+      workspaceId
+    ),
+    new Map<string, number>(),
+    "roadmap_link_counts",
+    competitorId,
+    workspaceId,
+    degraded
+  );
 
   // listSignalFeed returns limit + 1 rows as a pagination sentinel
   const recentSignals = signals.slice(0, 50);
@@ -281,8 +304,9 @@ export async function loadCompetitorProfile(
     history: scoreHistory(scores, competitorId).map((r) => ({ date: r.computed_at, score: r.score })),
     trend: trendSeries(scores.slice(0, 30), volume, competitorId),
     hiring: computeHiringDeltas(jobs, 30, now),
-    forecasts: [...forecasts].sort((a, b) => a.resolves_at.getTime() - b.resolves_at.getTime()),
+    forecasts: forecasts.map((f) => ({ ...f, roadmap_link_count: linkCounts.get(f.id) ?? 0 })),
     signals: recentSignals,
     coverage: coverageFor(competitor, recentSignals),
+    degraded: degraded.sort(),
   };
 }

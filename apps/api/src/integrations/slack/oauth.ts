@@ -3,11 +3,15 @@
 // redirects a browser there with no bearer token), so state is HMAC-signed and
 // short-lived, and the callback trusts nothing else about who is installing.
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
 import { safeFetch } from "../../lib/safe-fetch";
 
+// commands: /signal and the "Send to Signal" shortcut. im:history: DMs to the bot.
 export const SLACK_SCOPES = [
   "app_mentions:read",
   "chat:write",
+  "commands",
+  "im:history",
   "incoming-webhook",
 ] as const;
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -116,14 +120,16 @@ export interface SlackOAuthResult {
   channel_name: string | null;
 }
 
-interface OAuthAccessResponse {
-  ok: boolean;
-  error?: string;
-  access_token?: string;
-  bot_user_id?: string;
-  team?: { id?: string; name?: string };
-  incoming_webhook?: { channel_id?: string; channel?: string };
-}
+const OAuthAccessResponseSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  access_token: z.string().min(1).optional(),
+  bot_user_id: z.string().min(1).optional(),
+  team: z.object({ id: z.string().min(1), name: z.string().optional() }).optional(),
+  incoming_webhook: z
+    .object({ channel_id: z.string().min(1), channel: z.string().optional() })
+    .optional(),
+});
 
 // Slack answers failures with HTTP 200 and ok:false, so both are checked.
 // Error messages carry Slack's error code only — never the code, secret or token.
@@ -146,7 +152,9 @@ export async function exchangeSlackCode(
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`Slack oauth.v2.access returned HTTP ${res.status}`);
   }
-  const body = (await res.json()) as OAuthAccessResponse;
+  const parsed = OAuthAccessResponseSchema.safeParse(await res.json());
+  if (!parsed.success) throw new Error("Slack oauth.v2.access response failed validation");
+  const body = parsed.data;
   if (!body.ok)
     throw new Error(
       `Slack oauth.v2.access failed: ${body.error ?? "unknown_error"}`,

@@ -103,6 +103,12 @@ describe("coverageFor", () => {
     expect(stateOf(coverageFor({ ...base, ...over }, []), source)).toBe("Watching");
   });
 
+  it("treats a failed discovery as settled: unconfigured sources are Not found", () => {
+    const rows = coverageFor(competitor({ discovery_status: "failed" }), []);
+    expect(rows.filter((r) => r.state !== "Watching").every((r) => r.state === "Not found")).toBe(true);
+    expect(rows.filter((r) => r.state === "Watching").map((r) => r.source)).toEqual(["hn", "news"]);
+  });
+
   it("own company without news_query does not watch news", () => {
     expect(stateOf(coverageFor(competitor({ is_own_company: true }), []), "news")).toBe("Looking");
   });
@@ -142,6 +148,7 @@ function makeDeps(over: Partial<CompetitorProfileDeps> = {}): CompetitorProfileD
     getCompetitorByIdForWorkspace: vi.fn(async () => competitor()) as any,
     getLatestSignalScores: vi.fn(async () => []) as any,
     getSignalVolumeByDay: vi.fn(async () => []) as any,
+    countRoadmapLinksByPrediction: vi.fn(async () => new Map()) as any,
     getJobSignalsForHiringDelta: vi.fn(async () => []) as any,
     listPredictionsForWorkspace: vi.fn(async () => []) as any,
     listSignalFeed: vi.fn(async () => []) as any,
@@ -184,6 +191,7 @@ describe("loadCompetitorProfile", () => {
     expect(p!.hiring).toEqual([{ department: "Engineering", delta: 1 }]);
     expect(stateOf(p!.coverage, "reddit")).toBe("Reporting");
     expect(p!.signals).toEqual([{ source: "reddit" }]);
+    expect(p!.degraded).toEqual([]);
   });
 
   it("returns a null score and empty arrays when there are no score rows", async () => {
@@ -200,6 +208,7 @@ describe("loadCompetitorProfile", () => {
     });
     const p = await loadCompetitorProfile(WS, ID, deps, NOW);
     expect(p!.hiring).toEqual([]);
+    expect(p!.degraded).toEqual(["hiring"]);
     expect(p!.score).toMatchObject({ score: 50 });
     expect(logger.warn).toHaveBeenCalledWith(
       "competitor profile: hiring failed",
@@ -207,18 +216,32 @@ describe("loadCompetitorProfile", () => {
     );
   });
 
-  it("queries open forecasts and sorts them by resolves_at ascending", async () => {
-    const later = { id: "b", resolves_at: new Date(NOW + 5 * DAY) };
-    const sooner = { id: "a", resolves_at: new Date(NOW + DAY) };
-    const deps = makeDeps({ listPredictionsForWorkspace: vi.fn(async () => [later, sooner]) as any });
+  it("asks the database for the soonest open forecasts first", async () => {
+    const rows = [{ id: "a" }, { id: "b" }];
+    const deps = makeDeps({ listPredictionsForWorkspace: vi.fn(async () => rows) as any });
     const p = await loadCompetitorProfile(WS, ID, deps, NOW);
     expect(deps.listPredictionsForWorkspace).toHaveBeenCalledWith({
       workspace_id: WS,
       competitor_id: ID,
       status: "open",
       limit: 20,
+      soonest_first: true,
     });
-    expect(p!.forecasts.map((f: any) => f.id)).toEqual(["a", "b"]);
+    expect(p!.forecasts).toEqual([
+      { id: "a", roadmap_link_count: 0 },
+      { id: "b", roadmap_link_count: 0 },
+    ]);
+  });
+
+  it("adds roadmap link counts to forecasts from one batched call", async () => {
+    const countRoadmapLinksByPrediction = vi.fn(async () => new Map([["a", 2]]));
+    const deps = makeDeps({
+      listPredictionsForWorkspace: vi.fn(async () => [{ id: "a" }, { id: "b" }]) as any,
+      countRoadmapLinksByPrediction: countRoadmapLinksByPrediction as any,
+    });
+    const p = await loadCompetitorProfile(WS, ID, deps, NOW);
+    expect(countRoadmapLinksByPrediction).toHaveBeenCalledWith(["a", "b"], WS);
+    expect(p!.forecasts.map((f: any) => f.roadmap_link_count)).toEqual([2, 0]);
   });
 
   it("trims the feed's pagination sentinel row so at most 50 signals come back", async () => {

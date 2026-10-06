@@ -201,6 +201,24 @@ export function createPredictionRouter(
     })
   );
 
+  // A settled forecast's links are the record of what the team decided before
+  // the outcome was known, so they freeze when it resolves or is voided.
+  // ponytail: check-then-write; a link written in the instant the resolver
+  // settles the forecast still lands. A conditional write or row lock if the
+  // freeze ever has to be exact.
+  async function openPredictionOrRespond(id: string, req: express.Request, res: express.Response) {
+    const prediction = await deps.getPredictionForWorkspace(id, req.workspaceId!);
+    if (!prediction) {
+      res.status(404).json({ error: "not_found" });
+      return null;
+    }
+    if (prediction.status !== "open") {
+      res.status(409).json({ error: "forecast_settled" });
+      return null;
+    }
+    return prediction;
+  }
+
   router.post(
     "/:id/links",
     wrap(async (req, res) => {
@@ -210,18 +228,20 @@ export function createPredictionRouter(
         res.status(400).json({ error: "validation", issues: (params.error ?? body.error)?.issues });
         return;
       }
-      const prediction = await deps.getPredictionForWorkspace(params.data.id, req.workspaceId!);
-      if (!prediction) {
-        res.status(404).json({ error: "not_found" });
-        return;
-      }
+      const prediction = await openPredictionOrRespond(params.data.id, req, res);
+      if (!prediction) return;
       // ponytail: count-then-insert; two concurrent adds can reach 11. A row
       // lock or trigger if the cap ever has to be exact.
       if ((await deps.countRoadmapLinks(prediction.id, req.workspaceId!)) >= MAX_ROADMAP_LINKS_PER_PREDICTION) {
-        res.status(409).json({ error: "link_limit" });
+        // A retried add of a link that already landed is still a success.
+        const existing = (await deps.listRoadmapLinks(prediction.id, req.workspaceId!)).find(
+          (l) => l.url === body.data.url
+        );
+        if (existing) res.status(200).json(existing);
+        else res.status(409).json({ error: "link_limit" });
         return;
       }
-      const link = await deps.createRoadmapLink({
+      const { link, created } = await deps.createRoadmapLink({
         title: body.data.title,
         url: body.data.url,
         stance: body.data.stance,
@@ -229,7 +249,7 @@ export function createPredictionRouter(
         prediction_id: prediction.id,
         created_by: req.user?.id ?? null,
       });
-      res.status(201).json(link);
+      res.status(created ? 201 : 200).json(link);
     })
   );
 
@@ -242,6 +262,7 @@ export function createPredictionRouter(
         res.status(400).json({ error: "validation", issues: (params.error ?? body.error)?.issues });
         return;
       }
+      if (!(await openPredictionOrRespond(params.data.id, req, res))) return;
       const link = await deps.updateRoadmapLink(params.data.linkId, params.data.id, req.workspaceId!, body.data);
       if (!link) {
         res.status(404).json({ error: "not_found" });
@@ -259,6 +280,7 @@ export function createPredictionRouter(
         res.status(400).json({ error: "validation", issues: params.error.issues });
         return;
       }
+      if (!(await openPredictionOrRespond(params.data.id, req, res))) return;
       const deleted = await deps.deleteRoadmapLink(params.data.linkId, params.data.id, req.workspaceId!);
       if (!deleted) {
         res.status(404).json({ error: "not_found" });
