@@ -120,6 +120,15 @@ const COMPACTION_SYSTEM_PROMPT =
   "Summarize the conversation so far into a concise rolling summary that preserves specific " +
   "facts, decisions, and open questions a later turn will need. Do not add outside knowledge.";
 
+// Read-only callers run unattended, so no human sees what the model does.
+// fetch_url is excluded too: injected text in scraped evidence could steer it
+// into putting workspace data in an outbound URL.
+const READ_ONLY_EXCLUDED_TOOLS = new Set(["fetch_url"]);
+
+function allowedInMode(tool: Pick<ChatTool, "name" | "mutating">, readOnly: boolean): boolean {
+  return !readOnly || (!tool.mutating && !READ_ONLY_EXCLUDED_TOOLS.has(tool.name));
+}
+
 export function wrapChatToolResult(name: string, result: string, nonce: string): string {
   if (name === "fetch_url") return formatUntrustedText(result, nonce, name);
   return result;
@@ -134,6 +143,9 @@ export const ChatAgentInputSchema = z.object({
     .pipe(z.array(z.string().uuid()).max(MAX_COMPETITORS)),
   workspace_id: z.string().uuid(),
   run_id: z.string().uuid(),
+  // Callers that cannot answer the confirm interrupt (MCP, Slack) run with only
+  // the read tools bound.
+  read_only: z.boolean().default(false),
 });
 
 export interface ChatAgentInput {
@@ -141,6 +153,7 @@ export interface ChatAgentInput {
   competitor_ids: string[];
   workspace_id: string;
   run_id: string;
+  read_only?: boolean;
 }
 
 const ChatGraphState = Annotation.Root({
@@ -175,6 +188,7 @@ const ChatGraphState = Annotation.Root({
     default: () => undefined,
   }),
   fetchUrlCount: Annotation<number>({ reducer: (_prev, next) => next, default: () => 0 }),
+  read_only: Annotation<boolean>({ reducer: (_prev, next) => next, default: () => false }),
 });
 
 type ChatGraphStateType = typeof ChatGraphState.State;
@@ -435,7 +449,13 @@ async function toolsNode(state: ChatGraphStateType): Promise<Partial<ChatGraphSt
       fetchUrlCount += 1;
     }
 
-    if (!registry) registry = new Map(buildChatTools(state.workspace_id).map((t) => [t.name, t]));
+    if (!registry) {
+      registry = new Map(
+        buildChatTools(state.workspace_id)
+          .filter((t) => allowedInMode(t, state.read_only))
+          .map((t) => [t.name, t])
+      );
+    }
     const def = registry.get(call.name);
     if (!def) {
       toolMessages.push(
@@ -491,6 +511,28 @@ async function confirmMutationNode(
   const last = state.loopMessages[state.loopMessages.length - 1];
   if (!(last instanceof AIMessage) || !last.tool_calls?.length) return {};
 
+  // Mutating tools are not bound in read-only mode, so this only fires if the
+  // model names one anyway. Never interrupt: nobody can answer it. Every call in
+  // the batch gets a result, since the next model call requires one per tool_use.
+  if (state.read_only) {
+    return {
+      mutationDecision: "deny",
+      loopMessages: [
+        ...state.loopMessages,
+        ...last.tool_calls.map(
+          (call) =>
+            new ToolMessage({
+              content: MUTATING_TOOL_NAMES.has(call.name)
+                ? `${call.name} is not available here: this conversation is read-only. Answer from what you can read.`
+                : `${call.name} was not run because it was batched with an unavailable action. Call it again if needed.`,
+              tool_call_id: call.id ?? "",
+              name: call.name,
+            })
+        ),
+      ],
+    };
+  }
+
   for (const call of last.tool_calls) {
     if (!MUTATING_TOOL_NAMES.has(call.name)) continue;
     const decision = interrupt({
@@ -543,7 +585,9 @@ async function generateNode(
         .join("\n\n");
 
       const modelAlias = await selectModel(PREFERRED_MODEL, true);
-      const registryTools = buildChatTools(state.workspace_id).map((t) => t.tool);
+      const registryTools = buildChatTools(state.workspace_id)
+        .filter((t) => allowedInMode(t, state.read_only))
+        .map((t) => t.tool);
       const model = new ChatAnthropic({
         model: ANTHROPIC_MODEL_IDS[modelAlias] ?? modelAlias,
         clientOptions: { timeout: LLM_TIMEOUT_MS },

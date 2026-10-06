@@ -32,6 +32,7 @@ import {
   competitorSignalScoresTable,
   predictionsTable,
   predictionRoadmapLinksTable,
+  apiTokensTable,
   slackInstallationsTable,
   circuitEventsTable,
   websiteSnapshotsTable,
@@ -1054,6 +1055,17 @@ export async function getLatestSignalScores(
     .where(eq(competitorSignalScoresTable.competitor_id, competitorId))
     .orderBy(desc(competitorSignalScoresTable.computed_at))
     .limit(limit);
+}
+
+// Newest score row per competitor in one round trip (DISTINCT ON), for views
+// that show every competitor's current score at once.
+export async function getLatestScoreForCompetitors(competitorIds: string[]): Promise<SignalScore[]> {
+  if (competitorIds.length === 0) return [];
+  return db
+    .selectDistinctOn([competitorSignalScoresTable.competitor_id])
+    .from(competitorSignalScoresTable)
+    .where(inArray(competitorSignalScoresTable.competitor_id, competitorIds))
+    .orderBy(competitorSignalScoresTable.competitor_id, desc(competitorSignalScoresTable.computed_at));
 }
 
 export type CreateSignalScoreInput = {
@@ -2622,4 +2634,80 @@ export async function deleteRoadmapLink(linkId: string, predictionId: string, wo
     .where(roadmapLinkScope(linkId, predictionId, workspaceId))
     .returning({ id: predictionRoadmapLinksTable.id });
   return rows.length > 0;
+}
+
+export type ApiToken = Omit<typeof apiTokensTable.$inferSelect, "token_hash">;
+
+const apiTokenColumns = {
+  id: apiTokensTable.id,
+  workspace_id: apiTokensTable.workspace_id,
+  created_by: apiTokensTable.created_by,
+  name: apiTokensTable.name,
+  prefix: apiTokensTable.prefix,
+  last_used_at: apiTokensTable.last_used_at,
+  revoked_at: apiTokensTable.revoked_at,
+  created_at: apiTokensTable.created_at,
+};
+
+export async function listApiTokens(workspaceId: string): Promise<ApiToken[]> {
+  return db
+    .select(apiTokenColumns)
+    .from(apiTokensTable)
+    .where(eq(apiTokensTable.workspace_id, workspaceId))
+    .orderBy(desc(apiTokensTable.created_at));
+}
+
+export async function countActiveApiTokens(workspaceId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(apiTokensTable)
+    .where(and(eq(apiTokensTable.workspace_id, workspaceId), isNull(apiTokensTable.revoked_at)));
+  return Number(row?.n ?? 0);
+}
+
+export async function createApiToken(input: {
+  workspace_id: string;
+  created_by: string | null;
+  name: string;
+  token_hash: string;
+  prefix: string;
+}): Promise<ApiToken> {
+  const [row] = await db.insert(apiTokensTable).values(input).returning(apiTokenColumns);
+  return row;
+}
+
+// Idempotent: revoking an already-revoked token keeps its original revoked_at.
+// null means no such token in this workspace.
+export async function revokeApiToken(id: string, workspaceId: string): Promise<ApiToken | null> {
+  const [row] = await db
+    .update(apiTokensTable)
+    .set({ revoked_at: sql`coalesce(${apiTokensTable.revoked_at}, now())` })
+    .where(and(eq(apiTokensTable.id, id), eq(apiTokensTable.workspace_id, workspaceId)))
+    .returning(apiTokenColumns);
+  return row ?? null;
+}
+
+export async function findActiveApiTokenByHash(
+  tokenHash: string
+): Promise<{ id: string; workspace_id: string } | null> {
+  const [row] = await db
+    .select({ id: apiTokensTable.id, workspace_id: apiTokensTable.workspace_id })
+    .from(apiTokensTable)
+    .where(and(eq(apiTokensTable.token_hash, tokenHash), isNull(apiTokensTable.revoked_at)))
+    .limit(1);
+  return row ?? null;
+}
+
+// At most one write per token per minute, so a chatty MCP client does not turn
+// every request into an UPDATE.
+export async function touchApiTokenLastUsed(id: string): Promise<void> {
+  await db
+    .update(apiTokensTable)
+    .set({ last_used_at: sql`now()` })
+    .where(
+      and(
+        eq(apiTokensTable.id, id),
+        sql`(${apiTokensTable.last_used_at} IS NULL OR ${apiTokensTable.last_used_at} < now() - interval '1 minute')`
+      )
+    );
 }

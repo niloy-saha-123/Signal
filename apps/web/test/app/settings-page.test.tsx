@@ -51,6 +51,10 @@ vi.mock("../../lib/api", () => ({
   startSlackInstall: startSlackInstallMock,
   disconnectSlack: disconnectSlackMock,
   confirmSlackInstall: confirmSlackInstallMock,
+  listApiTokens: vi.fn().mockResolvedValue([]),
+  createApiToken: vi.fn(),
+  revokeApiToken: vi.fn(),
+  MCP_URL: "http://api.test/mcp",
 }));
 
 import Page from "../../app/(app)/settings/page";

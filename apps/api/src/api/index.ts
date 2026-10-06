@@ -22,6 +22,8 @@ import { getSlackInstallation } from "../db/queries";
 import { exchangeSlackCode, slackOAuthConfig } from "../integrations/slack/oauth";
 import { savePendingInstall } from "../integrations/slack/pending-install";
 import { createResolveCompanyRouter } from "./resolve-company";
+import { createApiTokenRouter } from "./api-tokens";
+import { createMcpRouter } from "../mcp/router";
 import { requireAuth, verifyAccessToken } from "./auth";
 import { queues } from "../queues/registry";
 import { checkRedisReadiness, closeRedisConnections } from "../lib/redis-client";
@@ -149,6 +151,8 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
       res.status(503).json({ status: "unavailable" });
     }
   });
+  // Before requireAuth: /mcp authenticates with workspace API tokens, not session JWTs.
+  app.use("/mcp", createMcpRouter());
   app.use("/api", requireAuth);
   app.use("/api/competitors", createCompetitorRouter());
   app.use("/api/signals", createSignalRouter());
@@ -166,6 +170,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
   app.use("/api/predictions", createPredictionRouter());
   app.use("/api/activity", createActivityRouter());
   app.use("/api/integrations/slack", createSlackIntegrationRouter());
+  app.use("/api/api-tokens", createApiTokenRouter());
   app.use((_req, res) => res.status(404).json({ error: "not_found" }));
   app.use(apiErrorHandler);
   return app;

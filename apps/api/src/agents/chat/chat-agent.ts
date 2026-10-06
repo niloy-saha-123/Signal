@@ -69,6 +69,7 @@ export async function runChatAgent(
         workspace_id: parsed.workspace_id,
         competitor_ids: parsed.competitor_ids,
         run_id: parsed.run_id,
+        read_only: parsed.read_only,
         summary: "",
       },
       {
@@ -92,7 +93,8 @@ export type ChatStreamEvent =
   | { kind: "result"; result: ChatAgentResult }
   | { kind: "confirm_required"; mutation: ChatMutationRequest };
 
-export interface StreamChatInput extends ChatAgentInput {
+// Interactive web chat only: it can answer the confirm interrupt, so never read-only.
+export interface StreamChatInput extends Omit<ChatAgentInput, "read_only"> {
   thread_id: string;
   turn?: ChatTurnInput;
 }
