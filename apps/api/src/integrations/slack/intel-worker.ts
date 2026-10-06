@@ -43,6 +43,8 @@ export async function slackIntelProcessor(
   deps: SlackIntelDeps = defaultDeps,
 ): Promise<void> {
   const intel = job.data;
+  // The two lookups throw on a DB error before anything is written; the queue
+  // retries those. Everything after handles its own errors and DMs the user.
   const installation = await deps.getSlackInstallation(intel.team_id);
   if (!installation || installation.workspace_id !== intel.workspace_id) {
     logger.warn(

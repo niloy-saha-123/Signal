@@ -109,12 +109,19 @@ export async function postMessageBestEffort(input: PostMessageInput): Promise<vo
 }
 
 // Slack voids a trigger_id 3 seconds after the click, so views.open gets a
-// short timeout and no retry.
+// short timeout and no retry. Its own breaker: an interactive timeout must not
+// trip the one alerts and digests post through.
 const VIEWS_OPEN_TIMEOUT_MS = 2_500;
+export const SLACK_INTERACTIVE_SERVICE_NAME = "slack-interactive";
 
-export async function openView(token: string, triggerId: string, view: Record<string, unknown>): Promise<void> {
-  const result = await withCircuitBreaker(SLACK_SERVICE_NAME, () =>
-    slackPost("views.open", token, { trigger_id: triggerId, view }, VIEWS_OPEN_TIMEOUT_MS)
+export async function openView(
+  token: string,
+  triggerId: string,
+  view: Record<string, unknown>,
+  timeoutMs = VIEWS_OPEN_TIMEOUT_MS
+): Promise<void> {
+  const result = await withCircuitBreaker(SLACK_INTERACTIVE_SERVICE_NAME, () =>
+    slackPost("views.open", token, { trigger_id: triggerId, view }, timeoutMs)
   );
   if (!result.ok) throw new Error(`Slack views.open failed: ${result.error ?? "unknown_error"}`);
 }

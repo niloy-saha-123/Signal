@@ -56,7 +56,10 @@ function answerBlocks(answer: string, citations: Array<{ source: string }>): Sla
     blocks.push({
       type: "context",
       elements: [
-        { type: "mrkdwn", text: `Grounded in ${citations.length} cited passage(s) · ${sources.join(", ")}` },
+        {
+          type: "mrkdwn",
+          text: `Grounded in ${citations.length} cited passage(s) · ${escapeMrkdwn(sources.join(", "))}`,
+        },
       ],
     });
   }
@@ -88,6 +91,7 @@ export async function slackQuestionProcessor(
 ): Promise<void> {
   const question = job.data;
 
+  // Throws on a DB error before any work is done; the queue retries that.
   const installation = await deps.getSlackInstallation(question.team_id);
   if (!installation || installation.workspace_id !== question.workspace_id) {
     logger.warn("slack: question for a team that is no longer connected — dropping", {

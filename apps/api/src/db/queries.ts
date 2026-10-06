@@ -57,6 +57,7 @@ import {
   type SignalPipelineStage,
 } from "./schema";
 import { decryptSlackToken, encryptSlackToken } from "../integrations/slack/token-crypto";
+import { logger } from "../lib/logger";
 import {
   AgentTestCaseSchema,
   PromotePromptVersionInputSchema,
@@ -1394,9 +1395,22 @@ export async function createWebsiteChangeSignal(
 
 // ── slack ────────────────────────────────────────────────────────────────
 
-// bot_token is encrypted at rest; every read path returns it decrypted.
-function withPlainToken<T extends { bot_token: string } | undefined>(row: T): T {
-  return row ? { ...row, bot_token: decryptSlackToken(row.bot_token) } : row;
+// bot_token is encrypted at rest; every read path returns it decrypted. A row
+// that can't be decrypted (key unset or rotated, corrupt value) comes back with
+// an empty token instead of throwing, so lookups, uninstall cleanup, Settings
+// and the digest's other workspaces keep working; Slack calls with it fail
+// with invalid_auth and are logged where they're made.
+function withPlainToken<T extends { bot_token: string; team_id: string } | undefined>(row: T): T {
+  if (!row) return row;
+  try {
+    return { ...row, bot_token: decryptSlackToken(row.bot_token) };
+  } catch (error) {
+    logger.error("slack: stored bot token could not be decrypted — check SLACK_TOKEN_ENCRYPTION_KEY", {
+      team_id: row.team_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { ...row, bot_token: "" };
+  }
 }
 
 export async function getSlackInstallation(
@@ -2603,6 +2617,25 @@ export async function createRoadmapLink(input: {
   stance: RoadmapStance;
   created_by: string | null;
 }): Promise<{ link: RoadmapLink; created: boolean }> {
+  // The conflicting row can be deleted between the insert and the read; one
+  // more insert then succeeds.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await insertOrFindRoadmapLink(input);
+    if (result) return result;
+  }
+  throw new Error("roadmap link create raced a concurrent delete twice");
+}
+
+// On a URL already on this forecast, returns that link unchanged: the repeat's
+// title and stance are not applied (PATCH changes those).
+async function insertOrFindRoadmapLink(input: {
+  workspace_id: string;
+  prediction_id: string;
+  title: string;
+  url: string;
+  stance: RoadmapStance;
+  created_by: string | null;
+}): Promise<{ link: RoadmapLink; created: boolean } | null> {
   const [row] = await db
     .insert(predictionRoadmapLinksTable)
     .values(input)
@@ -2619,7 +2652,7 @@ export async function createRoadmapLink(input: {
         eq(predictionRoadmapLinksTable.url, input.url)
       )
     );
-  return { link: existing, created: false };
+  return existing ? { link: existing, created: false } : null;
 }
 
 export async function updateRoadmapLink(

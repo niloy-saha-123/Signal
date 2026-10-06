@@ -158,6 +158,7 @@ import {
   createOwnCompanyCompetitorRow,
   saveDiscoveredLinks,
   replaceSlackInstallation,
+  listSlackInstallationsWithChannel,
 } from "@/db/queries";
 
 // Joins a tagged-template call's strings with `?` placeholders so we can
@@ -3140,6 +3141,25 @@ describe("replaceSlackInstallation", () => {
     }
   });
 
+  it("lists installations even when one stored token can't be decrypted", async () => {
+    vi.stubEnv("SLACK_TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64"));
+    try {
+      selectMock.mockReturnValue({ from: fromMock });
+      fromMock.mockReturnValue({ where: whereMock });
+      whereMock.mockResolvedValue([
+        { team_id: "T1", bot_token: "enc:v1:bad.bad.bad", default_channel: "C1" },
+        { team_id: "T2", bot_token: "xoxb-legacy", default_channel: "C2" },
+      ]);
+      const rows = await listSlackInstallationsWithChannel();
+      expect(rows.map((r) => [r.team_id, r.bot_token])).toEqual([
+        ["T1", ""],
+        ["T2", "xoxb-legacy"],
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns null and deletes nothing when another workspace owns the team", async () => {
     const { txDelete } = wireTx([]);
     expect(await replaceSlackInstallation(input)).toBeNull();
@@ -3203,6 +3223,16 @@ describe("db/queries — roadmap links", () => {
     const scope = scopeOf((whereMock.mock.calls[0] as unknown[])[0]);
     expect(scope.sql).toContain('"workspace_id"');
     expect(scope.params).toEqual(expect.arrayContaining(["w1", "p1", linkInput.url]));
+  });
+
+  it("createRoadmapLink inserts again when the conflicting row vanished before the read", async () => {
+    insertValuesMock.mockReturnValue({ onConflictDoNothing: vi.fn(() => ({ returning: insertReturningMock })) });
+    insertReturningMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "l2", ...linkInput }]);
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockResolvedValue([]);
+    await expect(createRoadmapLink(linkInput)).resolves.toEqual({ link: { id: "l2", ...linkInput }, created: true });
+    expect(insertMock).toHaveBeenCalledTimes(2);
   });
 
   it("update and delete are scoped to the link, forecast and workspace", async () => {

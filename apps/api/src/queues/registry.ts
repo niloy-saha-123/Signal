@@ -255,13 +255,13 @@ export const QUEUE_CONFIG: Record<QueueName, QueueConfig> = {
   // resolvePrediction is guarded on status "open" so a double-run cannot
   // overwrite a verdict already recorded.
   "resolve-predictions": { concurrency: 1, attempts: 1 },
-  // Answers a question asked in Slack. attempts: 1 — a retry would post a
-  // second answer into the same thread, and a duplicate answer in a channel is
-  // worse than a missing one.
-  "slack-question": { concurrency: 3, attempts: 1 },
-  // Field intel filed from the Slack modal. attempts: 1 — the submitter gets a
-  // DM with the outcome either way, and a retry would DM twice.
-  "slack-intel": { concurrency: 3, attempts: 1 },
+  // Answers a question asked in Slack. Retried only for failures before any
+  // work: the processor catches agent and delivery errors itself, so the only
+  // throw is the installation lookup, and a retry can't post a second answer.
+  "slack-question": { concurrency: 3, attempts: 3, backoff: { type: "exponential", delay: 5_000 } },
+  // Field intel filed from the Slack modal. Same shape: lookups before the
+  // write throw (and retry); the write and the DM handle their own errors.
+  "slack-intel": { concurrency: 3, attempts: 3, backoff: { type: "exponential", delay: 5_000 } },
   // Weekly Slack digest coordinator. Retry-safe: each workspace's send is
   // claimed per ISO week in Redis, so a retry skips workspaces already served.
   "slack-digest": {

@@ -26,6 +26,7 @@ import {
   listPredictionsForWorkspace,
 } from "../db/queries";
 import { openView } from "../integrations/slack/client";
+import { createSlackThrottle } from "../integrations/slack/throttle";
 import type { SlackIntel } from "../integrations/slack/intel-worker";
 import { exchangeSlackCode, slackOAuthConfig } from "../integrations/slack/oauth";
 import { savePendingInstall } from "../integrations/slack/pending-install";
@@ -134,6 +135,7 @@ export function createApiApp(dependencies: ApiAppDependencies = {}): Express {
       signingSecret: process.env.SLACK_SIGNING_SECRET ?? "",
       getSlackInstallation,
       deleteSlackInstallationForTeam,
+      allowSlackRequest: createSlackThrottle(),
       enqueueSlackQuestion: async (question: SlackQuestion) => {
         await queues["slack-question"].add("slack-question", question, {
           jobId: question.dedupe_key,

@@ -277,7 +277,8 @@ export function intelModal(
       blocks: [section("This workspace isn't tracking any competitors yet. Add one in Signal first.")],
     };
   }
-  const options = competitors.slice(0, SLACK_OPTIONS_MAX).map((c) => ({
+  const sorted = [...competitors].sort((a, b) => a.name.localeCompare(b.name));
+  const options = sorted.slice(0, SLACK_OPTIONS_MAX).map((c) => ({
     text: plainText(c.name.slice(0, 75)),
     value: c.id,
   }));
@@ -298,6 +299,9 @@ export function intelModal(
           options,
           ...(options.length === 1 ? { initial_option: options[0] } : {}),
         },
+        ...(sorted.length > SLACK_OPTIONS_MAX
+          ? { hint: plainText(`Showing the first ${SLACK_OPTIONS_MAX} competitors A–Z. File the rest from Signal.`) }
+          : {}),
       },
       {
         type: "input",

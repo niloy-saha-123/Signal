@@ -35,6 +35,7 @@ import {
 } from "../integrations/slack/oauth";
 import type { PendingSlackInstall } from "../integrations/slack/pending-install";
 import { isSlackResponseUrl, openView } from "../integrations/slack/client";
+import { escapeMrkdwn } from "../integrations/slack/blocks";
 import {
   forecastListBlocks,
   intelModal,
@@ -74,6 +75,9 @@ export interface SlackRouterDeps {
   getSlackInstallation: typeof queries.getSlackInstallation;
   deleteSlackInstallationForTeam: typeof queries.deleteSlackInstallationForTeam;
   enqueueSlackQuestion: (question: SlackQuestion) => Promise<void>;
+  // Per-user and per-team throttle on work a Slack user can trigger (agent
+  // runs, intel writes). Any member of a connected Slack team can reach these.
+  allowSlackRequest: (kind: "ask" | "intel", teamId: string, userId: string) => Promise<boolean>;
   oauth: SlackOAuthCallbackDeps;
   commands: SlackCommandDeps;
 }
@@ -116,6 +120,32 @@ function stripMention(text: string): string {
 function ephemeral(text: string) {
   return { response_type: "ephemeral", text };
 }
+
+// BullMQ shares a Redis connection that retries forever, so an enqueue during
+// an outage never settles. Slack needs an answer within 3 seconds.
+const ENQUEUE_DEADLINE_MS = 2_000;
+
+async function withDeadline<T>(promise: Promise<T>, ms = ENQUEUE_DEADLINE_MS): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Slack voids a trigger_id 3 seconds after the click; views.open gets what's
+// left of that, measured from when the request arrived.
+function viewsOpenBudget(startedAt: number): number {
+  return Math.max(500, 2_700 - (Date.now() - startedAt));
+}
+
+const SLOW_DOWN = "You're sending Signal a lot right now. Try again in a few minutes.";
 
 const CommandSchema = z.object({
   team_id: z.string().min(1),
@@ -163,22 +193,23 @@ const InteractionSchema = z.discriminatedUnion("type", [
 // Slack renders links in message text as <https://x|label> or <https://x>.
 const SLACK_LINK = /<(https?:\/\/[^|>\s]+)(?:\|([^>]*))?>/g;
 
+// Slack escapes &, < and > everywhere in message text, link targets included.
+function decodeEntities(text: string): string {
+  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
 export function prefillFromMessage(text: string): { url?: string; note?: string } {
-  const url = SLACK_LINK.exec(text)?.[1];
+  const href = SLACK_LINK.exec(text)?.[1];
   SLACK_LINK.lastIndex = 0;
-  const note = text
-    .replace(SLACK_LINK, (_m, href: string, label?: string) => label || href)
-    .replace(/<[@#!][^>]*>/g, "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .trim();
-  return { url, note: note || undefined };
+  const note = decodeEntities(
+    text.replace(SLACK_LINK, (_m, link: string, label?: string) => label || link).replace(/<[@#!][^>]*>/g, "")
+  ).trim();
+  return { url: href ? decodeEntities(href) : undefined, note: note || undefined };
 }
 
 // `intel https://x some note` → url + note; a leading non-URL word is note.
 function parseIntelArgs(args: string): { url?: string; note?: string } {
-  const unwrapped = args.replace(SLACK_LINK, (_m, href: string) => href).trim();
+  const unwrapped = decodeEntities(args.replace(SLACK_LINK, (_m, href: string) => href)).trim();
   const [first, ...rest] = unwrapped.split(/\s+/);
   if (first && /^https?:\/\//i.test(first)) return { url: first, note: rest.join(" ") || undefined };
   return { note: unwrapped || undefined };
@@ -244,17 +275,23 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
 
   // Resolves the Signal installation for a signed command or interaction.
   // Answers (200, so Slack shows the text) and returns null when it can't.
-  async function installationFor(teamId: string, res: express.Response) {
+  // A modal submission only honours response_action, so its failures are
+  // shown as a field error instead of an ephemeral message.
+  async function installationFor(teamId: string, res: express.Response, asModalError = false) {
+    const fail = (text: string) =>
+      res
+        .status(200)
+        .json(asModalError ? { response_action: "errors", errors: { [INTEL_BLOCK.note]: text } } : ephemeral(text));
     try {
       const installation = teamId ? await deps.getSlackInstallation(teamId) : undefined;
       if (installation) return installation;
-      res.status(200).json(ephemeral("This Slack workspace isn't connected to Signal. Connect it in Signal's Settings."));
+      fail("This Slack workspace isn't connected to Signal. Connect it in Signal's Settings.");
     } catch (error) {
       logger.error("slack: installation lookup failed", {
         team_id: teamId,
         error: error instanceof Error ? error.message : String(error),
       });
-      res.status(200).json(ephemeral("Signal couldn't look up this workspace right now. Try again in a moment."));
+      fail("Signal couldn't look up this workspace right now. Try again in a moment.");
     }
     return null;
   }
@@ -312,6 +349,12 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
     }
 
     if (!installation) {
+      // Already disconnected in Signal: nothing to clean up, and a 401 here
+      // would count against the app's event subscription.
+      if (event.type === "app_uninstalled" || event.type === "tokens_revoked") {
+        res.status(200).json({ ok: true });
+        return;
+      }
       // A signed request from a Slack team nobody connected. Serving it would
       // mean running an agent with no workspace to scope it to.
       logger.warn("slack: event from an unmapped team", { team_id: teamId });
@@ -359,7 +402,12 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
     }
 
     try {
-      await deps.enqueueSlackQuestion({
+      if (!(await deps.allowSlackRequest("ask", teamId, event.user ?? ""))) {
+        logger.warn("slack: question throttled", { team_id: teamId, user: event.user });
+        res.status(200).json({ ok: true });
+        return;
+      }
+      await withDeadline(deps.enqueueSlackQuestion({
         workspace_id: installation.workspace_id,
         team_id: teamId,
         channel: event.channel,
@@ -372,7 +420,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         // team_id + the event's own timestamp is unique per Slack event. "-", not
         // ":": BullMQ rejects custom job ids containing ":".
         dedupe_key: `${teamId}-${event.ts ?? ""}`,
-      });
+      }));
     } catch (error) {
       // Still ack. A non-200 makes Slack retry, and a retry against a broken
       // queue produces the same failure plus a duplicate if it later recovers.
@@ -386,6 +434,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
   });
 
   router.post("/commands", async (req, res) => {
+    const startedAt = Date.now();
     if (!authenticated(req, res)) return;
     const parsed = CommandSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -412,7 +461,11 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
           res.status(400).json({ error: "validation" });
           return;
         }
-        await deps.enqueueSlackQuestion({
+        if (!(await deps.allowSlackRequest("ask", command.team_id, command.user_id))) {
+          res.status(200).json(ephemeral(SLOW_DOWN));
+          return;
+        }
+        await withDeadline(deps.enqueueSlackQuestion({
           workspace_id: workspaceId,
           team_id: command.team_id,
           channel: command.channel_id,
@@ -421,7 +474,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
           thread_ts: "",
           response_url: command.response_url,
           dedupe_key: `${command.team_id}-cmd-${command.trigger_id || Date.now()}`,
-        });
+        }));
         res.status(200).json(ephemeral("Looking into it. The answer will post here."));
         return;
       }
@@ -430,14 +483,14 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         const competitors = (await deps.commands.listCompetitorsForWorkspace(workspaceId)).filter((c) => c.is_active);
         const competitor = matchCompetitor(competitors, args);
         if (!competitor) {
-          const names = competitors.map((c) => c.name).join(", ");
+          const names = competitors.map((c) => escapeMrkdwn(c.name)).join(", ");
           res
             .status(200)
             .json(
               ephemeral(
                 competitors.length === 0
                   ? "This workspace isn't tracking any competitors yet."
-                  : `${args ? `No single competitor matches "${args}".` : "Which competitor?"} Try one of: ${names}`
+                  : `${args ? `No single competitor matches "${escapeMrkdwn(args)}".` : "Which competitor?"} Try one of: ${names}`
               )
             );
           return;
@@ -451,7 +504,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         });
         res.status(200).json({
           response_type: "ephemeral",
-          text: `${competitor.name}: ${forecasts.length} open forecast(s)`,
+          text: `${escapeMrkdwn(competitor.name)}: ${forecasts.length} open forecast(s)`,
           blocks: forecastListBlocks(competitor.name, forecasts),
         });
         return;
@@ -459,7 +512,12 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
 
       if (sub === "intel") {
         const competitors = (await deps.commands.listCompetitorsForWorkspace(workspaceId)).filter((c) => c.is_active);
-        await deps.commands.openView(installation.bot_token, command.trigger_id, intelModal(competitors, parseIntelArgs(args)));
+        await deps.commands.openView(
+          installation.bot_token,
+          command.trigger_id,
+          intelModal(competitors, parseIntelArgs(args)),
+          viewsOpenBudget(startedAt)
+        );
         res.status(200).end();
         return;
       }
@@ -477,6 +535,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
   });
 
   router.post("/interactions", async (req, res) => {
+    const startedAt = Date.now();
     if (!authenticated(req, res)) return;
     let payload: z.infer<typeof InteractionSchema>;
     try {
@@ -493,7 +552,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
       return;
     }
 
-    const installation = await installationFor(payload.team.id, res);
+    const installation = await installationFor(payload.team.id, res, payload.type === "view_submission");
     if (!installation) return;
     const workspaceId = installation.workspace_id;
 
@@ -507,7 +566,8 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         await deps.commands.openView(
           installation.bot_token,
           payload.trigger_id,
-          intelModal(competitors, prefillFromMessage(payload.message.text))
+          intelModal(competitors, prefillFromMessage(payload.message.text)),
+          viewsOpenBudget(startedAt)
         );
         res.status(200).end();
         return;
@@ -539,7 +599,11 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         return;
       }
 
-      await deps.commands.enqueueSlackIntel({
+      if (!(await deps.allowSlackRequest("intel", payload.team.id, payload.user.id))) {
+        res.status(200).json({ response_action: "errors", errors: { [INTEL_BLOCK.note]: SLOW_DOWN } });
+        return;
+      }
+      await withDeadline(deps.commands.enqueueSlackIntel({
         workspace_id: workspaceId,
         team_id: payload.team.id,
         user: payload.user.id,
@@ -547,7 +611,7 @@ export function createSlackRouter(deps: SlackRouterDeps): Router {
         note: input.data.note,
         url: input.data.url,
         dedupe_key: `${payload.team.id}-view-${payload.view.id}`,
-      });
+      }));
       res.status(200).end();
     } catch (error) {
       logger.error("slack: interaction failed", {

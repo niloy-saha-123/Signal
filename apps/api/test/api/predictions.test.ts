@@ -368,6 +368,18 @@ describe("roadmap links", () => {
     expect(deps.deleteRoadmapLink).not.toHaveBeenCalled();
   });
 
+  it("POST at the link limit still returns a link that already has this URL", async () => {
+    const existing = { id: LINK_UUID, ...good };
+    const { deps, app } = linkApp({
+      countRoadmapLinks: vi.fn().mockResolvedValue(10),
+      listRoadmapLinks: vi.fn().mockResolvedValue([existing]),
+    });
+    const res = await call(app, base, jsonInit("POST", good));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(existing);
+    expect(deps.createRoadmapLink).not.toHaveBeenCalled();
+  });
+
   it("POST rejects a non-uuid id", async () => {
     const { app } = linkApp();
     expect((await call(app, "/api/predictions/nope/links", jsonInit("POST", good))).status).toBe(400);

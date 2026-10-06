@@ -203,6 +203,9 @@ export function createPredictionRouter(
 
   // A settled forecast's links are the record of what the team decided before
   // the outcome was known, so they freeze when it resolves or is voided.
+  // ponytail: check-then-write; a link written in the instant the resolver
+  // settles the forecast still lands. A conditional write or row lock if the
+  // freeze ever has to be exact.
   async function openPredictionOrRespond(id: string, req: express.Request, res: express.Response) {
     const prediction = await deps.getPredictionForWorkspace(id, req.workspaceId!);
     if (!prediction) {
@@ -230,7 +233,12 @@ export function createPredictionRouter(
       // ponytail: count-then-insert; two concurrent adds can reach 11. A row
       // lock or trigger if the cap ever has to be exact.
       if ((await deps.countRoadmapLinks(prediction.id, req.workspaceId!)) >= MAX_ROADMAP_LINKS_PER_PREDICTION) {
-        res.status(409).json({ error: "link_limit" });
+        // A retried add of a link that already landed is still a success.
+        const existing = (await deps.listRoadmapLinks(prediction.id, req.workspaceId!)).find(
+          (l) => l.url === body.data.url
+        );
+        if (existing) res.status(200).json(existing);
+        else res.status(409).json({ error: "link_limit" });
         return;
       }
       const { link, created } = await deps.createRoadmapLink({

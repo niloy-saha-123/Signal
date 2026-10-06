@@ -156,4 +156,17 @@ describe("slackIntelProcessor", () => {
     expect(deps.postMessage).not.toHaveBeenCalled();
     expect(deps.fieldIntel.createSignal).not.toHaveBeenCalled();
   });
+
+  it("throws (so the queue retries) when a lookup fails before anything is written", async () => {
+    const deps = intelDeps({ getCompetitorByIdForWorkspace: vi.fn().mockRejectedValue(new Error("db blip")) });
+    await expect(slackIntelProcessor(job(intel), deps)).rejects.toThrow("db blip");
+    expect(deps.fieldIntel.createSignal).not.toHaveBeenCalled();
+  });
+
+  it("does not throw once the write has been attempted, so a retry can't duplicate it", async () => {
+    const deps = intelDeps();
+    (deps.fieldIntel.createSignal as any).mockRejectedValue(new Error("db blip"));
+    await expect(slackIntelProcessor(job(intel), deps)).resolves.toBeUndefined();
+    expect(dmText(deps).fallbackText).toMatch(/Something went wrong/);
+  });
 });
