@@ -384,6 +384,7 @@ describe("queues/registry", () => {
     "pending-confirmation-expiry",
     "resolve-predictions",
     "slack-question",
+    "slack-intel",
     "slack-digest",
     ...OTHER_QUEUES,
   ];

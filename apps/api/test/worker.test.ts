@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
     initPredictionResolver: makeInit(),
     initSlackQuestion: makeInit(),
     initSlackDigest: makeInit(),
+    initSlackIntel: makeInit(),
     registerSchedules: vi.fn().mockResolvedValue(undefined),
     closeQueue: vi.fn().mockResolvedValue(undefined),
     closeRedis: vi.fn().mockResolvedValue(undefined),
@@ -71,6 +72,7 @@ vi.mock("@/integrations/slack/slack-worker", () => ({
   initSlackQuestionWorker: mocks.initSlackQuestion,
 }));
 vi.mock("@/integrations/slack/digest", () => ({ initSlackDigestWorker: mocks.initSlackDigest }));
+vi.mock("@/integrations/slack/intel-worker", () => ({ initSlackIntelWorker: mocks.initSlackIntel }));
 vi.mock("@/pipeline/entity-extractor", () => ({ initEntityExtractorWorker: mocks.initEntity }));
 vi.mock("@/pipeline/quality-scorer", () => ({ initQualityScorerWorker: mocks.initQuality }));
 vi.mock("@/pipeline/deduplicator", () => ({ initDeduplicatorWorker: mocks.initDedup }));
@@ -106,7 +108,7 @@ describe("standalone worker runtime", () => {
     ).not.toThrow();
   });
 
-  it("registers schedules, composes all 25 workers, and closes every owned resource", async () => {
+  it("registers schedules, composes all 26 workers, and closes every owned resource", async () => {
     const runtime = createWorkerRuntime();
     await runtime.start();
 
@@ -137,10 +139,11 @@ describe("standalone worker runtime", () => {
     expect(mocks.initPredictionResolver).toHaveBeenCalledTimes(1);
     expect(mocks.initSlackQuestion).toHaveBeenCalledTimes(1);
     expect(mocks.initSlackDigest).toHaveBeenCalledTimes(1);
+    expect(mocks.initSlackIntel).toHaveBeenCalledTimes(1);
 
     await runtime.close();
     await runtime.close();
-    expect(mocks.workerClose).toHaveBeenCalledTimes(28);
+    expect(mocks.workerClose).toHaveBeenCalledTimes(29);
     expect(mocks.closeQueue).toHaveBeenCalledTimes(2);
     expect(mocks.closeRedis).toHaveBeenCalledTimes(1);
     expect(mocks.closeDb).toHaveBeenCalledTimes(1);
