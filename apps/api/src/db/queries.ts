@@ -56,6 +56,7 @@ import {
   companyGoalsTable,
   type SignalPipelineStage,
 } from "./schema";
+import { decryptSlackToken, encryptSlackToken } from "../integrations/slack/token-crypto";
 import {
   AgentTestCaseSchema,
   PromotePromptVersionInputSchema,
@@ -1392,6 +1393,11 @@ export async function createWebsiteChangeSignal(
 
 // ── slack ────────────────────────────────────────────────────────────────
 
+// bot_token is encrypted at rest; every read path returns it decrypted.
+function withPlainToken<T extends { bot_token: string } | undefined>(row: T): T {
+  return row ? { ...row, bot_token: decryptSlackToken(row.bot_token) } : row;
+}
+
 export async function getSlackInstallation(
   teamId: string
 ): Promise<typeof slackInstallationsTable.$inferSelect | undefined> {
@@ -1400,7 +1406,11 @@ export async function getSlackInstallation(
     .from(slackInstallationsTable)
     .where(eq(slackInstallationsTable.team_id, teamId))
     .limit(1);
-  return row;
+  return withPlainToken(row);
+}
+
+export async function deleteSlackInstallationForTeam(teamId: string): Promise<void> {
+  await db.delete(slackInstallationsTable).where(eq(slackInstallationsTable.team_id, teamId));
 }
 
 // The delivery-side lookup: given a Signal workspace, where do we post?
@@ -1412,7 +1422,7 @@ export async function getSlackInstallationForWorkspace(
     .from(slackInstallationsTable)
     .where(eq(slackInstallationsTable.workspace_id, workspaceId))
     .limit(1);
-  return row;
+  return withPlainToken(row);
 }
 
 export interface UpsertSlackInstallationInput {
@@ -1426,28 +1436,6 @@ export interface UpsertSlackInstallationInput {
   installed_by: string | null;
 }
 
-export async function upsertSlackInstallation(
-  input: UpsertSlackInstallationInput
-): Promise<typeof slackInstallationsTable.$inferSelect> {
-  const [row] = await db
-    .insert(slackInstallationsTable)
-    .values(input)
-    .onConflictDoUpdate({
-      target: slackInstallationsTable.team_id,
-      set: {
-        workspace_id: input.workspace_id,
-        team_name: input.team_name,
-        bot_token: input.bot_token,
-        bot_user_id: input.bot_user_id,
-        default_channel: input.default_channel,
-        default_channel_name: input.default_channel_name,
-        updated_at: new Date(),
-      },
-    })
-    .returning();
-  return row;
-}
-
 export type SlackInstallation = typeof slackInstallationsTable.$inferSelect;
 
 // Install-time write. The team_id upsert only takes effect when the team is
@@ -1458,18 +1446,19 @@ export type SlackInstallation = typeof slackInstallationsTable.$inferSelect;
 export async function replaceSlackInstallation(
   input: UpsertSlackInstallationInput
 ): Promise<SlackInstallation | null> {
+  const stored = { ...input, bot_token: encryptSlackToken(input.bot_token) };
   return db.transaction(async (tx) => {
     // READ COMMITTED: two confirms for different teams would each miss the
     // other's uncommitted insert when deleting "others". Serialize per workspace.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${input.workspace_id}))`);
     const [row] = await tx
       .insert(slackInstallationsTable)
-      .values(input)
+      .values(stored)
       .onConflictDoUpdate({
         target: slackInstallationsTable.team_id,
         set: {
           team_name: input.team_name,
-          bot_token: input.bot_token,
+          bot_token: stored.bot_token,
           bot_user_id: input.bot_user_id,
           default_channel: input.default_channel,
           default_channel_name: input.default_channel_name,
@@ -1488,7 +1477,7 @@ export async function replaceSlackInstallation(
           ne(slackInstallationsTable.id, row.id)
         )
       );
-    return row;
+    return withPlainToken(row);
   });
 }
 
@@ -1499,10 +1488,11 @@ export async function deleteSlackInstallationsForWorkspace(workspaceId: string):
 }
 
 export async function listSlackInstallationsWithChannel(): Promise<SlackInstallation[]> {
-  return db
+  const rows = await db
     .select()
     .from(slackInstallationsTable)
     .where(sql`${slackInstallationsTable.default_channel} IS NOT NULL`);
+  return rows.map(withPlainToken);
 }
 
 export interface WeeklyDigest {

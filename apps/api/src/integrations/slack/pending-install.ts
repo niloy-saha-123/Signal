@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { cacheRedis } from "../../lib/redis-client";
 import type { SlackOAuthResult } from "./oauth";
+import { decryptSlackToken, encryptSlackToken } from "./token-crypto";
 
 export const PENDING_INSTALL_TTL_SECONDS = 600;
 
@@ -23,7 +24,10 @@ export async function savePendingInstall(
   const id = randomBytes(24).toString("base64url");
   await cacheRedis.set(
     key(id),
-    JSON.stringify(pending),
+    JSON.stringify({
+      ...pending,
+      result: { ...pending.result, bot_token: encryptSlackToken(pending.result.bot_token) },
+    }),
     "EX",
     PENDING_INSTALL_TTL_SECONDS,
   );
@@ -35,5 +39,10 @@ export async function takePendingInstall(
 ): Promise<PendingSlackInstall | null> {
   if (!/^[A-Za-z0-9_-]{32}$/.test(id)) return null;
   const raw = await cacheRedis.getdel(key(id));
-  return raw ? (JSON.parse(raw) as PendingSlackInstall) : null;
+  if (!raw) return null;
+  const pending = JSON.parse(raw) as PendingSlackInstall;
+  return {
+    ...pending,
+    result: { ...pending.result, bot_token: decryptSlackToken(pending.result.bot_token) },
+  };
 }

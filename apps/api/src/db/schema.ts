@@ -539,10 +539,8 @@ export const slackInstallationsTable = pgTable(
       .references(() => workspacesTable.id, { onDelete: "cascade" }),
     team_id: text("team_id").notNull(),
     team_name: text("team_name"),
-    // ponytail: stored as-is. A bot token is a credential and belongs in a
-    // secrets manager or a pgcrypto-encrypted column; this is the shortcut, and
-    // the upgrade path is to move it behind the same boundary the other provider
-    // keys use rather than to add bespoke encryption here.
+    // AES-256-GCM ciphertext (integrations/slack/token-crypto.ts); the slack
+    // queries decrypt on read. Legacy plaintext rows still read.
     bot_token: text("bot_token").notNull(),
     bot_user_id: text("bot_user_id").notNull(),
     // Where alerts and predictions are posted. Null until the user picks one —

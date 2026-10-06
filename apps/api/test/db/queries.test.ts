@@ -3112,6 +3112,34 @@ describe("replaceSlackInstallation", () => {
     expect(order).toEqual(["execute", "insert"]);
   });
 
+  it("stores the bot token encrypted and returns it decrypted", async () => {
+    vi.stubEnv("SLACK_TOKEN_ENCRYPTION_KEY", Buffer.alloc(32, 7).toString("base64"));
+    try {
+      let storedToken = "";
+      const onConflictDoUpdate = vi.fn((cfg: { set: { bot_token: string } }) => ({
+        returning: vi.fn(async () => [{ id: "row-1", ...input, bot_token: cfg.set.bot_token }]),
+      }));
+      transactionMock.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({
+          execute: vi.fn(async () => undefined),
+          delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+          insert: vi.fn(() => ({
+            values: vi.fn((v: { bot_token: string }) => {
+              storedToken = v.bot_token;
+              return { onConflictDoUpdate };
+            }),
+          })),
+        })
+      );
+      const row = await replaceSlackInstallation(input);
+      expect(storedToken.startsWith("enc:v1:")).toBe(true);
+      expect(storedToken).not.toContain("xoxb-1");
+      expect(row?.bot_token).toBe("xoxb-1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("returns null and deletes nothing when another workspace owns the team", async () => {
     const { txDelete } = wireTx([]);
     expect(await replaceSlackInstallation(input)).toBeNull();
