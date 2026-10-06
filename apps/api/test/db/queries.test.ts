@@ -3136,19 +3136,57 @@ describe("db/queries — roadmap links", () => {
     expect(selectMock).not.toHaveBeenCalled();
   });
 
-  it("createRoadmapLink inserts the input and returns the row", async () => {
-    const input = {
-      workspace_id: "w1",
-      prediction_id: "p1",
-      title: "SSO v2",
-      url: "https://linear.app/a/issue/ENG-42",
-      stance: "watching" as const,
-      created_by: null,
-    };
-    insertReturningMock.mockResolvedValue([{ id: "l1", ...input }]);
-    await expect(createRoadmapLink(input)).resolves.toEqual({ id: "l1", ...input });
+  const linkInput = {
+    workspace_id: "w1",
+    prediction_id: "p1",
+    title: "SSO v2",
+    url: "https://linear.app/a/issue/ENG-42",
+    stance: "watching" as const,
+    created_by: null,
+  };
+
+  function scopeOf(condition: unknown) {
+    const query = new PgDialect().sqlToQuery(condition as Parameters<PgDialect["sqlToQuery"]>[0]);
+    return { sql: query.sql, params: query.params };
+  }
+
+  it("createRoadmapLink inserts the input and reports it created", async () => {
+    const onConflictDoNothing = vi.fn(() => ({ returning: insertReturningMock }));
+    insertValuesMock.mockReturnValue({ onConflictDoNothing });
+    insertReturningMock.mockResolvedValue([{ id: "l1", ...linkInput }]);
+    await expect(createRoadmapLink(linkInput)).resolves.toEqual({
+      link: { id: "l1", ...linkInput },
+      created: true,
+    });
     expect(insertMock).toHaveBeenCalledWith(predictionRoadmapLinksTable);
-    expect(insertValuesMock).toHaveBeenCalledWith(input);
+    expect(insertValuesMock).toHaveBeenCalledWith(linkInput);
+  });
+
+  it("createRoadmapLink returns the existing row, scoped to the workspace, on a duplicate URL", async () => {
+    insertValuesMock.mockReturnValue({ onConflictDoNothing: vi.fn(() => ({ returning: insertReturningMock })) });
+    insertReturningMock.mockResolvedValue([]);
+    selectMock.mockReturnValue({ from: fromMock });
+    fromMock.mockReturnValue({ where: whereMock });
+    whereMock.mockResolvedValue([{ id: "l0", ...linkInput }]);
+    await expect(createRoadmapLink(linkInput)).resolves.toEqual({
+      link: { id: "l0", ...linkInput },
+      created: false,
+    });
+    const scope = scopeOf((whereMock.mock.calls[0] as unknown[])[0]);
+    expect(scope.sql).toContain('"workspace_id"');
+    expect(scope.params).toEqual(expect.arrayContaining(["w1", "p1", linkInput.url]));
+  });
+
+  it("update and delete are scoped to the link, forecast and workspace", async () => {
+    updateReturningMock.mockResolvedValue([]);
+    deleteReturningMock.mockResolvedValue([]);
+    await updateRoadmapLink("l1", "p1", "w1", { stance: "accelerate" });
+    await deleteRoadmapLink("l1", "p1", "w1");
+    for (const where of [updateWhereMock, deleteWhereMock]) {
+      const scope = scopeOf((where.mock.calls[0] as unknown[])[0]);
+      expect(scope.sql).toContain('"workspace_id"');
+      expect(scope.params).toEqual(["l1", "p1", "w1"]);
+    }
   });
 
   it("updateRoadmapLink returns null when no row matches", async () => {

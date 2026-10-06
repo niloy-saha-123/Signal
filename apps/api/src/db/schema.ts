@@ -17,6 +17,7 @@ import {
   index,
   uniqueIndex,
   check,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type {
@@ -120,6 +121,8 @@ export const signalsTable = pgTable(
     source_url: text("source_url"),
     title: text("title"),
     raw_text: text("raw_text").notNull(),
+    // Field intel only: `user:<uuid>` (web) or `slack:<team>:<user>`.
+    submitted_by: text("submitted_by"),
     quality_score: real("quality_score").notNull().default(0),
     entities: jsonb("entities").$type<Record<string, unknown>>().default({}),
     cluster_id: uuid("cluster_id").references(() => signalClustersTable.id, {
@@ -663,6 +666,8 @@ export const predictionsTable = pgTable(
     index("predictions_competitor_created_idx").on(table.competitor_id, table.created_at),
     // The calibration aggregate: every resolved prediction in a workspace.
     index("predictions_workspace_status_idx").on(table.workspace_id, table.status),
+    // Target of prediction_roadmap_links' composite FK.
+    uniqueIndex("predictions_id_workspace_id_idx").on(table.id, table.workspace_id),
   ]
 );
 
@@ -678,9 +683,7 @@ export const predictionRoadmapLinksTable = pgTable(
     workspace_id: uuid("workspace_id")
       .notNull()
       .references(() => workspacesTable.id, { onDelete: "cascade" }),
-    prediction_id: uuid("prediction_id")
-      .notNull()
-      .references(() => predictionsTable.id, { onDelete: "cascade" }),
+    prediction_id: uuid("prediction_id").notNull(),
     title: text("title").notNull(),
     url: text("url").notNull(),
     stance: text("stance").$type<RoadmapStance>().notNull().default("watching"),
@@ -691,7 +694,14 @@ export const predictionRoadmapLinksTable = pgTable(
     check("prediction_roadmap_links_title_check", sql`char_length(${table.title}) BETWEEN 1 AND 200`),
     check("prediction_roadmap_links_url_check", sql`${table.url} ~* '^https?://' AND char_length(${table.url}) <= 2000`),
     check("prediction_roadmap_links_stance_check", sql`${table.stance} IN ('accelerate', 'deprioritize', 'watching')`),
-    index("prediction_roadmap_links_prediction_id_idx").on(table.prediction_id),
+    // Composite so a link can't sit in a different workspace than its forecast.
+    foreignKey({
+      name: "prediction_roadmap_links_prediction_workspace_fk",
+      columns: [table.prediction_id, table.workspace_id],
+      foreignColumns: [predictionsTable.id, predictionsTable.workspace_id],
+    }).onDelete("cascade"),
+    index("prediction_roadmap_links_workspace_id_idx").on(table.workspace_id),
+    uniqueIndex("prediction_roadmap_links_prediction_url_idx").on(table.prediction_id, table.url),
   ]
 );
 

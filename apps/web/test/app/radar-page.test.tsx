@@ -112,6 +112,7 @@ function happyPath(overrides: Partial<CompetitorProfile> = {}) {
       signal("s3", "jobs", "Three solutions engineers"),
     ],
     coverage,
+    degraded: [],
     ...overrides,
   });
 }
@@ -196,5 +197,16 @@ describe("Competitor profile page", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Northstar" })).toBeInTheDocument();
     expect(screen.getByText("Enterprise plan split from self-serve")).toBeInTheDocument();
     expect(screen.getByText("No open forecasts for Northstar")).toBeInTheDocument();
+  });
+  it("says when some sections failed to load", async () => {
+    happyPath({ degraded: ["hiring"] });
+    await render_();
+    expect(screen.getByRole("status")).toHaveTextContent("Some sections couldn't load");
+  });
+
+  it("shows no degraded notice when everything loaded", async () => {
+    happyPath();
+    await render_();
+    expect(screen.queryByText(/Some sections couldn't load/)).toBeNull();
   });
 });

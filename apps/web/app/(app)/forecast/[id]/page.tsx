@@ -131,9 +131,20 @@ export default async function PredictionDetailPage({ params }: { params: Promise
         )}
 
         <Card>
-          <CardHeader title="Roadmap" description="The roadmap items this forecast affects." />
+          <CardHeader
+            title="Roadmap"
+            description={
+              prediction.status === "open"
+                ? "The roadmap items this forecast affects."
+                : "What the team decided before this forecast settled. Locked."
+            }
+          />
           <CardBody>
-            <RoadmapLinks predictionId={prediction.id} initialLinks={prediction.roadmap_links} />
+            <RoadmapLinks
+              predictionId={prediction.id}
+              initialLinks={prediction.roadmap_links}
+              readOnly={prediction.status !== "open"}
+            />
           </CardBody>
         </Card>
 

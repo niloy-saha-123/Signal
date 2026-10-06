@@ -224,6 +224,7 @@ const CompetitorProfileSchema = z.object({
   coverage: z
     .array(z.object({ source: z.string(), state: z.enum(["Reporting", "Watching", "Looking", "Not found"]) }))
     .catch([]),
+  degraded: z.array(z.string()).catch([]),
 });
 export type CompetitorProfile = z.infer<typeof CompetitorProfileSchema>;
 

@@ -27,7 +27,18 @@ function host(url: string): string {
   }
 }
 
+function isSettled(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    (error.body as { error?: string } | null)?.error === "forecast_settled"
+  );
+}
+
+const SETTLED_MESSAGE = "This forecast has settled, so its roadmap links are locked.";
+
 function addErrorMessage(error: unknown): string {
+  if (isSettled(error)) return SETTLED_MESSAGE;
   if (error instanceof ApiError && error.status === 409)
     return `This forecast already has ${MAX_ROADMAP_LINKS_PER_PREDICTION} roadmap links.`;
   if (error instanceof ApiError && error.status === 400)
@@ -45,6 +56,7 @@ export function RoadmapLinks({
   readOnly?: boolean;
 }) {
   const [links, setLinks] = useState(initialLinks);
+  const [locked, setLocked] = useState(readOnly);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
@@ -73,6 +85,10 @@ export function RoadmapLinks({
     } catch (e) {
       if (goneIsSuccess && e instanceof ApiError && e.status === 404) {
         await resync();
+      } else if (isSettled(e)) {
+        setError(SETTLED_MESSAGE);
+        setLocked(true);
+        await resync(() => setLinks(previous));
       } else {
         setError("Couldn't save. Try again.");
         await resync(() => setLinks(previous));
@@ -107,12 +123,16 @@ export function RoadmapLinks({
         url: url.trim(),
         stance,
       });
-      setLinks((current) => [...current, created]);
+      // A URL already on this forecast comes back as the existing link.
+      setLinks((current) =>
+        current.some((l) => l.id === created.id) ? current : [...current, created],
+      );
       setTitle("");
       setUrl("");
       setStance("watching");
     } catch (e) {
       setError(addErrorMessage(e));
+      if (isSettled(e)) setLocked(true);
       if (e instanceof ApiError && e.status === 409) await resync();
     } finally {
       setBusy(false);
@@ -147,7 +167,7 @@ export function RoadmapLinks({
                     {host(link.url)}
                   </span>
                 </div>
-                {readOnly ? (
+                {locked ? (
                   <Badge tone={current.tone}>{current.label}</Badge>
                 ) : (
                   <>
@@ -189,7 +209,7 @@ export function RoadmapLinks({
         </p>
       ) : null}
 
-      {readOnly || links.length >= MAX_ROADMAP_LINKS_PER_PREDICTION ? null : (
+      {locked || links.length >= MAX_ROADMAP_LINKS_PER_PREDICTION ? null : (
         <form
           onSubmit={add}
           className="mt-4 grid gap-3 sm:grid-cols-[1fr_1.4fr_auto_auto] sm:items-end"

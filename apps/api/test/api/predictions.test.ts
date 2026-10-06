@@ -84,7 +84,7 @@ function makeDeps(overrides: Partial<PredictionRouterDeps> = {}): PredictionRout
     listRoadmapLinks: vi.fn().mockResolvedValue([]),
     countRoadmapLinks: vi.fn().mockResolvedValue(0),
     countRoadmapLinksByPrediction: vi.fn().mockResolvedValue(new Map()),
-    createRoadmapLink: vi.fn().mockImplementation(async (i) => ({ id: LINK_UUID, ...i })),
+    createRoadmapLink: vi.fn().mockImplementation(async (i) => ({ link: { id: LINK_UUID, ...i }, created: true })),
     updateRoadmapLink: vi.fn().mockResolvedValue({ id: LINK_UUID }),
     deleteRoadmapLink: vi.fn().mockResolvedValue(true),
     ...overrides,
@@ -330,6 +330,42 @@ describe("roadmap links", () => {
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: "link_limit" });
     expect(deps.createRoadmapLink).not.toHaveBeenCalled();
+  });
+
+  it("POST with a URL already on the forecast returns the existing link", async () => {
+    const existing = { id: LINK_UUID, ...good };
+    const { app } = linkApp({
+      createRoadmapLink: vi.fn().mockResolvedValue({ link: existing, created: false }),
+    });
+    const res = await call(app, base, jsonInit("POST", good));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(existing);
+  });
+
+  it.each(["hit", "miss", "unresolved", "void"])("links are locked on a %s forecast", async (status) => {
+    const { deps, app } = linkApp({
+      getPredictionForWorkspace: vi.fn().mockResolvedValue(prediction({ status })),
+    });
+    const post = await call(app, base, jsonInit("POST", good));
+    const patch = await call(app, `${base}/${LINK_UUID}`, jsonInit("PATCH", { stance: "accelerate" }));
+    const del = await call(app, `${base}/${LINK_UUID}`, { method: "DELETE" });
+    for (const res of [post, patch, del]) {
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: "forecast_settled" });
+    }
+    expect(deps.createRoadmapLink).not.toHaveBeenCalled();
+    expect(deps.updateRoadmapLink).not.toHaveBeenCalled();
+    expect(deps.deleteRoadmapLink).not.toHaveBeenCalled();
+  });
+
+  it("PATCH and DELETE 404 for a forecast outside the workspace", async () => {
+    const { deps, app } = linkApp({ getPredictionForWorkspace: vi.fn().mockResolvedValue(undefined) });
+    expect(
+      (await call(app, `${base}/${LINK_UUID}`, jsonInit("PATCH", { stance: "accelerate" }))).status
+    ).toBe(404);
+    expect((await call(app, `${base}/${LINK_UUID}`, { method: "DELETE" })).status).toBe(404);
+    expect(deps.updateRoadmapLink).not.toHaveBeenCalled();
+    expect(deps.deleteRoadmapLink).not.toHaveBeenCalled();
   });
 
   it("POST rejects a non-uuid id", async () => {

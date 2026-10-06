@@ -51,6 +51,7 @@ async function call(
 
 function makeDeps(over: Partial<CompetitorRouterDeps> = {}): CompetitorRouterDeps {
   return {
+    countRoadmapLinksByPrediction: vi.fn(async () => new Map()) as any,
     createCompetitorForWorkspace: vi.fn(async (input: any) => ({
       id: UUID,
       name: input.name,

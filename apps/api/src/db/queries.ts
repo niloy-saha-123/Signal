@@ -1188,7 +1188,7 @@ export interface PredictionListQuery {
 }
 
 export async function listPredictionsForWorkspace(
-  query: PredictionListQuery
+  query: PredictionListQuery & { soonest_first?: boolean }
 ): Promise<Array<typeof predictionsTable.$inferSelect>> {
   const conditions = [eq(predictionsTable.workspace_id, query.workspace_id)];
   if (query.status) conditions.push(eq(predictionsTable.status, query.status));
@@ -1201,7 +1201,9 @@ export async function listPredictionsForWorkspace(
     .select()
     .from(predictionsTable)
     .where(and(...conditions))
-    .orderBy(desc(predictionsTable.created_at))
+    .orderBy(
+      query.soonest_first ? asc(predictionsTable.resolves_at) : desc(predictionsTable.created_at)
+    )
     .limit(query.limit);
 }
 
@@ -2609,9 +2611,24 @@ export async function createRoadmapLink(input: {
   url: string;
   stance: RoadmapStance;
   created_by: string | null;
-}): Promise<RoadmapLink> {
-  const [row] = await db.insert(predictionRoadmapLinksTable).values(input).returning();
-  return row;
+}): Promise<{ link: RoadmapLink; created: boolean }> {
+  const [row] = await db
+    .insert(predictionRoadmapLinksTable)
+    .values(input)
+    .onConflictDoNothing({ target: [predictionRoadmapLinksTable.prediction_id, predictionRoadmapLinksTable.url] })
+    .returning();
+  if (row) return { link: row, created: true };
+  const [existing] = await db
+    .select()
+    .from(predictionRoadmapLinksTable)
+    .where(
+      and(
+        eq(predictionRoadmapLinksTable.prediction_id, input.prediction_id),
+        eq(predictionRoadmapLinksTable.workspace_id, input.workspace_id),
+        eq(predictionRoadmapLinksTable.url, input.url)
+      )
+    );
+  return { link: existing, created: false };
 }
 
 export async function updateRoadmapLink(

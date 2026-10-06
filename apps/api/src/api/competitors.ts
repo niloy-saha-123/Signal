@@ -79,6 +79,7 @@ export interface CompetitorRouterDeps {
   getRecentPricingDiffs: typeof queries.getRecentPricingDiffs;
   listPredictionsForWorkspace: typeof queries.listPredictionsForWorkspace;
   listSignalFeed: typeof queries.listSignalFeed;
+  countRoadmapLinksByPrediction: typeof queries.countRoadmapLinksByPrediction;
   createAgentRun: typeof queries.createAgentRun;
   failRunIfRunning: typeof queries.failRunIfRunning;
   enqueue: (queue: QueueName, data: unknown) => Promise<unknown>;
@@ -102,6 +103,7 @@ export const defaultCompetitorRouterDeps: CompetitorRouterDeps = {
   getRecentPricingDiffs: queries.getRecentPricingDiffs,
   listPredictionsForWorkspace: queries.listPredictionsForWorkspace,
   listSignalFeed: queries.listSignalFeed,
+  countRoadmapLinksByPrediction: queries.countRoadmapLinksByPrediction,
   createAgentRun: queries.createAgentRun,
   failRunIfRunning: queries.failRunIfRunning,
   enqueue: (queue, data) => queues[queue].add(queue, data),
